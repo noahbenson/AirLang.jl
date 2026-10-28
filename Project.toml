@@ -1,0 +1,25 @@
+name = "AirLang"
+uuid = "069018bc-8272-4297-b6fc-901f4d78da7a"
+authors = ["Noah C. Benson <nben@uw.edu>"]
+version = "0.1.0"
+
+[deps]
+Air = "0c3b9dc7-9fea-4423-80ce-ed7c11218d4a"
+AirDB = "73fd445c-d6bc-414c-af00-abfc8fd116f6"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[sources]
+Air = { path = "../Air.jl" }
+AirDB = { path = "../AirDB.jl" }
+
+[compat]
+Air = "0.2"
+AirDB = "0.1"
+julia = "1.11"
+
+[extras]
+Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Aqua", "Test"]

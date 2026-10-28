@@ -1,0 +1,51 @@
+using Test
+using AirLang
+using Air
+using AirDB
+
+@testset "AirLang" begin
+    include("reader.jl")
+    include("canonical.jl")
+    include("pattern.jl")
+    include("reduce.jl")
+    include("builtins.jl")
+    include("operators.jl")
+    include("control.jl")
+    include("recursion.jl")
+    include("strings.jl")
+    include("collections.jl")
+    include("io.jl")
+    include("def.jl")
+    include("defblock.jl")
+    include("equality.jl")
+    include("roundtrip.jl")
+    include("memo.jl")
+    include("doc.jl")
+    include("get.jl")
+    include("replace.jl")
+    include("error.jl")
+    include("block.jl")
+    include("source.jl")
+    include("testing.jl")
+    include("hold.jl")
+    include("let.jl")
+    include("api.jl")
+    include("repl.jl")
+    include("mut.jl")
+    include("logic.jl")
+    include("extern.jl")
+    include("ref_forms.jl")
+    include("namespace.jl")
+    include("imports.jl")
+    include("library.jl")
+    include("database.jl")
+    include("persistence.jl")
+    include("users.jl")
+    include("permissions.jl")
+    include("scope.jl")
+    include("quote.jl")
+    include("prolog.jl")
+    if Base.find_package("Aqua") !== nothing
+        include("aqua.jl")
+    end
+end

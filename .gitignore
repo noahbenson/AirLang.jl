@@ -30,3 +30,9 @@ JuliaLocalPreferences.toml
 
 # Conda environment and metadata created in the project directory by the CondaPkg package
 .CondaPkg/
+
+# air runtime state (libraries or user data kept in the working directory)
+.air/
+
+# Local container state: a bind-mounted PostgreSQL data directory, if used
+pgdata/

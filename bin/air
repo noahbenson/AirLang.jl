@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# The air command line: no arguments starts a REPL; `-e code` evaluates code;
+# a file path evaluates every form in the file.
+exec julia --project="$(cd "$(dirname "$0")/.." && pwd)" \
+     -e 'using AirLang; exit(AirLang.air_main(ARGS))' -- "$@"
