@@ -239,7 +239,7 @@ function _get_one(env::Env, scope::Scope, form::Form, key::Form, default, held::
     form = _ns_contents(env, form)
     # A missing name under `.lib` may be an unloaded library; the loader triggers
     # on the namespace object, so recover it from the volatile we were handed.
-    if form isa FormContainer && k isa Symbol && !haskey(form, k) &&
+    if k isa Symbol && !(form isa FormContainer && haskey(form, k)) &&
        src isa VolatileForm
         ns = _ns_from_value(env, src)
         if ns !== nothing && _lib_trigger!(env, ns, k)

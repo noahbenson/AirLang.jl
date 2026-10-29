@@ -18,9 +18,15 @@
     @test ev("(get (' f a b) 1)") == "'"
     @test ev("(get (' f a b) 2)") == "f"
 
-    # unhold evaluates
+    # unhold evaluates; a hold's sole element is its content, so `(' (1))`
+    # unholds to the one-element list `(1)` and `(' ())` to `naught`
     @test ev("(unhold 'x)") == "x"
     @test ev("(unhold (' + 1 2))") == "3"
+    @test ev("(unhold (' (1)))") == "(1)"
+    @test ev("(unhold (' ()))") == "naught"
+    # the empty form inside a hold or `naught` is the same singleton
+    @test ev("(same? (get (' ()) 2) (get (' naught) 2))") == "true"
+    @test ev("(eq? (' ()) (' naught))") == "true"
     # `~` is `(preval x)`: it evaluates wherever it appears, quoted or not
     @test ev("~'x") == "'x"
     @test ev("(hold (a ~(1 + 2)))") == "(' (a 3))"
@@ -100,9 +106,9 @@ end
     # `hold` is reserved, but `unhold` is an ordinary call and a user rule anchored
     # on it takes precedence; the builtin is the fallback for other operands.
     air_eval(env, read_air("(def (unhold (myhold ??args)) (args...))"))
-    @test ev("(unhold (myhold (1 + 1)))") == "2"
-    @test ev("(unhold (myhold (f x)))") == "(f x)"
-    @test ev("(unhold (myhold x))") == "x"
+    @test ev("(unhold (myhold (1 + 1)))") == "(2)"
+    @test ev("(unhold (myhold (f x)))") == "((f x))"
+    @test ev("(unhold (myhold x))") == "(x)"
     @test ev("(unhold (' + 1 2))") == "3"
 end
 
@@ -133,8 +139,8 @@ end
     @test ev("(k ((1 + 1) + (2 + 2)))") == "(k 6)"
 
     # `definitions` omits the synthesized body and keeps the `hold=` option.
-    @test ev("(definitions f)") == "(' def (f ?x))"
-    @test ev("(definitions g)") == "(' def (g ?x) hold=x)"
+    @test ev("(definitions f)") == "((' def (f ?x)))"
+    @test ev("(definitions g)") == "((' def (g ?x) hold=x))"
 
     # An anonymous wildcard, a rest marker, and an optional key all reproduce a
     # replacement; the matched parts still reduce.
@@ -144,7 +150,7 @@ end
     @test ev("(r (1 + 1) (2 + 2))") == "(r 2 4)"
     air_eval(env, read_air("(def (o ?x=1))"))
     @test ev("(o 5)") == "(o 5)"
-    @test ev("(o)") == "o"                      # `(o)` canonicalizes to `o`
+    @test ev("(o)") == "(o)"                    # `(o)` is a one-element form
 end
 
 # A hold is an ordinary container: index 1 is `'` and index 2 is the first
@@ -206,13 +212,13 @@ end
         "(a=(b=2) c=3)"
 end
 
-# A held form is canonical as it stands: the `'` head is never collapsed, while
-# its *content* canonicalizes like any other form. `(hold e…)` is the reserved
+# A held form is canonical as it stands: the `'` head is never collapsed, and a
+# hold of one container keeps that container whole. `(hold e…)` is the reserved
 # alias for `(' e…)`.
 @testset "held forms are canonical" begin
     env = default_env()
     ev(s) = air_string(air_eval(env, read_air(s)))
-    @test air_string(AirLang._holdify(canonicalize(read_air("((a b))")))) == "(' a b)"
+    @test air_string(AirLang._holdify(canonicalize(read_air("((a b))")))) == "(' (a b))"
     @test air_string(AirLang._holdify(canonicalize(read_air("(a)")))) == "'a"
     @test air_string(AirLang._holdify(canonicalize(read_air("()")))) == "'naught"
     @test air_string(AirLang._holdify(canonicalize(read_air("((a b) (c d))")))) ==
@@ -283,7 +289,7 @@ end
 @testset "facts are held" begin
     env = AirLang.Env(db = MemoryDatabase())
     ev(s) = air_string(air_eval(env, read_air(s)))
-    @test ev("(let (s=(logic-set :h)) (assert s (foo :a)) (facts s))") == "(' foo :a)"
+    @test ev("(let (s=(logic-set :h)) (assert s (foo :a)) (facts s))") == "((' foo :a))"
     @test ev("(let (s=(logic-set :h2)) (assert s (foo :a)) (assert s (bar :b)) (facts s))") ==
         "((' foo :a) (' bar :b))"
 end

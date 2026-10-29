@@ -42,7 +42,7 @@ function _object_content(x::Form)
     (_is_error_object(x) || _is_signal_object(x)) || return x
     seq = FormValue[x.seq[i] for i in 2:length(x.seq)]
     map = Pair{Symbol,FormValue}[k => v for (k, v) in x.map]
-    return FormContainer(FormSeq(seq), FormMap(map))
+    return canonicalize(FormContainer(FormSeq(seq), FormMap(map)))
 end
 
 # A clause pattern matches the object's content, except a bare non-rest wildcard,

@@ -11,10 +11,10 @@
     # `test` reports pass/fail counts and the failing expressions (held)
     @test ev("(test \"ok\" (check (== 1 1)) (check (== 1 2)))") ==
         "(fail=1 failures=((' == 1 2)) name=\"ok\" pass=1)"
-    @test ev("(test \"empty\")") == "(fail=0 failures=() name=\"empty\" pass=0)"
+    @test ev("(test \"empty\")") == "(fail=0 failures=naught name=\"empty\" pass=0)"
     @test ev("(test \"plain\" (check false))") ==
         "(fail=1 failures=('false) name=\"plain\" pass=0)"
-    @test ev("(test (+ 1 2) (check true))") == "(fail=0 failures=() name=3 pass=1)"
+    @test ev("(test (+ 1 2) (check true))") == "(fail=0 failures=naught name=3 pass=1)"
 
     # an uncaught error is one failure and ends the body's remaining checks
     @test ev("(test \"err\" (check (== 1 1)) (raise :boom \"bad\"))") ==
@@ -22,7 +22,7 @@
 
     # a nested test keeps its own counts
     @test ev("(test \"outer\" (check true) (test \"inner\" (check false)) (check true))") ==
-        "(fail=0 failures=() name=\"outer\" pass=2)"
+        "(fail=0 failures=naught name=\"outer\" pass=2)"
 
     @test_throws AirEvalError air_eval(env, read_air("(test)"))
 

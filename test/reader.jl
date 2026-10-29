@@ -57,7 +57,7 @@
 
     # forms
     @test air_string(read_air("(1 2 3)")) == "(1 2 3)"
-    @test air_string(read_air("()")) == "()"
+    @test air_string(read_air("()")) == "naught"   # `()` reads as `naught`
     @test air_string(read_air("(1)")) == "(1)"          # no read-time canonicalization
     @test air_string(read_air("(1 (2 3))")) == "(1 (2 3))"
 

@@ -47,11 +47,12 @@ _ns_display(path::Vector{Symbol}) = isempty(path) ? "." : "." * join(String.(pat
 
 # ---- form helpers ------------------------------------------------------------
 
-# A container from full forms, storing scalars as leaves.
+# A container from full forms, storing scalars as leaves. An empty listing or
+# payload is `naught` — the same value as `()`.
 function _ns_form(seq::Vector{Form}, map::Vector{Pair{Symbol,Form}} = Pair{Symbol,Form}[])
-    return FormContainer(FormSeq(FormValue[_store_form(x) for x in seq]),
-                         FormMap(Pair{Symbol,FormValue}[k => _store_form(v)
-                                                       for (k, v) in map]))
+    return canonicalize(FormContainer(FormSeq(FormValue[_store_form(x) for x in seq]),
+                                      FormMap(Pair{Symbol,FormValue}[k => _store_form(v)
+                                                                    for (k, v) in map])))
 end
 
 _ns_empty_value() = _ns_form(Form[])
@@ -1395,9 +1396,10 @@ end
 # Match the reconstructed call `(name args…)` against a namespace's rules. The
 # raw call is tried first (a rule holding a parameter sees it exactly as written,
 # and a zero-argument `(f)` matches the one-element pattern `(f)`), then the
-# call with the caller's scope resolved into it. Only then is the call
-# canonicalized — `(f)` as a value is the scalar `f` — which is what lets a
-# scalar `def` for `f` match its zero-argument call.
+# call with the caller's scope resolved into it. If that also fails, a
+# one-element call is tried as its sole element, which is how a scalar `def` for
+# `f` (`(def f 7)`) matches its zero-argument call `(f)`. This is an explicit
+# fallback, not canonicalization: `(f)` stays a one-element form.
 function _match_ns_call(ns::Namespace, env::Env, scope::Scope, sscope::Scope,
                         subject::FormContainer)
     m = _match_store(ns.rules, env, sscope, subject; want_held = true)
@@ -1405,8 +1407,8 @@ function _match_ns_call(ns::Namespace, env::Env, scope::Scope, sscope::Scope,
     rsub = _scope_empty(scope) ? subject : _resolve(scope, subject)
     m = _match_store(ns.rules, env, sscope, rsub; want_held = false)
     m === nothing || return (m, rsub)
-    csub = canonicalize(rsub)
-    if !isequal(csub, rsub)
+    if length(rsub.seq) == 1 && isempty(rsub.map)
+        csub = to_form(rsub.seq[1])
         m = _match_store(ns.rules, env, sscope, csub; want_held = false)
         m === nothing || return (m, csub)
     end

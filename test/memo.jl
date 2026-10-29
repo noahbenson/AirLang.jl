@@ -71,7 +71,7 @@
     # a disabled def emits no memoize entry at all
     @test !occursin("memoize", ev("(definitions memo-none)"))
     # the emitted form is itself a valid definition
-    @test ev("(unhold (definitions memo-none))") == "naught"
+    @test ev("(unhold (first (definitions memo-none)))") == "naught"
     @test ev("(memo-none 2)") == "2"
 
     # ---- errors --------------------------------------------------------------

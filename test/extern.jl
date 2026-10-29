@@ -30,8 +30,8 @@
     @test ev("(let (a=(task (inc 1))) (let (b=(task (inc 2))) (+ (await a) (await b))))") == "5"
     # capture respects inner binders: a lambda's parameter shadows an enclosing
     # loop name, while a free name inside the lambda is still captured
-    @test ev("(for (x (1)) (await (task ((?x -> (+ x 1)) 5))))") == "6"
-    @test ev("(for (x (1)) (await (task ((?y -> (+ y x)) 5))))") == "6"
+    @test ev("(for (x (1)) (await (task ((?x -> (+ x 1)) 5))))") == "(6)"
+    @test ev("(for (x (1)) (await (task ((?y -> (+ y x)) 5))))") == "(6)"
 
     # a failed task still delivers (an error form), so reading it never hangs;
     # `await` rethrows the original condition and `ready?` is true afterwards

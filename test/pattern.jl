@@ -22,6 +22,7 @@
     @test m("(f ?&r)", "(f 1 2 3)")[:r] == read_air("(1 2 3)")
     @test m("(f 1 ?&r 4)", "(f 1 2 3 4)")[:r] == read_air("(2 3)")
     @test m("(f ?&r)", "(f)") !== nothing
+    @test m("(f ?&r)", "(f)")[:r] === naught            # an empty capture is `naught`
     @test m("(f ?&r)", "(f a=1)") === nothing          # `?&` does not capture keywords
     @test m("(f ?&)", "(f 1 2)") !== nothing
 
@@ -29,6 +30,7 @@
     @test m("(f ?*k)", "(f a=1 b=2)")[:k] == read_air("(a=1 b=2)")
     @test m("(f ?*k)", "(f 1 a=2)") === nothing        # `?*` does not capture sequence
     @test m("(f ?*k)", "(f a=1)") !== nothing
+    @test m("(f ?*k)", "(f)")[:k] === naught            # an empty map capture is `naught`
 
     # the any rest `??`
     @test m("(f ??r)", "(f 1 2 a=3)")[:r] == read_air("(1 2 a=3)")

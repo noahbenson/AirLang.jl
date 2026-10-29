@@ -213,28 +213,28 @@ function _match_container(env::Env, scope::Scope, pattern::FormContainer, subjec
         binds = _match_item(env, scope, after[j], to_form(subject.seq[ns - na + j]), binds)
         binds === nothing && return nothing
     end
-    seq_form = FormContainer(
-        FormSeq(FormValue[captures_seq ? subject.seq[i] : nothing
-                         for i in (nb + 1):(ns - na)]),
-        FormMap())
-    local map_form
+    cap_seq = FormValue[captures_seq ? subject.seq[i] : nothing
+                        for i in (nb + 1):(ns - na)]
+    cap_map = Pair{Symbol,FormValue}[]
     if captures_map
         all(k -> haskey(subject.map, k), keys(pattern.map)) || return nothing
-        leftover = Pair{Symbol,FormValue}[k => subject.map[k]
-                                          for k in keys(subject.map) if !haskey(pattern.map, k)]
-        map_form = FormContainer(FormSeq(FormValue[]), FormMap(leftover))
+        cap_map = Pair{Symbol,FormValue}[k => subject.map[k]
+                                         for k in keys(subject.map) if !haskey(pattern.map, k)]
         binds = _match_map(env, scope, pattern.map, subject.map, binds, true)
         binds === nothing && return nothing
     else
-        map_form = FormContainer(FormSeq(FormValue[]), FormMap())
         binds = _match_map(env, scope, pattern.map, subject.map, binds, false)
         binds === nothing && return nothing
     end
+    # An empty capture is `naught`, the same value as `()`: a rest that matched
+    # nothing is not an empty container.
+    seq_form = canonicalize(FormContainer(FormSeq(cap_seq), FormMap()))
+    map_form = canonicalize(FormContainer(FormSeq(FormValue[]), FormMap(cap_map)))
     if name !== nothing
         _check_binding_name(name)
         captured = kind === :seq ? seq_form :
             kind === :map ? map_form :
-            FormContainer(seq_form.seq, map_form.map)
+            canonicalize(FormContainer(FormSeq(cap_seq), FormMap(cap_map)))
         if haskey(binds, name)
             return isequal(binds[name], captured) ? binds : nothing
         end

@@ -181,12 +181,18 @@ _hold_opt(call::FormContainer) =
     _hold_content(x) -> Form
 
 The form a hold holds: everything after the head, plus its map, canonicalized.
-`(' a b c)` holds `(a b c)`; `(' a)` holds `a`. A form that is not a hold is
-returned as it is.
+`(' a b c)` holds `(a b c)`; `(' a)` holds `a`; `(')` holds `naught`. A hold of
+exactly one element is that element (a holding of one container is the container,
+not a one-element list around it). A form that is not a hold is returned as it
+is.
 """
 function _hold_content(x::Form)
     _is_hold(x) || return canonicalize(x)
-    return canonicalize(FormContainer(FormSeq(_sx(x.seq, 2:length(x.seq))), x.map))
+    n = length(x.seq)
+    if n == 2 && isempty(x.map)
+        return canonicalize(to_form(x.seq[2]))
+    end
+    return canonicalize(FormContainer(FormSeq(_sx(x.seq, 2:n)), x.map))
 end
 
 # One hold layer removed, without evaluating the content.
@@ -232,28 +238,57 @@ is_raw_symbol(x::Form) = (s = _symbolof(x); s !== nothing && is_raw_symbol(s))
     canonicalize(x) -> Form
 
 The canonical form of `x`: a container with no map and an empty sequence is
-`naught`, and a container with no map and exactly one sequence element is that
-element (recursively). Everything else is unchanged.
+`naught`; everything else is unchanged. In particular a map-less one-element
+container is an ordinary form and is **not** collapsed to its element: `(1)`,
+`((1))`, `(naught)`, and `(')` all keep their shape.
 
-Canonicalization is a runtime invariant of the reducer, not a property of the
-reader or of equality: `(drop (1 2) 2)` reduces to `1`, not `(1)`.
+`naught` is the same value as `()`; canonicalization is a runtime invariant of
+the reducer, not a property of equality. The reader and every container
+constructor normalize empty containers away (see `_store_form` and
+`_normalize_empty`), so `()` and `naught` are interchangeable at any depth.
 """
 canonicalize(x::Form) = x
 function canonicalize(x::FormContainer)
-    isempty(x.map) || return x
-    n = length(x.seq)
-    n == 0 && return naught
-    if n == 1
-        # A bare `(')` is the hold of nothing, not the symbol `'`.
-        head_symbol(x) === HOLD && return x
-        return canonicalize(to_form(x.seq[1]))
-    end
+    (isempty(x.map) && isempty(x.seq)) && return naught
     return x
 end
 
+"""
+    _normalize_empty(x) -> Form
+
+Recursively replace every empty container with `naught`, rebuilding a container
+only when one of its children changed. This is the ingress normalization for
+forms that did not pass through the reader or `_store_form` (for example
+`from-json`), so that `()` and `naught` are the same value at any depth.
+"""
+_normalize_empty(x::Form) = x
+function _normalize_empty(x::FormContainer)
+    (isempty(x.map) && isempty(x.seq)) && return naught
+    changed = false
+    seq = FormValue[]
+    for v in x.seq
+        f = to_form(v)
+        nf = _normalize_empty(f)
+        changed |= !isequal(nf, f)
+        push!(seq, _store_form(nf))
+    end
+    map = Pair{Symbol,FormValue}[]
+    for (k, v) in x.map
+        f = to_form(v)
+        nf = _normalize_empty(f)
+        changed |= !isequal(nf, f)
+        push!(map, k => _store_form(nf))
+    end
+    return changed ? FormContainer(FormSeq(seq), FormMap(map)) : x
+end
+
 # Store a reduced form back into a container: a scalar is unwrapped to its leaf,
-# everything else is kept as it is. This mirrors AirDB's private `_store`.
+# everything else is kept as it is. An empty container is stored as the `naught`
+# leaf, so no empty container can survive inside another form. This mirrors
+# AirDB's private `_store`.
 _store_form(f::FormScalar) = value(f)
+_store_form(f::FormContainer) =
+    (isempty(f.map) && isempty(f.seq)) ? nothing : f
 _store_form(f::Form) = f
 
 # FormSeq supports only integer indexing; this yields a plain vector for a range.

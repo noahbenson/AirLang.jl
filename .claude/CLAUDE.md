@@ -7,9 +7,11 @@ entries. They mix freely (`(f 1 2 a=3 b=4)`), map entries may appear anywhere
 emits all map entries after the sequence elements, so `(f x=1 2)` prints as
 `(f 2 x=1)` — the same value. Read a printed form by element *kind*, never
 by source position. At **reduction** time (not at read time, and not in
-equality) `()` becomes `naught` and `(x)` becomes `x`; this runtime invariant
-means a one-element list, log, or fact is indistinguishable from its sole
-element.
+equality) `()` becomes `naught`; `()` and `naught` are the same singleton at
+every depth. A one-element form is otherwise **never collapsed**: `(x)` is a
+one-element form distinct from `x`, and it reduces only when some `def` or
+builtin matches it, so a one-element list, log, or fact is visibly a
+one-element list.
 
 **Atoms.** Keywords start with `:` (`:x`) and are inert data that never reduces —
 `~:x` is `:x`. Wildcards start with `?` (`?x`, `?&rest`, `?*kwargs`, `??`) and
@@ -103,16 +105,16 @@ replaces it, and a rule-level `\` guard on a bare pattern tests the whole
 element, so `(?x \ even?)` means an even element. `drop-cases` removes the
 matching elements. Neither takes a default clause (a bare pattern is
 indistinguishable from one). `where` is the same walk as a locator:
-`(where coll obj depth=d)` takes a non-negative integer depth (default `1`) and
-returns one key list per dimension, the `i`th element holding the `i`th key of
-every match in encounter order (`(where ((1 2) (3 2)) 2 depth=2)` is
-`((1 2) (2 2))`); a one-match dimension is its bare key, so a single depth-1
-match is the bare index and no match is `()`. At `depth=0` the only key is the
-whole-form key `0`, so the result is `0` when the subject equals `obj` and `()`
-otherwise. `(where-all coll obj)` searches
-every depth and returns a held list of paths, a depth-1 path being a bare key
-(`(' 2 (3 2))`); unhold it to iterate, or splice a path into `get`, `with`, or
-`update-in`.
+`(where coll obj depth=d)`. With no `depth` it searches depth `1` and returns
+the **bare keys** of the matches in encounter order (`(where (:a :b :b :c) :b)`
+is `(2 3)`). With an explicit non-negative integer `depth` it returns **one
+path per occurrence**, each path a list of `d` keys
+(`(where ((1 2) (3 2)) 2 depth=2)` is `((1 2) (2 2))`). At `depth=0` the only
+key is the whole-form key `0`, so the result is `((0))` when the subject equals
+`obj` and `()` otherwise. `depth=:all` searches every depth and returns one
+path per occurrence, each of its own length (`(where (:a :b (:a :b) :c) :b
+depth=:all)` is `((2) (3 2))`). No match is `()` in every mode; results are
+plain (not held). Splice a path into `get`, `with`, or `update-in`.
 
 **Pattern alternatives (`|`).** A pipe joins two adjacent sequence elements into
 an alternative: `(a |b)` reads as `(alt a b)`, and a container whose sole
@@ -283,8 +285,8 @@ keeps them private, and every entry records `source=`. `(clear sym)`, `(clear
 :all)`, and `(unuse ns [names…])` remove entries; `(del sym)` is an alias of
 `clear`. `(val pattern form…)` evaluates `form` once at definition time and
 installs it — backed by an Air `Var` — as a thread-local value that cannot act
-as a function; a bare reference and a zero-argument call (`(.ns.v)`) both yield
-it. `(bind (x=… y=…) body…)` rebinds, thread-locally for `body`'s dynamic
+as a function; a bare reference yields it, while the zero-argument call
+`(.ns.v)` is a one-element list containing it. `(bind (x=… y=…) body…)` rebinds, thread-locally for `body`'s dynamic
 extent, the `val`s that its namespace context resolves; `(bindings)` returns the
 overrides as a mapping that `bind` can reinstall. `(task form…)` holds its
 arguments, evaluates them on a spawned task that inherits the current bindings,

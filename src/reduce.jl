@@ -272,15 +272,21 @@ function _args_hold(env::Env, scope::Scope, args::Vector{Form}, raw::Bool)
 end
 
 # Apply a replacement-rule form to `args`: a rule in head position is a lambda.
-# The subject is the canonical argument form, so `((?x -> (x + 10)) 5)` matches
-# `?x` against `5` and a multi-argument pattern `(?a ?b)` matches `(1 2)`.
+# The subject is the argument form as written, so `((?x -> (x + 10)) 5)` matches
+# `?x` against `5`, a multi-argument pattern `(?a ?b)` matches `(1 2)`, and a
+# no-argument call matches its pattern against `naught`.
 # On a match the replacement is reduced in a scope binding the parameters; `_` is
 # bound to a hold of all arguments. Otherwise return `nothing`, leaving the call
 # unreduced (as a rule form the reducer does not match stays inert).
 function _apply_rule_form(env::Env, scope::Scope, rf::FormContainer,
                           args::Vector{Form})
     pattern, guard, replacement, unhold, held = _parse_replace_rule(rf)
-    subject = canonicalize(Form(PVector{Any}(args), PDict{Symbol,Any}()))
+    # The subject is the argument form as written: no arguments is `naught`, one
+    # argument is that argument itself (so `((?x -> …) v)` binds `?x` to `v`),
+    # and several arguments are the argument list.
+    subject = isempty(args) ? naught :
+              length(args) == 1 ? canonicalize(args[1]) :
+              FormContainer(FormSeq(FormValue[args...]), FormMap())
     binds = air_match(env, scope, pattern, subject, Dict{Symbol,Form}())
     binds === nothing && return nothing
     if guard !== nothing
@@ -352,8 +358,8 @@ function _reduce_children(env::Env, scope::Scope, x::FormContainer)
     new = FormContainer(FormSeq(seq), FormMap(map))
     isequal(new, x) && return canonicalize(x)
     # A one-element container whose element reduced to a namespace `def` marker is
-    # still a (zero-argument) call: keep it uncanonicalized so `_apply_ns_fn` sees
-    # the marker in head position rather than collapsing it to an inert value.
+    # a (zero-argument) call: keep it so `_apply_ns_fn` sees the marker in head
+    # position instead of treating the marker as an inert value.
     if length(new.seq) == 1 && isempty(new.map) && _is_ns_fn(to_form(new.seq[1]))
         return _Tail(new, scope)
     end

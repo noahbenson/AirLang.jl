@@ -63,7 +63,7 @@
     @test ev("(let (l=(mut ())) " *
              "(do (raise :x) " *
              "(except (:x) (do (set! l (push (value l) 1)) reraise)) " *
-             "(except (:x) (value l))))") == "1"
+             "(except (:x) (value l))))") == "(1)"
     # a raise in a handler is a new error; it does not reach later clauses
     @test ev("(do (do (raise :a) (except (:a) (raise :b))) " *
              "(except (:b ?*k) :outer))") == ":outer"
@@ -73,16 +73,16 @@
     @test ev("(do (raise :a) (except (:a) 2) (finally 42))") == "2"
     @test ev("(do (raise :a) (except (:a) 2) (finally 3) )") == "2"
     @test ev("(let (l=(mut ())) (do 1 (finally (set! l (push (value l) :fin)))) " *
-             "(value l))") == ":fin"
+             "(value l))") == "(:fin)"
     # finally runs before an escaping error leaves the block
     @test ev("(let (l=(mut ())) " *
              "(do (do (raise :x) (finally (set! l (push (value l) :fin)))) " *
-             "(except (:x) (value l))))") == ":fin"
+             "(except (:x) (value l))))") == "(:fin)"
     # ... and after a reraise
     @test ev("(let (l=(mut ())) " *
              "(do (do (raise :x) (except (:x) reraise) " *
              "(finally (set! l (push (value l) :fin)))) " *
-             "(except (:x) (value l))))") == ":fin"
+             "(except (:x) (value l))))") == "(:fin)"
     # an error raised by finally replaces the result / in-flight error
     @test_throws AirThrown air_eval(env, read_air("(do 1 (finally (raise :fin)))"))
     @test ev("(do (do (raise :boom) (finally (raise :fin))) " *

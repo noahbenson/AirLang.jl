@@ -78,7 +78,7 @@
     @test occursin("text=\"(def (inner ?x) (raise :oops x))\"", frames)
 
     # a trace with no source context has no frames
-    @test ev("(trace (raise :bare))") == "(:trace (error :bare) frames=())"
+    @test ev("(trace (raise :bare))") == "(:trace (error :bare) frames=naught)"
 
     # a non-air error traces as (:internal …), matching what `try` sees
     @test startswith(ev("(trace (get (1 2) 5))"), "(:trace (error :internal")

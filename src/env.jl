@@ -116,19 +116,26 @@ _scope_layers_only(s::Scope) = Scope(nothing, Symbol[], Form[], scope_layers(s),
 The binding groups of a `let` binding form, in order. A single mapping
 (`(x=1 y=2)`) is one group; a sequence of mappings (`((a=1) (b=2))`) is one group
 per element, each of which can use the names bound by the groups before it.
-Returns `nothing` for any other shape (a mixed sequence/map form, or an element
-that is not a pure mapping), so a pass that merely walks code can leave the form
-alone while `let` itself reports the error.
+`naught` (the same value as `()`) is an empty binding set, whether it is the
+whole form or one group of the sequence. Returns `nothing` for any other shape
+(a mixed sequence/map form, or an element that is not a pure mapping), so a pass
+that merely walks code can leave the form alone while `let` itself reports the
+error.
 """
 function _let_groups(bform::Form)
+    isequal(bform, naught) && return FormContainer[]
     bform isa FormContainer || return nothing
     if isempty(bform.seq)
-        return isempty(bform.map) ? FormContainer[] : FormContainer[bform]
+        return FormContainer[bform]
     end
     isempty(bform.map) || return nothing
     groups = FormContainer[]
     for a in bform.seq
         g = to_form(a)
+        if isequal(g, naught)
+            push!(groups, FormContainer(FormSeq(FormValue[]), FormMap()))
+            continue
+        end
         (g isa FormContainer && isempty(g.seq)) || return nothing
         push!(groups, g)
     end

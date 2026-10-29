@@ -90,21 +90,21 @@
     # ---- `definitions` round-trips ------------------------------------------
     # a single plain body form is stored as written
     @test ev("(def (dbr1 ?x) (- x 1))") == "naught"
-    @test ev("(definitions dbr1)") == "(' def (dbr1 ?x) (- x 1))"
+    @test ev("(definitions dbr1)") == "((' def (dbr1 ?x) (- x 1)))"
     # a block option wraps the body in a `do` (or `tx`)
     @test ev("(def (dbr2 ?x) tx=true (+ x 1))") == "naught"
-    @test ev("(definitions dbr2)") == "(' def (dbr2 ?x) (tx (+ x 1)))"
+    @test ev("(definitions dbr2)") == "((' def (dbr2 ?x) (tx (+ x 1))))"
     @test ev("(def (dbr3 ?x) catch=:t (if (== x 0) (throw :t 7) x))") == "naught"
     @test ev("(definitions dbr3)") ==
-        "(' def (dbr3 ?x) (do (if (== x 0) (throw :t 7) x) catch=:t))"
+        "((' def (dbr3 ?x) (do (if (== x 0) (throw :t 7) x) catch=:t)))"
     @test ev("(def (dbr4 ?x) let=(y=(x + 1)) y)") == "naught"
-    @test ev("(definitions dbr4)") == "(' def (dbr4 ?x) (do y let=(y=(x + 1))))"
+    @test ev("(definitions dbr4)") == "((' def (dbr4 ?x) (do y let=(y=(x + 1)))))"
     # the emitted form is itself a valid definition
-    @test ev("(unhold (definitions dbr2))") == "naught"
+    @test ev("(unhold (first (definitions dbr2)))") == "naught"
     @test ev("(dbr2 1)") == "2"
-    @test ev("(unhold (definitions dbr3))") == "naught"
+    @test ev("(unhold (first (definitions dbr3)))") == "naught"
     @test ev("(dbr3 0)") == "7"
-    @test ev("(unhold (definitions dbr4))") == "naught"
+    @test ev("(unhold (first (definitions dbr4)))") == "naught"
     @test ev("(dbr4 4)") == "5"
 
     # ---- option validation ---------------------------------------------------

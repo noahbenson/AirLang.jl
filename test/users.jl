@@ -7,7 +7,7 @@
     # A fresh environment runs as `air` in `.main`; `.env` is empty.
     @test ev("(current-user)") == ":air"
     @test ev("(owner)") == ":air"
-    @test ev("(users)") == ":air"
+    @test ev("(users)") == "(:air)"
     @test ev("(env)") == "naught"
 
     # A top-level `def` is written to the current namespace, so it is durable
@@ -20,7 +20,7 @@
     # ---- roots --------------------------------------------------------------
     # `$` is the current user's home namespace (a volatile capability) and `@`
     # is the database root; an unattached system user's `@` is `.`.
-    @test startswith(ev(raw"($)"), "(mut ")
+    @test startswith(ev(raw"($)"), "((mut ")
     @test ev("(== @ .)") == "true"
     @test ev(raw"(== $ (get . :sys :user :air :home))") == "true"
     # `$` and `@` are ordinary symbols: a local binding shadows the root, and a
@@ -46,7 +46,7 @@
     @test ev("(users)") == "(:air :bob)"
     @test ev("(as-user :bob (current-user))") == ":bob"
     @test ev("(as-user :bob (owner))") == ":bob"
-    @test ev("(as-user :bob (users))") == ":bob"
+    @test ev("(as-user :bob (users))") == "(:bob)"
     @test ev("(as-user :air (current-user))") == ":air"
     @test ev("(do (as-user :nobody 1) (except ?e :err))") == ":err"
     # Only `air` creates users or changes admin status, and a non-admin may not
@@ -86,7 +86,7 @@
     @test ev("(as-user :game (create-constituent :kid))") == ":game:kid"
     @test ev("(as-user :game:kid (current-user))") == ":game:kid"
     @test ev("(as-user :game (users))") == "(:game :game:kid)"
-    @test ev("(as-user :game:kid (users))") == ":game:kid"
+    @test ev("(as-user :game:kid (users))") == "(:game:kid)"
     @test ev("(users)") == "(:air :bob :game :game:kid)"
     # constituents do not nest, and only `air` changes admin status
     @test ev("(do (as-user :game:kid (create-constituent :x)) (except ?e :err))") == ":err"

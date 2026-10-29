@@ -170,30 +170,30 @@ all considered subtypes of the `form` type.
   f)` does the same at a deep path, with a missing key yielding `naught` to
   `f`; and `(wout form k…)` removes the subform. Extra arguments to `f` are
   written with `part`, as in `(update-in m :a (part + 10))`.
-* **Locating:** `(where coll obj depth=d)` returns the keys of every element at
-  depth `d` (a non-negative integer, default `1`) that equals `obj`, with one
-  element of the result per dimension, so the `i`th element holds the `i`th key
-  of every match in encounter order: `(where (:a :b :b :c) :b)` is `(2 3)` and
-  `(where ((1 2) (3 2)) 2 depth=2)` is `((1 2) (2 2))`. A dimension with one
-  match is its bare key (the usual singleton rule), so a single depth-1 match is
-  the bare index (`(where (:a :b :c) :b)` is `2`) and no match is `()`. At
-  `depth=0` the subject is the only candidate and its sole key is the
-  whole-form key `0`, so the result is `0` when the subject equals `obj` and
-  `()` otherwise.
-  `(where-all coll obj)` instead searches every depth and returns a held list of
-  paths — a depth-1 path is a bare key and a deeper one a key sequence, so
-  `(where-all (:a :b (:a :b) :c) :b)` is `(' 2 (3 2))`. Unhold the result to
-  iterate it, or splice a path into `get`, `with`, or `update-in`:
-  `(get coll (unhold paths)...)`.
+* **Locating:** `(where coll obj depth=d)` finds every element at depth `d`
+  equal to `obj`. With no `depth`, it searches depth `1` and returns the **bare
+  keys** of the matches in encounter order: `(where (:a :b :b :c) :b)` is
+  `(2 3)` and a single match `(where (:a :b :c) :b)` is `(2)`. With an explicit
+  non-negative integer `depth`, it returns **one path per occurrence**, each
+  path a list of `d` keys: `(where ((1 2) (3 2)) 2 depth=2)` is
+  `((1 2) (2 2))` and `(where (:a :b :c) :b depth=1)` is `((2))`. At `depth=0`
+  the subject is the only candidate and its sole key is the whole-form key `0`,
+  so the result is `((0))` when the subject equals `obj` and `()` otherwise.
+  `depth=:all` searches every depth and returns one path per occurrence, each of
+  its own length: `(where (:a :b (:a :b) :c) :b depth=:all)` is `((2) (3 2))`.
+  No match is `()` in every mode. Results are plain (not held); splice a path
+  into `get`, `with`, or `update-in`: `(get coll (first (where …))...)`.
 
-### 2. Infinite Singleton Dimensions
-Air treats scalar values as inherently infinite singleton forms. A value like
-`10` is a 0-dimensional tensor, meaning `10 == (10) == ((10))` and so
-on. Indexing down the chain (`(f 1)`, `(f 1 1)`, etc.) acts as an idempotent
-projection, while out-of-bounds indices throw errors. This allows scalar values
-to seamlessly participate in collection operations (e.g., `(push 10 11)` yields
-`(10 11)`). The interpreter automatically canonicalizes these representations
-during parsing and pattern matching.
+### 2. Scalars and Single-Element Forms
+A scalar is its own sole sequence for the accessors: `(get 10 1)` is `10`,
+descending past a scalar stays on it, and out-of-bounds indices throw, so a
+scalar participates naturally in collection operations (`(push 10 11)` is
+`(10 11)`). This is an **accessor convention, not a rewrite**: a written
+container is never collapsed, so `10`, `(10)`, and `((10))` are three distinct
+forms and `(eq? 10 (10))` is false. A one-element form reduces only when a
+`def` (or builtin) matches it. The sole canonicalization is the empty form:
+`()` and `naught` are the same singleton at every depth, so `(same? () naught)`
+is true and no container ever embeds an empty container.
 
 ### 3. Literal Forms and Meta-Programming (`(' ...)` and `~`)
 Holding is **structural**, not a flag: the canonical hold is a container whose
@@ -477,8 +477,9 @@ memoized rule do not occupy tail position.
 ### Lambdas: A Replacement Rule in Head Position
 
 There is no separate lambda form: **a replacement rule in head position is a
-function**. Its pattern is matched against the canonical argument form and its
-replacement is the body:
+function**. Its pattern is matched against the arguments as written — no
+arguments is `naught`, one argument is that argument, and several are the
+argument list — and its replacement is the body:
 
 ```air
 ((?x -> (x ^ 2)) 3)              # => 9
@@ -1321,7 +1322,7 @@ objects.
   `AirDB.Form` values.
 * The reduction engine: anchor-indexed dispatch (a global pattern is anchored by
   *any* raw symbol it contains, so `(?a + ?b)` is anchored by `+`), fixed-point
-  reduction, and runtime canonicalization (`()` → `naught`, `(x)` → `x`).
+  reduction, and runtime canonicalization of the empty form (`()` → `naught`).
 * Pattern matching: exact structural match, named wildcards (`?x`), rest
   wildcards (`?&` sequence, `?*` keywords, `??` any remaining elements),
   alternatives (`p | q`, read as `(alt p q)`), and
@@ -1406,7 +1407,7 @@ objects.
   replacement syntax),
   collection verbs (`map`/`filter`/`reduce`, `prepend`, `zip`, `interleave`,
   `flatten`, `partition`, `with`/`wout`, `sort`, `range`, `join`, `shuffle`,
-  `variance`, `cases`/`drop-cases`, `matches-any?`, `where`/`where-all`
+  `variance`, `cases`/`drop-cases`, `matches-any?`, `where`
   (locations), `nest`/`nest-list`/
   `nest-while`, `transpose`, `riffle`, `tuples`, `count-distinct`,
   `gather-by`/`split-by`, `map-thread`, `outer`, `array`,
@@ -1502,7 +1503,8 @@ objects.
   per-call revision collapse, rollback on error); `(update coll key f)` is the
   collection update. Facts and rules enter a logic-set **held**, so they are
   immutable data: a later `def` cannot rewrite a stored rule, and
-  `(facts s)`/`(rules s)` return them held (`(' parent :abe :bob)`). The
+  `(facts s)`/`(rules s)` return them held and always as a list
+  (`((' parent :abe :bob))` for one fact). The
   incremental alpha/beta network is still deferred.
 * Extern objects: a host-level value (a promise, a regex) is a
   first-class form leaf, built on AirDB's `FormExtern`/`ExternHandle` and its

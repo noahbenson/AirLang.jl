@@ -8,8 +8,9 @@
 # strings, numbers, booleans, `naught`), parenthesized forms, the `|`
 # pattern-alternative sugar, `#` line comments, and `k=v` mapping/hybrid form
 # elements. The
-# reader does NOT canonicalize — `(1)` is a one-element container and `()` is an
-# empty one; canonicalization is the reducer's job.
+# reader normalizes the empty form to `naught` (so `()` is `naught` at every
+# depth) but keeps one-element forms as written — `(1)` is a one-element
+# container; collapsing is never done.
 #
 # MIT License
 # Copyright (c) 2026 Noah C. Benson
@@ -472,6 +473,7 @@ function _finish_frame(f::_Frame)::Form
         v = to_form(f.seq[1])
         _is_alt(v) && return v
     end
+    isempty(f.seq) && isempty(f.map) && return naught
     seq = PVector{Any}(f.seq)
     map = isempty(f.map) ? PDict{Symbol,Any}() : PDict{Symbol,Any}(f.map...)
     return Form(seq, map)
@@ -509,7 +511,9 @@ function _parse_container(p::_Parser)::Form
             p.i += 1
             top = pop!(stack)
             f = _finish_frame(top)
-            _record_span!(p, f, top.start, t.stop)
+            # `naught` is a shared singleton: recording a span under it would
+            # associate a position with every `()` and `naught` in the program.
+            f === naught || _record_span!(p, f, top.start, t.stop)
             if isempty(stack)
                 p.last_stop = t.stop
                 return f

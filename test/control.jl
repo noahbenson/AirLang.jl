@@ -39,7 +39,7 @@
     @test ev("(nest (?x -> (2 * x)) 5 1)") == "32"
     @test ev("(nest inc 0 1)") == "1"
     @test ev("(nest-list (?x -> (2 * x)) 3 1)") == "(1 2 4 8)"
-    @test ev("(nest-list inc 0 1)") == "1"
+    @test ev("(nest-list inc 0 1)") == "(1)"
     @test ev("(nest-while (?x -> (x // 2)) even? 8)") == "1"
     @test ev("(nest-while (?x -> (x // 2)) even? 7)") == "7"   # pred fails first
     @test ev("(nest-while (?x -> (x // 2)) even? 8 list=true)") == "(8 4 2 1)"

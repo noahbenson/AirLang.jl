@@ -105,18 +105,18 @@ operands aren't both numbers).
 ### 7. Symbolic Differentiation Engine ✓
 
 ```air
+(def (d ?c ?x) 0)
+(def (d ?x ?x) 1)
 (def (d (?f + ?g) ?x) ((d f x) + (d g x)))
 (def (d (?f * ?g) ?x) (((d f x) * g) + (f * (d g x))))
-(def (d ?x ?x) 1)
-(def (d ?c ?x) 0)
 
 (d (x * x) x)   # => ((1 * x) + (x * 1))
 (d (x + x) x)   # => 2
 ```
 
-Rule **order** matters (the catch-all `(d ?c ?x)` must come last). The result is
-unsimplified because the simplifier from #6 doesn't include `(1 * ?x) → x` unless
-you add it.
+Rule **order** matters: later definitions are tried first, so the catch-all
+`(d ?c ?x)` must come first. The result is unsimplified because the simplifier
+from #6 doesn't include `(1 * ?x) → x` unless you add it.
 
 ### 8. Pattern Guards & Input Validation ✓
 
@@ -166,12 +166,15 @@ are no bignums.
 ### 11. Structural Schema Validator ✓
 
 ```air
-(def (valid-person? ?p \ (and (haskey p :name) (haskey p :age))) true)
 (def (valid-person? ?p) false)
+(def (valid-person? ?p \ (and (haskey p :name) (haskey p :age))) true)
 
 (valid-person? (name="Ada" age=36))   # => true
 (valid-person? (name="Ada"))          # => false
 ```
+
+The guard rule is defined last, so it is tried first; the unguarded fallback
+catches everything else.
 
 ---
 
@@ -194,9 +197,9 @@ readability.
 #     (ancestor :abe :bob) (ancestor :bob :carl) (ancestor :abe :carl))
 ```
 
-`(why s (ancestor :abe :carl))` returns
-`(because (rule (parent ?x ?z) (ancestor ?z ?y) :> (ancestor ?x ?y))
-(' parent :abe :bob) (' ancestor :bob :carl))` — the rule and the premises that
+`(why s (ancestor :abe :carl))` returns one held reason per derivation, here
+`((because (' rule (parent ?x ?z) (ancestor ?z ?y) :> (ancestor ?x ?y))
+(' parent :abe :bob) (' ancestor :bob :carl)))` — the rule and the premises that
 derived the fact. Conditions are an implicit conjunction, and each `:>` is a
 tracked consequence; side effects use `:+` (assertion), `:-` (retraction), and
 `:=` (revision), and must carry an explicit `reason=` when they edit the set.
@@ -215,7 +218,9 @@ Derive all paths, then keep the minimum per `(from to)` pair with `:accum`:
                   :> (path ?x ?y (w1 + w2))))
   (assert s (rule (path ?x ?y ?w) :accum (w=:min) :> (shortest ?x ?y ?w)))
   (facts s))
-# => (… (shortest :a :b 1) (shortest :b :c 2) (shortest :a :c 3))
+# => ((edge :a :b 1) (edge :b :c 2) (edge :a :c 5)
+#     (path :a :b 1) (path :b :c 2) (path :a :c 5) (path :a :c 3)
+#     (shortest :a :b 1) (shortest :b :c 2) (shortest :a :c 3))
 ```
 
 `:accum (w=:min)` accumulates `?w`, so `?x` and `?y` are the group keys; the
@@ -265,7 +270,8 @@ of it. Bounds (columns 1..n) are the caller's to enforce.
   (assert s (trigger :job))
   (assert s (done :job))
   (facts s))
-# => (… (state :job :running) (state :job :complete))
+# => ((state :job :pending) (trigger :job) (done :job)
+#     (state :job :running) (state :job :complete))
 ```
 
 ### 17. Package Dependency Resolver ✓
@@ -278,8 +284,13 @@ of it. Bounds (columns 1..n) are the caller's to enforce.
   (assert s (rule (depends ?x ?y) :> (needs ?x ?y)))
   (assert s (rule (depends ?x ?z) (needs ?z ?y) :> (needs ?x ?y)))
   (facts s))
-# => needs :app→:lib1,:lib2,:lib3 and the rest of the closure
+# => ((depends :app :lib1) (depends :lib1 :lib2) (depends :lib2 :lib3)
+#     (needs :app :lib1) (needs :lib1 :lib2) (needs :lib2 :lib3)
+#     (needs :app :lib2) (needs :app :lib3) (needs :lib1 :lib3))
 ```
+
+The closure is `:app → :lib1, :lib2, :lib3`, `:lib1 → :lib2, :lib3`, and
+`:lib2 → :lib3`; the base `depends` facts remain as well.
 
 ---
 
@@ -317,21 +328,21 @@ when the body raises, without an enclosing `tx`; the body takes `let=`, `catch=`
 
 ### 20. Persistent Event-Sourcing Log ✓
 
-An append-only log is a `mut` holding a container, appended with `with`. The log
-starts with a two-element header `(:log :start)` so a one-event log cannot
-collapse to the event itself:
+An append-only log is a `mut` holding a container, appended with `push`. The log
+starts with a two-element header `(:log :start)` by convention; `()` works
+equally well, since a one-element log stays a one-element list:
 
 ```air
-(let (log=(mut (:log :start)))
-  (def (emit-event ?e) (set! log (push (value log) e)))
-  (emit-event (:added :a))
-  (emit-event (:removed :b))
-  (value log))
+(val log (mut (:log :start)))
+(def (emit-event ?e) (set! log (push (value log) e)))
+(emit-event (:added :a))
+(emit-event (:removed :b))
+(value log)
 # => (:log :start (:added :a) (:removed :b))
 ```
 
-Replay folds the events into a state map (keyword elements are the header and
-are skipped):
+Replay, reading the same top-level `log`, folds the events into a state map
+(keyword elements are the header and are skipped):
 
 ```air
 (reduce ((?state ?e) ->
@@ -342,8 +353,6 @@ are skipped):
 # => (a=true)
 ```
 
-The header matters because a **one-element sequence canonicalizes to its
-element**; without it, a single-event log is indistinguishable from the event.
 Snapshots are just a `def`/`let` holding the replayed state map.
 
 ### 21. Concurrent Multi-Threaded Counter ✓
@@ -384,7 +393,7 @@ operator is the *middle* element of an infix form):
 (def (to-sql ?q)
   (str "SELECT " (string-join (map name (get q 3)) ", ") " FROM " (name (get q 2))))
 
-(to-sql (query (users) (id name)))   # => "SELECT id, name FROM users"
+(to-sql (query users (id name)))   # => "SELECT id, name FROM users"
 ```
 
 ### 24. Conway's Game of Life ✓
@@ -532,10 +541,11 @@ rule parameters, variables are wildcards (`?x`), and a substitution is a map fro
   (solve-q (goals :done goal) db "" () (vars goal (vs :done))))
 ```
 
-A database is a `clauses` form of `head=`/`body=` maps; each body starts with
-the `goals` marker and ends with a `:done` sentinel, so a one-goal body never
-collapses to its goal. The query is a raw term — `solve`'s `hold=goal` parameter
-receives it exactly as written, so it is not reduced:
+A database is a `clauses` form of `head=`/`body=` maps; each body is a `goals`
+form headed by the `goals` marker and ending with a `:done` sentinel, which the
+goal stack uses to detect the end of the search. The query is a raw term —
+`solve`'s `hold=goal` parameter receives it exactly as written, so it is not
+reduced:
 
 ```air
 (let (db=(clauses
@@ -557,7 +567,7 @@ structurally without reducing them, so `(1 + 2)` is data rather than `3`.
 What the code exercises: `hold=` on `def` parameters passes a term into a
 function unreduced; `~(keyword (name v))=…` is a computed map key; and the
 sentinels (`:done`, `sols`, `(vs :done)`)
-work around one-element canonicalization. One sharp edge: a bound variable must
+mark the end of the search. One sharp edge: a bound variable must
 not share its name with the *head* of its own value. `(let (db=db) db)` is fine —
 replacing `db` by itself is a fixed point and yields `db` — but a non-trivial
 value such as `(let (db=(db 1)) db)` re-resolves its head `db` to the value again

@@ -66,9 +66,9 @@
     # A mutable created in a database namespace belongs to that database, so an
     # entry can store it; one created in `.main` belongs to the process store.
     @test ev("(namespace .m.acl (val mv (mut 1)))") == "naught"
-    @test ev("(.m.acl.mv)") == "(mut 1)"
-    @test ev("(set! (.m.acl.mv) 2)") == "2"
-    @test ev("(.m.acl.mv)") == "(mut 2)"
+    @test ev(".m.acl.mv") == "(mut 1)"
+    @test ev("(set! .m.acl.mv 2)") == "2"
+    @test ev(".m.acl.mv") == "(mut 2)"
     @test ev("(namespace .main (val sysmut (mut 1)))") == "naught"
     @test ev("(do (namespace .m.acl (val bad (.main.sysmut))) " *
              "(except (:un-storable ?x) :unstorable))") == ":unstorable"
@@ -104,7 +104,7 @@
     @test env.dbs[(:m, :sub)] === db2
     @test AirLang._ns_db(env, Symbol[:m, :sub, :work]) === db2
     # Users are per database: `bob` (a user of `.m`) is not a user of `.m.sub`.
-    @test ev("(users)") == ":air"
+    @test ev("(users)") == "(:air)"
     @test ev("(do (as-user :bob 1) (except ?e :no-user))") == ":no-user"
     @test ev("(do (chmod! .m.sub read=(bob=true)) (except ?e :bad-user))") ==
         ":bad-user"
@@ -120,7 +120,7 @@
     @test !haskey(env.dbs, (:m, :sub))
     @test ev("(== @ .)") == "true"
     @test ev("(do (.m.work.f 2) (except ?e :gone))") == ":gone"
-    @test ev("(users)") == ":air"
+    @test ev("(users)") == "(:air)"
     # The databases are closed, so a second close is an error.
     @test ev("(do (close-airdb .m) (except ?e :not-open))") == ":not-open"
 
@@ -164,7 +164,7 @@
     # to the user.
     @test ov("(as-user :dave (namespace \$ (def (h ?x) (* x 4))))") == "naught"
     @test ov("(as-user :dave (h 2))") == "8"
-    @test ov("(as-user :dave (users))") == ":dave"
+    @test ov("(as-user :dave (users))") == "(:dave)"
 
     # Opening a root requires write on the parent namespace, so a non-`air` user
     # cannot root a database directly under `.`.

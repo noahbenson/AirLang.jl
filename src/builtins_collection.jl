@@ -611,62 +611,57 @@ function _where_all_paths!(out::Vector{Vector{Any}}, x::Form, obj::Form,
     return out
 end
 
-# A path (a vector of keys) as a form; a one-key path is the bare index.
+# A path (a vector of keys) as a form, always a list: `(2)`, `(:a 2)`.
 function _path_form(path::Vector{Any})
-    return canonicalize(FormContainer(
-        FormSeq(FormValue[_store_form(Form(k)) for k in path]), FormMap()))
+    return FormContainer(
+        FormSeq(FormValue[_store_form(Form(k)) for k in path]), FormMap())
 end
 
-# `(where coll obj depth=d)` — the locations of every element of `coll` at depth
-# `d` (a non-negative integer, default `1`) that equals `obj`. The result has one
-# element per dimension: element `i` lists the `i`th key of every match, in
-# encounter order, so `(get (get result i) n)` is the `i`th index of match `n`.
-# A dimension with one match is the bare key and with several a sequence (the
-# usual singleton rule), so a single match at depth 1 is the bare index (`2`).
-# Depth `0` names the subject itself, whose sole key is the whole-form key `0`,
-# so the result is `0` when the subject equals `obj` and `()` otherwise. No
-# match at a positive depth is `()`. The paths work with `get`, `with`, and
-# `update-in`. Use `where-all` for every depth.
+# `(where coll obj depth=d)` — the locations of every element of `coll` that
+# equals `obj`. With no `depth`, the depth is 1 and the result is the bare keys
+# of the matches in encounter order: `(where (:a :b :b) :b)` is `(2 3)`. With an
+# explicit integer depth `n`, the result has one path per occurrence, each a
+# list of `n` keys: `(where (a=(1 2) b=(2 3)) 2 depth=2)` is `((:a 2) (:b 1))`
+# (map order is not preserved). Depth `0` names the subject itself, whose sole
+# key is the whole-form key `0`, so the result is `((0))` when the subject
+# equals `obj` and `()` otherwise. With `depth=:all`, every occurrence at any
+# depth is reported, each as its own path, so the paths may have different
+# lengths. No match is `()`. The results are plain lists of plain paths, which
+# splice into `get`, `with`, and `update-in`.
 function _bi_where(env::Env, scope::Scope, call::FormContainer)
     length(call.seq) == 3 ||
         throw(AirEvalError("where takes a collection and an object"))
     _check_options(call, "where", (DEPTH_KEY,))
-    depth = 1
-    if haskey(call.map, DEPTH_KEY)
-        l = _leafof(air_reduce(env, scope, to_form(call.map[DEPTH_KEY])))
-        l === Symbol(":all") && throw(AirEvalError(
-            "where needs an integer depth; use where-all for any depth"))
-        (l isa Integer && l >= 0) ||
-            throw(AirEvalError("where: depth must be a non-negative integer"))
-        depth = Int(l)
-    end
     subject = air_reduce(env, scope, to_form(call.seq[2]))
     obj = air_reduce(env, scope, to_form(call.seq[3]))
-    depth == 0 && return isequal(subject, obj) ? Form(0) : naught
+    if !haskey(call.map, DEPTH_KEY)
+        paths = Vector{Any}[]
+        _where_paths_at!(paths, subject, obj, 1, Any[])
+        isempty(paths) && return naught
+        return _ns_form(Form[Form(p[1]) for p in paths])
+    end
+    l = _leafof(air_reduce(env, scope, to_form(call.map[DEPTH_KEY])))
+    if l === Symbol(":all")
+        paths = Vector{Any}[]
+        _where_all_paths!(paths, subject, obj, Any[])
+        isempty(paths) && return naught
+        return _ns_form(Form[_path_form(p) for p in paths])
+    end
+    (l isa Integer && l >= 0) || throw(AirEvalError(
+        "where: depth must be a non-negative integer or :all"))
+    depth = Int(l)
+    depth == 0 && return isequal(subject, obj) ?
+        _ns_form(Form[_path_form(Any[0])]) : naught
     paths = Vector{Any}[]
     _where_paths_at!(paths, subject, obj, depth, Any[])
     isempty(paths) && return naught
-    cols = Form[_path_form(Any[p[i] for p in paths]) for i in 1:depth]
-    return _ns_form(cols)
+    return _ns_form(Form[_path_form(p) for p in paths])
 end
 special!(:where, _bi_where)
 
-# `(where-all coll obj)` — a held list of the paths of every node inside `coll`
-# equal to `obj`, at any depth, in pre-order. A depth-1 path is a bare index and
-# a deeper one a key sequence (`(' 2 (3 2))`), so the result is data: unhold it
-# to iterate, or feed a path to `get`, `with`, or `update-in`.
-function _bi_where_all(env::Env, scope::Scope, call::FormContainer)
-    length(call.seq) == 3 ||
-        throw(AirEvalError("where-all takes a collection and an object"))
-    _check_options(call, "where-all", ())
-    subject = air_reduce(env, scope, to_form(call.seq[2]))
-    obj = air_reduce(env, scope, to_form(call.seq[3]))
-    paths = Vector{Any}[]
-    _where_all_paths!(paths, subject, obj, Any[])
-    isempty(paths) && return naught
-    return _holdify(_ns_form(Form[_path_form(p) for p in paths]))
-end
-special!(Symbol("where-all"), _bi_where_all)
+# `where-all` was folded into `where` with `depth=:all`.
+special!(Symbol("where-all"), (env, scope, call) -> throw(AirEvalError(
+    "where-all has been removed; write (where coll obj depth=:all)")))
 
 # ---- generation / aggregation ------------------------------------------------
 

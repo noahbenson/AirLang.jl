@@ -27,7 +27,7 @@
     # the variable textually).
     @test ev("(let (x=2) (' a (unhold x) b))") == "(' a (unhold 2) b)"
     # `~` is `(preval x)`, so it evaluates wherever it appears, quoted or not
-    @test ev("(~ 1)") == "1"
+    @test ev("(~ 1)") == "(1)"   # `(~ 1)` is a one-element form around the hole
     @test ev("(preval (1 + 2))") == "3"
 
     # each quote owns its own `~`

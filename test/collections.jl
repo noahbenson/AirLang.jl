@@ -23,8 +23,8 @@
     @test ev("(distinct (1 2 1 3 2))") == "(1 2 3)"
     @test ev("(dedupe (1 1 2 2 3))") == "(1 2 3)"
     @test ev("(dedupe (1 2 1))") == "(1 2 1)"
-    @test ev("(partition 2 (1 2 3 4 5))") == "((1 2) (3 4) 5)"
-    @test ev("(partition-by odd? (1 3 2 4 5))") == "((1 3) (2 4) 5)"  # adjacent groups
+    @test ev("(partition 2 (1 2 3 4 5))") == "((1 2) (3 4) (5))"
+    @test ev("(partition-by odd? (1 3 2 4 5))") == "((1 3) (2 4) (5))"  # adjacent groups
     @test ev("(partition-by odd? (2 4 1 3))") == "((2 4) (1 3))"
 
     # generation / aggregation
@@ -93,40 +93,42 @@
     @test_throws AirEvalError air_eval(env, read_air("(update-in (a=1) :a)"))
     @test_throws AirEvalError air_eval(env, read_air("(update-in (a=1) 1.5 inc)"))
 
-    # where: the keys of matching elements, one element per dimension; a
-    # dimension with one match is its bare key, and no match is `()`
-    @test ev("(where (:a :b :c :d :e) :b)") == "2"
+    # where: the locations of every element of the collection equal to the
+    # object. With no depth (the default is 1) the keys are bare; with an
+    # explicit depth there is one path per occurrence, even when it is one key.
+    @test ev("(where (:a :b :c :d :e) :b)") == "(2)"
     @test ev("(where (:a :b :b :c) :b)") == "(2 3)"
     @test ev("(where (:a :b :b :c) :z)") == "naught"
-    @test ev("(where (a=1 b=2) 2)") == ":b"
-    @test ev("(where (a=1 b=2) 1)") == ":a"
-    @test ev("(where (:a (:x :y :b) :c) :b depth=2)") == "(2 3)"
+    @test ev("(where (a=1 b=2) 2)") == "(:b)"
+    @test ev("(where (a=1 b=2) 1)") == "(:a)"
+    @test ev("(where 5 5)") == "(1)"
+    @test ev("(where (:a (:x :y :b) :c) :b depth=1)") == "naught"
+    @test ev("(where (:a (:x :y :b) :c) :b depth=2)") == "((2 3))"
+    @test ev("(where (:a :b :c) :b depth=1)") == "((2))"
     @test ev("(where ((1 2) (3 2)) 2 depth=2)") == "((1 2) (2 2))"
     @test ev("(get (where ((1 2) (3 2)) 2 depth=2) 1)") == "(1 2)"
     @test ev("(get (get (where ((1 2) (3 2)) 2 depth=2) 2) 2)") == "2"
-    # the access formula holds for a single match too: the dimension's bare key
-    # is a scalar, and a scalar is its own sole element
-    @test ev("(let (w=(where (:a :b :c) :b)) (get (get w 1) 1))") == "2"
+    # a path splices into `get`/`update-in`
+    @test ev("(let (p=(first (where ((1 2) (3 4)) 4 depth=2))) (get ((1 2) (3 4)) p...))") == "4"
     # depth 0: the subject itself, named by the whole-form key 0
-    @test ev("(where (1 2) (1 2) depth=0)") == "0"
-    @test ev("(where 5 5 depth=0)") == "0"
+    @test ev("(where (1 2) (1 2) depth=0)") == "((0))"
+    @test ev("(where 5 5 depth=0)") == "((0))"
     @test ev("(where (1 2) 9 depth=0)") == "naught"
-    @test ev("(get (1 2) (where (1 2) (1 2) depth=0))") == "(1 2)"
+    @test ev("(get (1 2) (first (where (1 2) (1 2) depth=0))...)") == "(1 2)"
     @test_throws AirEvalError air_eval(env, read_air("(where (1 2) 1 depth=-1)"))
-    @test_throws AirEvalError air_eval(env, read_air("(where (1 2) 1 depth=:all)"))
     @test_throws AirEvalError air_eval(env, read_air("(where (1 2) 1 extra)"))
 
-    # where-all: a held list of every path at any depth; a path splices into
-    # `get`/`update-in`
-    @test ev("(where-all (:a :b (:a :b) :c) :b)") == "(' 2 (3 2))"
-    @test ev("(where-all (1 (2 (1 2))) 1)") == "(' 1 (2 2 1))"
-    @test ev("(where-all (:a :b) :z)") == "naught"
-    @test ev("(unhold (where-all (:a :b (:a :b) :c) :b))") == "(2 (3 2))"
-    @test ev("(let (p=(unhold (where-all ((1 2) (3 4)) 4))) (get ((1 2) (3 4)) p...))") == "4"
-    @test ev("(let (p=(unhold (where-all ((1 2) (3 4)) 4))) (update-in ((1 2) (3 4)) p... inc))") ==
-        "((1 2) (3 5))"
-    @test ev("(let (p=(unhold (where-all (a=(b 1) c=(b 2)) 2))) (get (a=(b 1) c=(b 2)) p...))") == "2"
-    @test_throws AirEvalError air_eval(env, read_air("(where-all (1 2) 1 depth=1)"))
+    # depth=:all: one path per occurrence at any depth, each its own length
+    @test ev("(where (:a :b (:a :b) :c) :b depth=:all)") == "((2) (3 2))"
+    @test ev("(where (1 (2 (1 2))) 1 depth=:all)") == "((1) (2 2 1))"
+    @test ev("(where (:a :b) :z depth=:all)") == "naught"
+    @test ev("(let (p=(first (where ((1 2) (3 4)) 4 depth=:all))) (get ((1 2) (3 4)) p...))") == "4"
+    @test ev("(let (p=(first (where ((1 2) (3 4)) 4 depth=:all))) " *
+             "(update-in ((1 2) (3 4)) p... inc))") == "((1 2) (3 5))"
+    @test ev("(let (p=(first (where (a=(b 1) c=(b 2)) 2 depth=:all))) " *
+             "(get (a=(b 1) c=(b 2)) p...))") == "2"
+    # where-all is a tombstone
+    @test_throws AirEvalError air_eval(env, read_air("(where-all (1 2) 1)"))
 
     @test_throws AirEvalError air_eval(env, read_air("(with (1 2) 4 9)"))
     @test_throws AirEvalError air_eval(env, read_air("(with (1 2) -3 9)"))
@@ -134,7 +136,7 @@
 
     # prepend / zip / interleave / flatten
     @test ev("(prepend (3 4) 1 2)") == "(1 2 3 4)"
-    @test ev("(prepend () 1)") == "1"
+    @test ev("(prepend () 1)") == "(1)"
     @test ev("(prepend 2 1)") == "(1 2)"
     @test ev("(zip (1 2) (a b))") == "((1 a) (2 b))"
     @test ev("(zip (1 2 3) (a b))") == "((1 a) (2 b))"
@@ -192,15 +194,15 @@
     # cases / drop-cases: pattern selection at a level (default 1)
     @test ev("(cases (1 2 3 4) (?x \\ even?))") == "(2 4)"
     @test ev("(cases (1 2 3 4) ((?x \\ even?) -> (10 * x)))") == "(20 40)"
-    @test ev("(cases (1 2 3) 2)") == "2"
+    @test ev("(cases (1 2 3) 2)") == "(2)"
     @test ev("(cases (1 2 3) 9)") == "naught"
-    @test ev("(cases (a=1 b=2 c=3) (?x \\ even?))") == "2"
+    @test ev("(cases (a=1 b=2 c=3) (?x \\ even?))") == "(2)"
     @test ev("(cases ((1 2) (3 4)) (?x \\ even?))") == "naught"
     @test ev("(cases ((1 2) (3 4)) (?x \\ even?) depth=2)") == "(2 4)"
     @test ev("(drop-cases (1 2 3 4) (?x \\ even?))") == "(1 3)"
     @test ev("(drop-cases (1 2 3 4) ((?x \\ even?) -> x))") == "(1 3)"
     @test ev("(drop-cases (a=1 b=2 c=3) (?x \\ even?))") == "(a=1 c=3)"
-    @test ev("(drop-cases ((1 2) (3 4)) 2 depth=2)") == "(1 (3 4))"
+    @test ev("(drop-cases ((1 2) (3 4)) 2 depth=2)") == "((1) (3 4))"
     @test ev("(drop-cases (1 2 3) 9)") == "(1 2 3)"
     @test ev("(drop-cases 3 3)") == "naught"
     @test ev("(drop-cases (1 2 3) ((?x \\ even?) -> x) depth=0)") == "(1 2 3)"
@@ -225,7 +227,7 @@
 
     # a scalar argument is a singleton
     @test ev("(union (1 2) 3)") == "(1 2 3)"
-    @test ev("(intersect (1 2 3) 2)") == "2"
+    @test ev("(intersect (1 2 3) 2)") == "(2)"
     @test ev("(difference (1 2 3) 2)") == "(1 3)"
     @test ev("(join (1 2) 3)") == "(1 2 3)"
 end
@@ -244,7 +246,7 @@ end
     # riffle: a separator between elements, cycled when it is a collection
     @test ev("(riffle (1 3 5) 0)") == "(1 0 3 0 5)"
     @test ev("(riffle (a b c d) (x y))") == "(a x b y c x d)"
-    @test ev("(riffle (1) 0)") == "1"
+    @test ev("(riffle (1) 0)") == "(1)"
     @test ev("(riffle () 0)") == "naught"
     @test ev("(riffle (1 2 3) ())") == "(1 2 3)"
     @test ev("(riffle (a b) 0 k=1)") == "(a 0 b)"      # the map is kept
@@ -252,7 +254,7 @@ end
     # tuples: Cartesian product; the power form repeats (tuples c n)
     @test ev("(tuples ((a b) (1 2)))") == "((a 1) (a 2) (b 1) (b 2))"
     @test ev("(tuples (a b) 2)") == "((a a) (a b) (b a) (b b))"
-    @test ev("(tuples (a b) 1)") == "(a b)"
+    @test ev("(tuples (a b) 1)") == "((a) (b))"
     @test ev("(tuples (a b) 0)") == "naught"
     @test ev("(tuples ((a b) ()))") == "naught"
     @test ev("(tuples ())") == "naught"
@@ -276,9 +278,9 @@ end
     # gather-by groups all equal keys; split-by is an alias of partition-by
     @test ev("(gather-by odd? (1 2 3 4))") == "((1 3) (2 4))"
     @test ev("(gather-by odd? (2 1 4 3))") == "((2 4) (1 3))"
-    @test ev("(gather-by (?x -> 0) (1 2 3))") == "(1 2 3)"
-    @test ev("(split-by odd? (1 3 2 4 5))") == "((1 3) (2 4) 5)"
-    @test ev("(partition-by odd? (1 3 2 4 5))") == "((1 3) (2 4) 5)"
+    @test ev("(gather-by (?x -> 0) (1 2 3))") == "((1 2 3))"
+    @test ev("(split-by odd? (1 3 2 4 5))") == "((1 3) (2 4) (5))"
+    @test ev("(partition-by odd? (1 3 2 4 5))") == "((1 3) (2 4) (5))"
 
     # map-thread applies a function across the i-th elements
     @test ev("(map-thread + (1 2) (3 4))") == "(4 6)"

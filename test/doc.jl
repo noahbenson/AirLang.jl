@@ -36,8 +36,8 @@
         "(' def (log ?base \\ number? ?x \\ number?) (x + 200) " *
         "doc=\"Returns the log-base-b of x.\"))"
     @test ev("(definitions (log 1.0))") ==
-        "(' def (log ?x \\ number?) (x + 100) doc=\"Returns the natural log of x.\")"
-    @test ev("(definitions plain)") == "(' def (plain ?x) (x + 1))"
+        "((' def (log ?x \\ number?) (x + 100) doc=\"Returns the natural log of x.\"))"
+    @test ev("(definitions plain)") == "((' def (plain ?x) (x + 1)))"
     @test ev("(definitions frobnicate)") == "naught"
 
     # No match is reported, not thrown.
@@ -62,19 +62,19 @@
     @test doc("(doc nodoc)") ==
         "(nodoc ?x)\n  Only documentation."
     @test ev("(definitions nodoc)") ==
-        "(' def (nodoc ?x) doc=\"Only documentation.\")"
+        "((' def (nodoc ?x) doc=\"Only documentation.\"))"
 
     # A body that calls the runtime `unhold` is inert inside the reconstructed
     # quote (`~` is a quasiquote hole, not an unhold call).
     air_eval(env, read_air("(def (uq ?x) hold=(x) (unhold x))"))
     @test ev("(uq 5)") == "5"
-    @test ev("(definitions uq)") == "(' def (uq ?x) (unhold x) hold=x)"
+    @test ev("(definitions uq)") == "((' def (uq ?x) (unhold x) hold=x))"
 
     # `lift` is the explicit way to build a computed quote in a body; the
     # constructor call survives `definitions`.
     air_eval(env, read_air("(def (q ?x) (lift (' a x 'b)))"))
     @test ev("(q 7)") == "(' a 7 b)"
-    @test ev("(definitions q)") == "(' def (q ?x) (lift (' a x 'b)))"
+    @test ev("(definitions q)") == "((' def (q ?x) (lift (' a x 'b))))"
 
     # Redefining a pattern replaces its docstring in place.
     air_eval(env, read_air(

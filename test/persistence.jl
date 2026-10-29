@@ -16,8 +16,8 @@
     db = MemoryDatabase()
     open_airdb!(env, [:p], db)
     @test ev("(namespace .p.work (val m (mut 0)))") == "naught"
-    @test ev("(set! (.p.work.m) 5)") == "5"
-    @test ev("(.p.work.m)") == "(mut 5)"
+    @test ev("(set! .p.work.m 5)") == "5"
+    @test ev(".p.work.m") == "(mut 5)"
     # A mutable made in `.main` belongs to the process store, not this database.
     @test ev("(do (namespace .p.work " *
              "(val bad (namespace .main (mut 1)))) " *
@@ -55,7 +55,7 @@
 
     # A logic set is just a named volatile; its name is normalized (`:s` → "s").
     @test ev("(namespace .p (logic-set :s))") ==
-        "(mut (active=() base=() facts=() ids=() reasons=() rules=() why=()))"
+        "(mut (active=naught base=naught facts=naught ids=naught reasons=naught rules=naught why=naught))"
     @test occursin("s=(mut", ev("(namespace .p (named-forms))"))
     @test ev("(namespace .p (facts (logic-set :s)))") == "naught"
 
@@ -80,13 +80,13 @@
     @test ev("(namespace .p.hooks (do " *
              "(val f (mut 1 filter=(if (_ < 0) 0 _))) " *
              "(val w (mut 0)) (val log (mut ())) " *
-             "(watch w :k (((?key ?m ?old ?new) -> " *
-             "(set! log (push (value log) new))))) naught))") == "naught"
-    @test ev2("(set! (.p.hooks.f) -2)") == "-2"
-    @test ev2("(value (.p.hooks.f))") == "0"
+             "(watch w :k ((?key ?m ?old ?new) -> " *
+             "(set! log (push (value log) new)))) naught))") == "naught"
+    @test ev2("(set! .p.hooks.f -2)") == "-2"
+    @test ev2("(value .p.hooks.f)") == "0"
     @test ev2("(namespace .p.hooks (value w))") == "0"
     @test ev2("(namespace .p.hooks (set! w 5))") == "5"
-    @test ev2("(namespace .p.hooks (value log))") == "5"
+    @test ev2("(namespace .p.hooks (value log))") == "(5)"
 
     # ---- form identity ------------------------------------------------------
     id = leaf("(namespace .p (form-id (named-form :a)))")
@@ -111,7 +111,7 @@
              "(except (:permission-denied ?p ?t) :denied)))") == ":denied"
     @test ev("(namespace .p (chmod! (named-form :s) write=(bob=true)))") != ":err"
     @test ev("(as-user :bob (assert (logic-set :s) (p 1)))") == "(' p 1)"
-    @test ev("(namespace .p (facts (logic-set :s)))") == "(' p 1)"
+    @test ev("(namespace .p (facts (logic-set :s)))") == "((' p 1))"
 
     # `bob` may create a named form in his own home, and `air` can see it; but he
     # may not overwrite an alias owned by someone else.

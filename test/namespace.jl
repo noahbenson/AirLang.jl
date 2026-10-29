@@ -23,7 +23,7 @@
     # ---- defining a namespace ------------------------------------------------
     @test ev("(namespace .util (def (twice ?x) (* x 2)) (val answer 42))") == "naught"
     @test ev("(.util.twice 4)") == "8"
-    @test ev("(.util.answer)") == "42"
+    @test ev("(.util.answer)") == "(42)"
     @test ev("(get . :util :answer)") == "42"
     @test ev("(do (val before (get . :util :answer)) before)") == "42"
 
@@ -144,8 +144,8 @@ end
     @test ev("(.nv.with7 1)") == "8"
     @test ev("(using .nv (.nv :only answer) (bind (answer=1) (twice 1)))") == "2"
     # `.` access through the namespace reads the same binding
-    @test ev("(using .nv (.nv :only answer) (bind (answer=7) (.nv.answer)))") == "7"
-    @test ev("(.nv.answer)") == "42"
+    @test ev("(using .nv (.nv :only answer) (bind (answer=7) (.nv.answer)))") == "(7)"
+    @test ev("(.nv.answer)") == "(42)"
 end
 
 @testset "tasks and bindings" begin

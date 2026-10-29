@@ -9,7 +9,7 @@
     @test ev("(let (x=1))") == "naught"
 
     # the load-bearing canonicalization case
-    @test ev("(let (a=(1 2)) (drop a 2))") == "1"
+    @test ev("(let (a=(1 2)) (drop a 2))") == "(1)"
 
     # a let binding shadows a global rule
     air_eval(env, read_air("(def n 4)"))
@@ -17,9 +17,10 @@
     @test ev("n") == "4"
 
     # A self-binding is a fixed point: replacing `db` by itself stops the
-    # reducer. `(db)` canonicalizes to `db`, so it is the same case.
+    # reducer. A one-element form is no longer the same case: `(db)` is an
+    # ordinary form and stays one.
     @test ev("(let (db=db) db)") == "db"
-    @test ev("(let (db=(db)) db)") == "db"
+    @test ev("(let (db=(db)) db)") == "(db)"
 
     # A value whose head is its own name is fine: `let` substitutes instead of
     # binding, so the inserted value is not re-resolved through a scope.
@@ -31,6 +32,7 @@
     @test ev("(let ((a=1) (b=a) (c=b)) c)") == "1"
     @test ev("(let ((a=(1 + 1)) (b=a)) b)") == "2"
     @test ev("(let (() (a=1)) a)") == "1"
+    @test ev("(let (naught (a=1)) a)") == "1"   # `()` and `naught` are the same
     @test ev("(let ((a=1 b=(a + 1))) b)") == "(a + 1)"
 
     # A rebound name refers to its *previous* value inside its own new value.

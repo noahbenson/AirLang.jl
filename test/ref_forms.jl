@@ -23,8 +23,8 @@
              " (if (< i 4) (recur (+ i 1) (+ acc (get (delay (* i 10))))) acc))") == "50"
     # capture respects inner binders: a lambda's parameter shadows an enclosing
     # loop name, while a free name inside the lambda is still captured
-    @test ev("(for (x (1)) (get (delay ((?x -> (+ x 1)) 5))))") == "6"
-    @test ev("(for (x (1)) (get (delay ((?y -> (+ y x)) 5))))") == "6"
+    @test ev("(for (x (1)) (get (delay ((?x -> (+ x 1)) 5))))") == "(6)"
+    @test ev("(for (x (1)) (get (delay ((?y -> (+ y x)) 5))))") == "(6)"
     # the active namespace layers are captured: `f` resolves from `.rfl`
     @test ev("(do (namespace .rfl (def (f ?x) (* x 3)) (val cell (mut 0))) naught)") ==
           "naught"

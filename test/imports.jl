@@ -15,14 +15,14 @@
     @test ev("(.dst.s 1)") == "2"
     @test ev("(get . :dst :k)") == "5"
     # the copy records where it came from
-    @test ev("(get (permissions (get . :dst :s)) :source)") == "src"
+    @test ev("(get (permissions (get . :dst :s)) :source)") == "(src)"
     # and is owned by the importing namespace's owner
     @test ev("(get (permissions (get . :dst :s)) :owner)") == ":air"
 
     # ---- a linked `val` shares the source binding ----------------------------
     # A `bind` on either side is seen by the other.
-    @test ev("(using .src (bind (k=9) (.dst.k)))") == "9"
-    @test ev("(using .dst (bind (k=8) (.src.k)))") == "8"
+    @test ev("(using .src (bind (k=9) (.dst.k)))") == "(9)"
+    @test ev("(using .dst (bind (k=8) (.src.k)))") == "(8)"
     @test ev("(get . :dst :k)") == "5"
     # deleting the source entry does not break the imported copy
     @test ev("(namespace .src (clear k))") == "naught"
@@ -102,5 +102,5 @@
     @test ev("(namespace .pmd (import (.pm :only (p))))") == "naught"
     @test ev("(namespace .pm (clear p))") == "naught"
     @test ev("(do (.pmd.p 1) (except (:proxy-unresolved ?s) (list s)))") ==
-          "(list pm)"
+          "(list (pm))"
 end

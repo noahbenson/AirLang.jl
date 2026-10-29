@@ -424,7 +424,8 @@ end
 
 # ---- grouping and accumulation -----------------------------------------------
 
-# A vector (a container) of the given forms, canonical, so a singleton collapses.
+# A vector (a container) of the given forms: an empty vector is `naught`, and a
+# single value is a one-element list (nothing collapses).
 _vector_of(forms) =
     canonicalize(FormContainer(FormSeq(FormValue[_store_form(f) for f in forms]), FormMap()))
 

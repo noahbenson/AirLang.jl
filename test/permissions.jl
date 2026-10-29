@@ -21,7 +21,7 @@
     # A permission failure is a catchable error form.
     @test ev("(as-user :bob (do (get . :main) " *
              "(except (:permission-denied ?p ?t) (list p t))))") ==
-          "(list :read main)"
+          "(list :read (main))"
 
     # ---- chmod ---------------------------------------------------------------
     # air opens a namespace for reading and calling, and for bob to write.
@@ -82,7 +82,7 @@
     # bob shares the mutable through a world-readable namespace, but the writable
     # value stays bob's.
     @test ev(raw"(as-user :bob (namespace .shared (val shared-m $.m)))") == "naught"
-    @test ev("(as-user :alice (do (value (.shared.shared-m)) (except ?e :err)))") ==
+    @test ev("(as-user :alice (do (value .shared.shared-m) (except ?e :err)))") ==
           ":err"
-    @test ev("(as-user :bob (value (.shared.shared-m)))") == "5"
+    @test ev("(as-user :bob (value .shared.shared-m))") == "5"
 end

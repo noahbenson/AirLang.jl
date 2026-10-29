@@ -47,7 +47,7 @@ end
     # swap!/alter! are one atomic read-modify-write
     @test ev("(let (m=(mut 1)) (swap! m (?x -> (x + 1))))") == "2"
     @test ev("(let (m=(mut 1)) (alter! m (?x -> (x + 1))))") == "2"
-    @test ev("(let (m=(mut 1)) (swap! m (((?x ?y) -> (x + y))) 4))") == "5"
+    @test ev("(let (m=(mut 1)) (swap! m ((?x ?y) -> (x + y)) 4))") == "5"
     @test ev("(let (m=(mut 1)) (do (swap! m (?x -> (x + 1))) (value m)))") == "2"
 
     # a filter applies to the creation value and to every write; a finalizer runs
@@ -67,20 +67,20 @@ end
     wl = air_eval(env, read_air("(mut ())"))
     AirLang.add_rule!(env.rules, Form(Symbol("wm")), wm)
     AirLang.add_rule!(env.rules, Form(Symbol("wlog")), wl)
-    ev("(watch wm :k (((?key ?m ?old ?new) -> (set! wlog (push (value wlog) new)))))")
+    ev("(watch wm :k ((?key ?m ?old ?new) -> (set! wlog (push (value wlog) new))))")
     @test ev("(set! wm 1)") == "1"
-    @test ev("(value wlog)") == "1"
+    @test ev("(value wlog)") == "(1)"
     @test ev("(tx (set! wm 2) (set! wm 5))") == "5"
     @test ev("(value wlog)") == "(1 5)"          # once, with the transaction's new value
     @test ev("(value wm)") == "5"
 
     # a watch table lists the key, the function, the registrar, and its namespace
-    @test ev("(get (watches wm) :key)") == ":k"
-    @test ev("(get (watches wm) :owner)") == ":air"
-    @test ev("(get (watches wm) :ns)") == "main"
+    @test ev("(get (first (watches wm)) :key)") == ":k"
+    @test ev("(get (first (watches wm)) :owner)") == ":air"
+    @test ev("(get (first (watches wm)) :ns)") == "(main)"
 
     # a throwing watch aborts the transaction and rolls the write back
-    ev("(watch wm :boom (((?key ?m ?old ?new) -> (raise :boom))))")
+    ev("(watch wm :boom ((?key ?m ?old ?new) -> (raise :boom)))")
     @test ev("(do (set! wm 100) (except (:boom)))") == "naught"
     @test ev("(value wm)") == "5"
     @test ev("(value wlog)") == "(1 5)"
@@ -100,7 +100,7 @@ end
     bobm = air_eval(env, read_air("(as-user :bob (mut 0))"))
     AirLang.add_rule!(env.rules, Form(Symbol("bobm")), bobm)
     @test ev("(as-user :bob (watch bobm :x (?x -> x)))") == "(mut 0)"
-    @test ev("(get (as-user :bob (watches bobm)) :owner)") == ":bob"
+    @test ev("(get (first (as-user :bob (watches bobm))) :owner)") == ":bob"
     @test ev("(as-user :bob (set-filter! bobm (if (_ < 0) 0 _)))") == "(mut 0)"
     @test ev("(as-user :bob (do (set! bobm -4) (value bobm)))") == "0"
 end

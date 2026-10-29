@@ -198,11 +198,11 @@
              "(value m))") == "5"
     # watches run on that commit-then-rethrow path
     @test ev("(let (m=(mut 0) l=(mut 0)) " *
-             "(watch m :k (((?key ?m ?old ?new) -> (set! l new)))) " *
+             "(watch m :k ((?key ?m ?old ?new) -> (set! l new))) " *
              "(do catch=:t (tx (set! m 5) (throw :t 1))) (value l))") == "5"
     # ... but an aborted transaction fires no watch
     @test ev("(let (m=(mut 0) l=(mut 0)) " *
-             "(watch m :k (((?key ?m ?old ?new) -> (set! l new)))) " *
+             "(watch m :k ((?key ?m ?old ?new) -> (set! l new))) " *
              "(do (tx (set! m 5) (raise :x)) (except (:x) 1)) (value l))") == "0"
     # a nested tx joins the outer one, so its error is caught at that boundary
     @test ev("(let (m=(mut 0)) (tx (set! m 1) (tx (raise :x)) " *

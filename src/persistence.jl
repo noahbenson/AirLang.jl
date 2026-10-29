@@ -324,7 +324,7 @@ builtin!(Symbol("from-json"), (env, scope, args) -> begin
     l isa AbstractString ||
         throw(AirEvalError("from-json expects a string, got $(air_string(x))"))
     return try
-        from_JSON(_persist_db(env), l)
+        _normalize_empty(from_JSON(_persist_db(env), l))
     catch e
         e isa AirDB.FormNotFound && rethrow()
         throw(AirEvalError("invalid JSON: " * sprint(showerror, e)))

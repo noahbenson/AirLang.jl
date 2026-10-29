@@ -101,6 +101,16 @@ the set verbs, the Mathematica-style list verbs (`transpose`, `riffle`,
   `hold-` version (`hold-get`, `hold-with`, `hold-join`, …) that treats the
   root hold as transparent and returns the result held. Matching compares the
   wrapped forms structurally, and the logic-set stores facts and rules held.
+- [x] **A one-element form is never collapsed.** `canonicalize` rewrites only
+  the empty form to `naught`; `()` and `naught` are the same singleton at every
+  depth, but `(x)` is an ordinary one-element form that reduces only when a
+  `def` (or builtin) matches it. `((a b))` is inert unless a rule such as
+  `(def ((a ?x)) (x + 10))` matches it; a zero-argument lambda call matches its
+  pattern against `naught` and a one-argument call passes the argument itself.
+  The reader, `_store_form`, namespace payloads, JSON ingress, and pattern rest
+  captures normalize an empty child to `naught`, so no empty container survives
+  in a value. `where` returns bare keys by default and one path per occurrence
+  when a depth is given; `where-all` is replaced by `depth=:all`.
 
 ## Project: redefine the rule syntax (done)
 
@@ -618,12 +628,12 @@ class-based exception hierarchies.
 - [x] `nest`, `nest-list`, `nest-while` (`FixedPoint` is `rreplace`; see §5).
 - [x] `Cases` (`cases`), `Select` (`select`/`case`), `MemberQ` (`member?`),
   `DeleteCases` (`drop-cases`), `FreeQ` (`matches-any?`), `Count` (`count`),
-  `Position` (`where`/`where-all`). `Position`'s single multi-level result is
-  ambiguous, so it is split: `(where coll obj depth=d)` returns one key list per
-  dimension at an integer depth (including `depth=0`, whose sole key is the
-  whole-form key `0`), and `(where-all coll obj)` returns a held list of paths
-  at any depth (a depth-1 path is a bare key, a deeper one a key sequence).
-  Paths splice into `get`/`with`/`update-in`.
+  `Position` (`where`). `Position`'s transposed result is replaced by
+  occurrence-major paths: `(where coll obj)` returns the bare keys at depth 1,
+  `(where coll obj depth=d)` returns one path per occurrence (each a list of
+  `d` keys, including `depth=0`, whose sole key is the whole-form key `0`), and
+  `(where coll obj depth=:all)` searches every depth. Paths splice into
+  `get`/`with`/`update-in`.
 - [x] `Table`/`Array` (`array` — an integer range only, as air has no table
   iterators), `Range` (`range`), `Tuples` (`tuples`), `Subdivide` (`subdivide`).
 - [x] `Total` (`sum`), `Product` (`product`), `Counts` (`frequencies`),

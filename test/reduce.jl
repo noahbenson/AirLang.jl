@@ -41,7 +41,7 @@
     # complex numbers: a no-space literal, and the spaced infix sum
     @test ev("4.4+2.0i") == "4.4 + 2.0i"
     @test ev("(4.4 + 2.0i)") == "4.4 + 2.0i"
-    @test ev("(2i)") == "0.0 + 2.0i"
+    @test ev("(2i)") == "(0.0 + 2.0i)"
 
     # a symbol rule
     air_eval(env, read_air("(def n 4)"))
@@ -53,10 +53,21 @@
     @test ev("(inc n)") == "5"
     @test ev("(inc 10)") == "11"
 
-    # canonicalization is applied by the reducer
-    @test ev("(1)") == "1"
+    # the reducer canonicalizes only the empty form; a one-element form keeps
+    # its shape and reduces only when a rule matches it
+    @test ev("(1)") == "(1)"
+    @test ev("((1))") == "((1))"
+    @test ev("(naught)") == "(naught)"
     @test ev("()") == "naught"
-    @test ev("(1 (2))") == "(1 2)"
+    @test ev("(1 (2))") == "(1 (2))"
+    # a scalar `def` still matches its zero-argument call
+    @test ev("(n)") == "(4)"
+    # a one-element form is matched by a `def` whose pattern has the same shape
+    air_eval(env, read_air("(def ((a ?x)) (x + 10))"))
+    @test ev("((a b))") == "(b + 10)"
+    # and a lambda in head position sees the arguments as written
+    @test ev("((?x -> (+ x 1)) 4)") == "5"
+    @test ev("((?x -> (+ x 1)))") == "(naught + 1)"
 
     # the loop guard
     bad = default_env()
