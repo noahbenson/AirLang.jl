@@ -130,18 +130,12 @@ SFTP), the immutable `bytes` extern,
 - [ ] **Integer index keys.** An integer key always names a row position, so an
   index column of integers cannot be addressed by a bare key; a key form
   (e.g. `(index 5)`) would make it addressable.
-- [ ] **General `:` semantics.** `:` is a wildcard in a table path; decide
-  whether it should mean something in ordinary forms too (a wildcard key, a
-  splice, an identity), and document the answer.
 - [ ] **`with` map entries on ordinary forms.** A map entry on `with` names a
   table column; on a non-table it is still ignored as it always was. Either
   extend it to ordinary forms (`(with (a=1) b=2)` → `(a=1 b=2)`) or reject it
   loudly rather than dropping it.
 - [ ] **More data formats.** XML, INI, and a streaming tokenizer for documents
   too large to hold in memory.
-- [ ] **TOML offset datetimes.** The standard library's parser rejects
-  `2026-10-30T12:30:00-08:00` and drops a `Z` offset; a marker carrying the full
-  literal (or a real time value) would round-trip it.
 
 ---
 
@@ -755,7 +749,9 @@ class-based exception hierarchies.
   (`gather-by`), `SplitBy` (`split-by`).
 - [x] `MapThread` (`map-thread`), `Outer` (`outer`), `Thread` (`thread`),
   `Transpose` (`transpose`), `Riffle` (`riffle`), `Partition` (`partition`).
-- [ ] `With` (this `let` is exactly `With`), `Block`/`Module` (scopes).
+- [x] `With`, `Block`, `Module` — `let` is `With` (textual replacement), `let
+  bind=` is `Block` (the named values are installed as a lexical scope), and a
+  `Module` (mutable names) is `mut`/`val`. No separate forms are needed.
 - [ ] Symbolic algebra (`Solve`, `D`, `Integrate`, `Simplify`) — out of scope.
 
 ## 18. Clojure-inspired candidates

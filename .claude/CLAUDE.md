@@ -178,8 +178,9 @@ written, so `(' a b c)` holds three elements while `(' (a b c))` holds one
 container. A hold of exactly one scalar prints with the quote (`'a`, `'5`,
 `':a`); any other hold prints literally (`(' a b c)`, `(' f x=1)`). `(hold e…)`
 is the reserved alias that reduces to `(' e…)`. `:` inside a keyword is the
-keyword marker (`:a`); a **lone** `:` is the wildcard symbol that names all rows
-or all columns in a table path, a run of two or more colons is not a symbol, and
+keyword marker (`:a`); a **lone** `:` is the wildcard key that names every
+element of an ordered level in `get`/`with`/`wout`/`drop` (and all rows or all
+columns in a table path), a run of two or more colons is not a symbol, and
 `:(…)` is a parse error. A held form **stays held** — it is
 data, not code. Inside a hold only `~` substitutes; a bare symbol and a bare
 subform stay literal: `(' a x b)` stays `(' a x b)`, while
@@ -247,7 +248,13 @@ and a rebound name sees its *previous* value inside its own new value
 value in the body *before* evaluating it — it does not introduce a scope, and the
 substitution reaches inside quotes; `hold=(x y)` on the `let` form names bindings
 whose values are inserted exactly as written instead of evaluated, in every
-group.
+group. `bind=(x y)` instead **binds** those names — each value is evaluated and
+installed as a lexical name, not substituted — so a substituted value that
+mentions a bound name resolves against it: `(let ((const=2.551 f=((a ^ 2) /
+((a + b) ^ 2))) (a=(2 * const) b=(4 * (const ^ 2))) hold=f bind=(a b)) f)` is
+one float. The option may also sit in a sequence binding form's own map (a `:let`
+marker's binder), a name cannot be both held and bound, and `let=` binds every
+name and takes neither.
 `loop (i 1 acc s) body` with `recur` is a tail-recursive loop that does not grow
 the stack. `def (pattern) body…` optionally takes `hold=(x y)` so that those
 parameters match the **raw** call and are inserted into the replacement *exactly
@@ -295,7 +302,14 @@ is read as a keyword. The `.` accessor is pure sugar for `get`: `f.a.b` is
 `(get f :a :b)`, `f.:x` is `(get f :x)`, and `...` splices (`(f a... b)`). Its
 keys are **held** — a bare suffix is the literal keyword, so `f.a` ignores a
 variable `a`; `~` evaluates one key, so `f.~k` is `(get f (preval k))` and
-`f.~a.b` is `(get f (preval a) :b)`.
+`f.~a.b` is `(get f (preval a) :b)`. A **lone `:`** key is the wildcard for an
+ordered level (sequence elements, no map entries): it selects every element and
+maps the rest of the path over each, so `(get ((a=1) (a=2)) : :a)` is `(1 2)`,
+and as the final key it is the level itself. `with` needs one inserted value per
+element (`(with ((a=1) (a=2)) (: :a) (9 9))` is `((a=9) (a=9))`), `wout`/`drop`
+remove every element (or apply the rest of the path to each), and a level with
+map entries or a table raises — a table path keeps its own `:` (all rows or all
+columns).
 
 **Namespaces and thread-local values.** `.` alone is the global namespace root
 and `.air` the core namespace (every builtin, operator, and constant); a
@@ -558,7 +572,9 @@ collections, plain/quoted/block scalars, anchors and aliases with a node limit,
 `<<` merges, multi-document streams) that understands only the core tags and
 rejects the rest, and TOML dates/times/datetimes — which no air value matches —
 decode as the marker forms `(toml-date "…")`, `(toml-time "…")`, and
-`(toml-datetime "…")` (a marker with an invalid literal raises on encode). TOML
+`(toml-datetime "…")` (a marker with an invalid literal raises on encode; an
+offset date-time keeps its `±hh:mm` or `Z` exactly as written, because the
+reader protects it before the standard-library parser sees it). TOML
 has no null and 64-bit integers; JSON rejects non-finite floats; `.env` values
 are always strings. `documents=true` is YAML-only. Every emitter sorts map keys,
 and `write-data` defers its write to the transaction commit like `write-file`.
