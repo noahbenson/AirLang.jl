@@ -167,6 +167,41 @@
     @test ev("(do (merge $t (x=1)) (except ?e :caught))") == ":caught"
     @test ev("(do (update-in $t 0 (?x -> x)) (except ?e :caught))") == ":caught"
 
+    # ---- the hold- family ----------------------------------------------------
+    # A table is an ordinary form container for the hold- family: the result is
+    # held, and `hold=false` asks for the plain value.
+    @test ev("(hold-get $t :age)") == "(' 51 42)"
+    @test ev("(hold-get $t \"age\")") == "(' 51 42)"
+    @test ev("(get $t :age hold=true)") == "(' 51 42)"
+    @test ev("(hold-get $t 1)") == "(' age=51 name=\"Bob\")"
+    @test ev("(get $t 1 hold=true)") == "(' age=51 name=\"Bob\")"
+    @test ev("(hold-get $t 1 :age)") == "'51"
+    @test ev("(hold-get $t :age hold=false)") == "(51 42)"
+    @test ev("(hold-nth $t 2)") == "(' age=42 name=\"Sue\")"
+    @test ev("(hold-nth $t 0)") == "'#table(2×2: age, name)"
+    @test ev("(held? (hold-wout $t :age))") == "true"
+    @test ev("(hold-wout $t :age hold=false)") == "#table(2×1: name)"
+    @test ev("(held? (hold-push $t (name=\"Z\" age=3)))") == "true"
+    @test ev("(hold-get (hold-push $t (name=\"Z\" age=3)) 3)") ==
+        "(' age=3 name=\"Z\")"
+    # An inserted held value contributes its content — in every spelling.
+    @test ev("(hold-get (hold-with $t :age (' (60 70))) :age)") == "(' 60 70)"
+    @test ev("(hold-get (hold-with $t score=(' (1 2))) :score)") == "(' 1 2)"
+    @test ev("(hold-get (hold-push $t score=(' (1 2))) :score)") == "(' 1 2)"
+    @test ev("(hold-push $t (' (name=\"Z\" age=3)))") == "'#table(3×2: age, name)"
+    @test ev("(hold-get (hold-push $t (' (name=\"Z\" age=3))) 3)") ==
+        "(' age=3 name=\"Z\")"
+    @test ev("(hold-get (hold-with $t 2 (' (age=99))) 2)") ==
+        "(' age=99 name=\"Sue\")"
+    # A held table is opaque to the hold-blind accessors, as any hold is.
+    @test ev("(do (get (hold-wout $t :age) :name) (except ?e :caught))") ==
+        ":caught"
+    @test ev("(hold-get (hold-get $t 1) :age)") == "'51"
+    # The table-refusing verbs refuse in hold mode too.
+    @test ev("(do (hold-join $t (1)) (except ?e :caught))") == ":caught"
+    @test ev("(do (hold-update-in $t 1 :age (?x -> x)) (except ?e :caught))") ==
+        ":caught"
+
     # ---- equality and hashing ------------------------------------------------
     @test ev("(eq? (table a=(1 2) b=(3 4)) (table b=(3 4) a=(1 2)))") == "true"
     @test ev("(eq? (table a=(1 2)) (table a=(1 2.0)))") == "false"

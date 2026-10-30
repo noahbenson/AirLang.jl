@@ -159,7 +159,8 @@ function _push_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Boo
     # call as a column; the `hold=` option is the only non-column entry.
     t = _table_of(base)
     if t !== nothing
-        r = _table_push(env, scope, call, t, args[2:end])
+        rows = strip ? Form[_strip_hold(x) for x in args[2:end]] : args[2:end]
+        r = _table_push(env, scope, call, t, rows, strip)
         return held ? _ensure_hold(r) : r
     end
     c = _as_container(base)

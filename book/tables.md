@@ -147,6 +147,19 @@ value before inserting it.
 (wout t (2 :age))            # set one cell to its column's NA
 ```
 
+A table is an ordinary form container for the `hold-` family. `hold-get` returns
+a column, row, or cell held; `hold-with`, `hold-push`, and `hold-wout` return the
+updated table held; and an inserted held value contributes its content, because a
+table cell is always a value. `hold=false` asks for the plain result, and a
+held table is opaque to the hold-blind accessors, so read from one with
+`hold-get`:
+
+```air
+(hold-get t :age)                                # => (' 51 42)
+(hold-get (hold-with t :age (' (60 70))) :age)   # => (' 60 70)
+(hold-get (hold-push t score=(' (3 4))) :score)  # => (' 3 4)
+```
+
 ## Index columns
 
 A column may be declared the table's **index** with `index=:name`. Every value

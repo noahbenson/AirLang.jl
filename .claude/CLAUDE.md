@@ -529,8 +529,13 @@ values raise). `for`, `map`, `filter`, `reduce`, `any?`, and friends iterate
 `(get t i)` row maps; `join`/`merge`/`update-in` refuse a table. `columns`,
 `schema`, `nrows`, `table?`, and `table-index` inspect one; `eq?`/`hash` ignore
 column order but compare metadata and the index declaration, and printing is
-`#table(R×C: age, name; index=name)`. Like `bytes`, a table is stored in a
-database but does not survive `to-json`/`from-json` text. See `book/tables.md`.
+`#table(R×C: age, name; index=name)`. The `hold-` family treats a table as an
+ordinary form container: `hold-get` returns a column, row, or cell held,
+`hold-with`/`hold-push`/`hold-wout` return the updated table held, and an
+inserted held value contributes its content in any spelling (`hold-with t
+score=(' (1 2))` is the same as `hold-with t :score (' (1 2))`). Like `bytes`, a
+table is stored in a database but does not survive `to-json`/`from-json` text.
+See `book/tables.md`.
 
 **Data formats.** `(decode x format=:json)` parses a string or `bytes` into a
 form and `(encode v format=:json)` renders one as text; `(read-data path)` and

@@ -526,16 +526,21 @@ end
 
 _colname_of(k) = air_string(Form(k))
 
-# A push: positional map arguments append rows; map entries append columns.
+# A push: positional map arguments append rows; map entries append columns. In
+# hold mode (`hold-push`) the caller has already stripped each row's root hold
+# and `strip` asks us to strip a column value's, so a held value contributes its
+# content.
 function _table_push(env::Env, scope::Scope, call::FormContainer, t::AirTable,
-                     posargs::Vector{Form})
+                     posargs::Vector{Form}, strip::Bool = false)
     out = t
     for row in posargs
         out = _table_push_row(out, row)
     end
     for (k, v) in call.map
         k === HOLD_KEY && continue
-        val = air_reduce(env, scope, to_form(v))
+        val = to_form(v)
+        strip && (val = _strip_hold(val))
+        val = air_reduce(env, scope, val)
         out = _table_push_col(out, k, val)
     end
     return _table_form(out)

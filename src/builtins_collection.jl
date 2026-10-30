@@ -985,7 +985,11 @@ function _with_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Boo
     if _table_of(result) !== nothing
         for (k, v) in call.map
             k === HOLD_KEY && continue
-            val = air_reduce(env, scope, to_form(v))
+            val = to_form(v)
+            # In hold mode an inserted held value contributes its content, just
+            # as the key/value spellings above do.
+            strip && (val = _strip_hold(val))
+            val = air_reduce(env, scope, val)
             result = _with_set(result, Any[k], val, identity)
         end
     end
