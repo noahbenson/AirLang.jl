@@ -48,6 +48,16 @@ booleans, and the null value `naught` are all considered subtypes of the
   table has its own path rules (`:` keeps its meaning of all rows or all
   columns, and a lone `:` raises). When any `wout` key is `:`, its key
   arguments form one path.
+
+  **Map entries can be unintuitive.** Map values are paired in *canonical key
+  order*, not source order, so `(with (b=2 a=1) : (7 8))` is `(a=7 b=8)` —
+  write the values in the order the printer would show the keys. On a mixed
+  level the sequence elements always come first, so
+  `(with (1 2 a=3) : (7 8 9))` is `(7 8 a=9)`. A **scalar** sets every entry
+  (`(with (a=1 b=2) : 9)` is `(a=9 b=9)`), but a one-element form is one value,
+  not a broadcast, so `(with (a=1 b=2) : (9))` raises — air never collapses
+  `(9)` into `9`. And `get` returns the values alone, so `(get (a=1 b=2) :)` is
+  `(1 2)`, with no record of which key held which value.
 * **Locating:** `(where coll obj depth=d)` finds every element at depth `d`
   equal to `obj`. With no `depth`, it searches depth `1` and returns the **bare
   keys** of the matches in encounter order: `(where (:a :b :b :c) :b)` is

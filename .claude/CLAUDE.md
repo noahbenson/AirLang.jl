@@ -305,16 +305,20 @@ variable `a`; `~` evaluates one key, so `f.~k` is `(get f (preval k))` and
 `f.~a.b` is `(get f (preval a) :b)`. A **lone `:`** key is the wildcard for a
 level's every entry — each sequence element in order, then each map value in
 canonical key order (the printer's order): it selects every entry and maps the
-rest of the path over each, so `(get ((a=1) (a=2)) : :a)` is `(1 2)`,
+rest of the path over each — source position can mislead, since map values are
+addressed in canonical key order — so `(get ((a=1) (a=2)) : :a)` is `(1 2)`,
 `(get (a=1 b=2) :)` is `(1 2)`, and as the final key it is the level itself —
-an ordinary sequence, so map values lose their keys. In `with` a scalar is
-broadcast to every entry (`(with (a=1 b=2) : 9)` is `(a=9 b=9)`) and a
-container supplies one value per entry in the canonical order, keeping each
-sequence position and map key
-(`(with ((a=1) (a=2)) (: :a) (9 9))` is `((a=9) (a=9))`); `wout`/`drop` remove
-every entry (or apply the rest of the path to each). A scalar is its own sole
-entry and `naught` is empty; a table is refused — a table path keeps its own `:`
-(all rows or all columns).
+an ordinary sequence, so map values lose their keys. In `with` a **scalar is
+broadcast** to every entry (`(with (a=1 b=2) : 9)` is `(a=9 b=9)`), while a
+container supplies one value per entry in canonical order — sequence elements
+first, then map values — so `(with (b=2 a=1) : (7 8))` is `(a=7 b=8)` and
+`(with (1 2 a=3) : (7 8 9))` is `(7 8 a=9)`, keeping each sequence position
+and map key in place (`(with ((a=1) (a=2)) (: :a) (9 9))` is
+`((a=9) (a=9))`). A one-element form is one value, not a broadcast, so
+`(with (a=1 b=2) : (9))` raises. `wout`/`drop` remove every entry (or apply the
+rest of the path to each). A scalar is its own sole entry and `naught` is
+empty; a table is refused — a table path keeps its own `:` (all rows or all
+columns).
 
 **Namespaces and thread-local values.** `.` alone is the global namespace root
 and `.air` the core namespace (every builtin, operator, and constant); a
