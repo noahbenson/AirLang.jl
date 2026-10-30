@@ -177,8 +177,10 @@ container spelling `'(…)` is a parse error. A hold holds each element as
 written, so `(' a b c)` holds three elements while `(' (a b c))` holds one
 container. A hold of exactly one scalar prints with the quote (`'a`, `'5`,
 `':a`); any other hold prints literally (`(' a b c)`, `(' f x=1)`). `(hold e…)`
-is the reserved alias that reduces to `(' e…)`. `:` alone remains the keyword
-marker (`:a`) and `:(…)` is a parse error. A held form **stays held** — it is
+is the reserved alias that reduces to `(' e…)`. `:` inside a keyword is the
+keyword marker (`:a`); a **lone** `:` is the wildcard symbol that names all rows
+or all columns in a table path, a run of two or more colons is not a symbol, and
+`:(…)` is a parse error. A held form **stays held** — it is
 data, not code. Inside a hold only `~` substitutes; a bare symbol and a bare
 subform stay literal: `(' a x b)` stays `(' a x b)`, while
 `(let (x=2) (' a ~x b))` → `(' a 2 b)`. `let` is the exception: it substitutes
@@ -299,8 +301,8 @@ variable `a`; `~` evaluates one key, so `f.~k` is `(get f (preval k))` and
 and `.air` the core namespace (every builtin, operator, and constant); a
 leading-dot atom is a path, so `.util.a` reads as `(get . :util :a)` and the
 whole tree is ordinary `.` access over layered namespace volatiles. `.air.sys`
-holds the system functions (`load-air`, `read-file`, `write-file`,
-`open-airdb`, `close-airdb`), `.sys.user` holds the user records, `.lib` is the
+holds the system functions (`load-air`, `read-file`, `write-file`, `read-data`,
+`write-data`, `open-airdb`, `close-airdb`), `.sys.user` holds the user records, `.lib` is the
 library cache, `.main` is `air`'s startup namespace, and `.env` is a `val`
 holding the task's environment mapping. `$` is the current user's **home**
 capability and `@` the root of the attached database (`.` when unattached);
@@ -339,8 +341,8 @@ of the executing `def` (else the current user); `(as-user id body…)` evaluates
 `(set-admin …)`, and `(users)` manage records in `.sys.user` or `@.user`.
 Every namespace and entry volatile carries metadata `(owner=… acl=…)`, where
 the ACL maps `read`/`write`/`exec`/`readfact`/`writefact`/`readrule`/`writerule`/
-`assume`/`hide`/`watch`/`filter`/`finalize` to user ids with `_` meaning
-everyone. The four fact/rule permissions gate a namespace's implicit logic set:
+`assume`/`hide`/`watch`/`filter`/`finalize`/`filesystem` to user ids with `_`
+meaning everyone (see **Data formats** for `filesystem`). The four fact/rule permissions gate a namespace's implicit logic set:
 `readfact`/`readrule` for `facts`/`rules`/`why`/`query` and
 `writefact`/`writerule` for `assert`/`retract`/`revise`/`revise-fact` (a `rule`
 form uses the `…rule` pair, `why` needs both read permissions); a standalone
@@ -355,7 +357,8 @@ watch lookup, or hook lookup sees it. `watch` gates installing a watch,
 catchable error `(error :permission-denied perm target)`; filtered operations (`using`,
 `doc`, listings, printing) treat an unreadable entry as absent. `(assume
 body…)` is legal only inside a `def` whose entry grants `assume` to the caller
-and runs `body` as the definition's owner.
+and runs `body` as the definition's owner. A user has no filesystem unless
+granted the `filesystem` permission on `.air.sys` (see **Data formats**).
 
 **Mutables and hooks.** `(mut value filter=… finalize=…)` creates a mutable;
 `(value m)`, `(get m)`, and `(get m 0)` all read it. Volatile edits end in `!`:
@@ -503,6 +506,115 @@ it, and storing a value that embeds a volatile from another database raises
 `(error :un-storable target)`. `mut` creates its mutable in the database of the
 current namespace.
 
+**Tables.** A `table` is an immutable `AirTable` extern: column-major, ordered
+names, per-column type (`:int :float :number :string :bool :symbol :keyword
+:naught :any`) and in-band NA marker, and an optional unique index column.
+`(table (name="a" age=1) …)` builds from row maps and `(table name=("a" "b")
+age=(1 2))` from columns; `columns=` fixes the order (default sorted by name),
+`types=` overrides and coerces, `na=` declares a column's missing marker, and
+`index=:name` declares the index. Missing is in band: a cell equal to its
+column's NA is missing, and the default is `NaN` for `:float`/`:number` and the
+predefined symbol `NA` (a reduction fixed point that no binding may shadow) for
+every other type; an empty CSV field decodes to it and an NA cell writes as an
+empty CSV field. `get` names a column by a keyword/symbol/string, a row by an
+integer (`0` is the table), and a row by any other key that matches the index
+(`(get t "Bob")`); a nested path works in either order. `with` replaces a
+column (`:age` or `(: :age)`, and the map-entry spelling `score=(1 2)`), updates
+a row's named cells (`2` or `(2 :)`), or sets a cell (`(2 :age)` — row then
+column); a new column is inferred, an existing one enforces its metadata, and a
+table reduces every inserted value. `push` appends a row from a positional map
+and a column from a map entry; `pop`/`drop`/`wout` remove a row, a column, or set
+a cell to NA. Every update maintains the index (duplicate or missing index
+values raise). `for`, `map`, `filter`, `reduce`, `any?`, and friends iterate
+`(get t i)` row maps; `join`/`merge`/`update-in` refuse a table. `columns`,
+`schema`, `nrows`, `table?`, and `table-index` inspect one; `eq?`/`hash` ignore
+column order but compare metadata and the index declaration, and printing is
+`#table(R×C: age, name; index=name)`. Like `bytes`, a table is stored in a
+database but does not survive `to-json`/`from-json` text. See `book/tables.md`.
+
+**Data formats.** `(decode x format=:json)` parses a string or `bytes` into a
+form and `(encode v format=:json)` renders one as text; `(read-data path)` and
+`(write-data path v)` are the file helpers, inferring the format from the
+extension (`.json`, `.yaml`/`.yml`, `.toml`, `.csv`, `.tsv`, the file name
+`.env`). A format is `json`, `yaml`, `toml`, `csv`, `tsv`, or `env`. The
+conversion is to **plain data only**: an object is a map form, an array a
+sequence form, a scalar a scalar, and null *or* an empty container is `naught`
+(so the round trip is lossy for empty containers); a map key normalizes to its
+text, and two keys that collide are an error. A container with both sequence
+elements and map entries, an extern, a mutable, a rational, or a complex has no
+data representation and raises (a `table` is the one extern exception: it
+encodes as an array of its row maps, and decoding yields row maps, not a table).
+CSV and TSV decode to a `table` and encode from a table or a non-empty sequence
+of row maps, with `header` (absent = inferred: a first record with no plain
+number is a header), `column-delimiter`, `row-delimiter`, `types`, `na`,
+`columns` (encode only), and `index` (decode only) options. Nothing is
+constructed or executed: the YAML reader is a safe subset (block and flow
+collections, plain/quoted/block scalars, anchors and aliases with a node limit,
+`<<` merges, multi-document streams) that understands only the core tags and
+rejects the rest, and TOML dates/times/datetimes — which no air value matches —
+decode as the marker forms `(toml-date "…")`, `(toml-time "…")`, and
+`(toml-datetime "…")` (a marker with an invalid literal raises on encode). TOML
+has no null and 64-bit integers; JSON rejects non-finite floats; `.env` values
+are always strings. `documents=true` is YAML-only. Every emitter sorts map keys,
+and `write-data` defers its write to the transaction commit like `write-file`.
+These are the *data* codec, distinct from `to-json`/`from-json`'s
+*serialization* codec (`"@uuid"` links, `"#inf"`). See `book/formats.md`.
+**Ordinary users have no filesystem**: `read-file`, `write-file`, `load-air`,
+`read-data`, and `write-data` require the `filesystem` permission on `.air.sys`,
+which no policy grants and which `air` (the owner, and every check's bypass)
+holds alone until it grants it — `(chmod! .air.sys filesystem=(alice=true))`;
+an ungranted identity raises `(:permission-denied :filesystem NAME)`
+(`_require_filesystem`, `src/users.jl`). Startup and library loads run as
+`air`, so configuration and `init.air` files work; a shared value reaches a
+user through a namespace, `bytes`, or a database, never a host path.
+`decode`/`encode` touch no file and need no permission.
+
+**SSH.** A running process can serve SSH. A server is a process resource named
+by a key, not a value: `(ssh-server [name] opts…)` returns the key (generated
+when absent), and `(ssh-servers)`, `(ssh-host-key key [private=true])`, and
+`(ssh-close! key)` act on it. Only `air` or an admin may start one, and it
+admits exactly the users its owner may assume (`air`: everyone; an admin: itself
+and its constituents, recomputed at each login); public-key auth is the only
+method, and the client name maps `.` to `:` (`air.bob` is `:air:bob`). A user's
+keys are the `authorized-keys` list of `$.config.ssh`, with the `ssh` val of
+`$.config` accepted as a second shape, and an owner's `$.config.ssh.server`
+supplies the defaults (`port` 2222, `bind` `"127.0.0.1"`, `host-key-type`
+`ed25519`, `key-types`, `max-connections` 4, `banner`). The host key is
+generated once and stored in the process database at `.sys.ssh.<key>`, so a
+reopened server is the same host. A session is a line-editing REPL as the
+logged-in user in their home namespace (`Ctrl-C` evaluates `(raise :ctrl-c)`,
+`Ctrl-D` and `(exit)` end it, `(print …)` reaches the client) or SFTP v3, where
+a directory is a namespace and a file is an immutable **`bytes`** val
+(`(bytes s)`, `(bytes-of coll)`, `bytes-length`, `bytes-string`, `bytes-index`,
+`bytes-slice`, `bytes?`; content equality, `#<bytes N>` printing). Remote paths
+split on `.` and `/`, a leading one is root-absolute, `..` is rejected, and an
+upload is buffered and committed whole at `CLOSE` (no exec, no recursive
+delete).
+
+**User interfaces.** `ui` is a reserved inert head, so `(ui KIND params… children…)`
+never reduces at any depth and a UI tree is data; `ui-open` evaluates its
+parameters. Kinds cover boolean (`checkbox`, `toggle`), text (`text-input`,
+`text-area`, `password-input`), numeric (`int-input`, `float-input`, `slider`,
+`range-slider`), selection (`dropdown`, `radio-group`, `multi-select`,
+`selection-slider`), action (`button`), display (`label`, `progress`, `status`),
+and layout (`column`, `row`, `group`, `tabs`/`tab`, `accordion`/`section`).
+Common parameters are `id` (a keyword/symbol/string, unique per instance),
+`label`, `description`, and `disabled`; a stateful kind takes `initval`,
+`on-change`, and `assert`, where `_` in `assert` is the current value. An
+instance is a named, owner-scoped process resource like a server: `(ui-open
+[key] tree)` returns the key (generated when absent), `(ui-show key)` attaches
+this SSH session's full-screen terminal renderer and blocks (Esc dismisses with
+`naught`, Ctrl-C raises `(error :ctrl-c)`), and `(ui-run tree)` is open + show +
+close. `(ui-values k)`, `(ui-value k id)`, `(ui-set! k id v)`, `(ui-update! k
+tree)`, `(ui-dismiss! k)`, `(ui-close! k)` (idempotent), `(ui-instances)`, and
+`(ui-render k width=n)` (deterministic text) complete the surface. Air owns
+validation (an invalid update changes nothing; `ui-set!` raises
+`(error :ui-invalid id reason)`), a programmatic `ui-set!` may update a disabled
+element but a user may not, and each element's fact is asserted under a reason
+label unique to the instance and element, so retracting it never disturbs an
+equal fact asserted elsewhere. Assertions and callbacks run in the namespace and
+`val` bindings captured at instantiation.
+
 **Keys.** A bare key is a keyword: `(form x=10)` has the key `:x`, so
 `(form x=10).:x` is `10`. A **computed key** is written `~expr=value`, and the
 expression must evaluate to a keyword: `(form ~(keyword (name ?x))=10)` reduces
@@ -560,7 +672,12 @@ is inert like `error`; `(notify …)` dispatches it to the innermost matching
 `handle` clause (content-matched, first match wins, handlers active through
 `finally`) and takes the handler's value, or raises
 `(error :unhandled-signal signal)`; `(notify-or default …)` holds `default` and
-evaluates it only when nothing matches. `try` is gone (only a tombstone). A
+evaluates it only when nothing matches. `try` is gone (only a tombstone). `(exit [value])` ends the current *task*:
+it unwinds to whichever boundary owns it — the REPL (which returns the value),
+a loaded file, a `task` body (which delivers the value to its promise), or an
+SSH session (which closes) — so a plain `air_eval` sees it propagate. With no
+value it is `naught`, and a task that never reaches an `(exit)` still yields its
+final form. A
 `raise` inside a handler records the handled error as `from=` (automatic
 context, overridable, `from=naught` suppresses); `cause=` is explicit. A
 non-air exception surfaces to an `except` as `(error :internal message)`.

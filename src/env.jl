@@ -65,8 +65,7 @@ function scope_extend(s::Scope, pairs; layers::Vector{RuleLayer} = RuleLayer[],
     names = Symbol[]
     vals = Form[]
     for (n, v) in pairs
-        n === RERAISE &&
-            throw(AirEvalError("reraise is a reserved symbol and cannot be bound"))
+        _check_not_reserved(n, AirEvalError, "bound")
         push!(names, n)
         push!(vals, v)
     end
@@ -437,7 +436,8 @@ end
 
 The per-task evaluation identity: the user a task runs as, the namespace its
 `def`/`val` forms target and its reductions start from, the `@` database root
-(`nothing` for a system user), and the current `.env` mapping. Each task using an
+(`nothing` for a system user), the current `.env` mapping, and the output sink
+`(print …)` writes to (nothing for Air's global `airout`). Each task using an
 `Env` gets its own context; a `task` starts with a copy of its creator's.
 """
 mutable struct TaskContext
@@ -445,7 +445,14 @@ mutable struct TaskContext
     ns::Union{Nothing,Namespace}
     dbroot::Union{Nothing,Form}
     env::Form
+    out::Any
 end
+
+# A four-argument context leaves the output sink at the process default; the
+# field is what lets an SSH session send a task's output to its channel.
+TaskContext(user::Symbol, ns::Union{Nothing,Namespace},
+            dbroot::Union{Nothing,Form}, env::Form) =
+    TaskContext(user, ns, dbroot, env, nothing)
 
 TaskContext() = TaskContext(Symbol("air"), nothing, nothing, naught)
 
@@ -552,6 +559,26 @@ function _with_context(env::Env, ctx::TaskContext, f::Function)
             end
         end
     end
+end
+
+# The sink `(print …)` and `(println …)` write to: the task context's own writer
+# when it has one (an SSH session), else Air's global actor-backed stdout.
+_air_out(env::Env) = (c = _context(env); c.out === nothing ? airout : c.out)
+
+"""
+    _session_env(env) -> Env
+
+A second environment over the same stores as `env` — the same rules, process
+database, namespace and `val` caches, and task-context registry — with its own
+reduction budget and memo cache. An SSH session runs on one, because `air_eval`
+resets `steps`/`depth` and two concurrent sessions sharing those refs would
+corrupt each other's budgets. The constructor is called positionally: `Env`'s
+keyword constructor runs `_bootstrap!`, which a session must not repeat.
+"""
+function _session_env(env::Env)
+    return Env(env.rules, env.max_steps, Ref(0), env.max_depth, Ref(0), nothing,
+               Dict{Any,Any}(), env.nsroot, env.sysdb, env.nscache, env.dbs,
+               env.vals, env.valof, env.ctx, env.ctxlock, env.booted)
 end
 
 """

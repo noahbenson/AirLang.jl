@@ -27,6 +27,7 @@
 # The functions `.air.sys` exposes by name. The map values are the raw symbols,
 # so `.air.sys.load-air` dispatches the builtin exactly as `load-air` does.
 const _SYS_FUNCTIONS = (Symbol("load-air"), Symbol("read-file"), Symbol("write-file"),
+                        Symbol("read-data"), Symbol("write-data"),
                         Symbol("open-airdb"), Symbol("close-airdb"),
                         Symbol("sync"), Symbol("status"))
 
@@ -109,20 +110,27 @@ function _load_air_paths(env::Env, paths::Vector{String})
         push!(files, _read_air_file(path))
     end
     r = _tx_boundary(env) do
-        result = naught
-        for file in files
-            path = file.source.name
-            _with_air_source(file.source) do
-                _with_file_dir(dirname(path)) do
-                    for f in file.forms
-                        result = _with_form_source(f) do
-                            air_eval(env, f)
+        try
+            result = naught
+            for file in files
+                path = file.source.name
+                _with_air_source(file.source) do
+                    _with_file_dir(dirname(path)) do
+                        for f in file.forms
+                            result = _with_form_source(f) do
+                                air_eval(env, f)
+                            end
                         end
                     end
                 end
             end
+            result
+        catch e
+            # `(exit v)` ends the load with `v`; catching inside the transaction
+            # body commits the forms evaluated before it.
+            e isa ExitSignal || rethrow()
+            e.value
         end
-        result
     end
     return r
 end
@@ -132,15 +140,20 @@ function _load_air_source(env::Env, src::AbstractString, name::AbstractString)
     forms, spans = _parse_air_source(src, name)
     source = AirSource(name, String(src), spans)
     r = _tx_boundary(env) do
-        result = naught
-        _with_air_source(source) do
-            for f in forms
-                result = _with_form_source(f) do
-                    air_eval(env, f)
+        try
+            result = naught
+            _with_air_source(source) do
+                for f in forms
+                    result = _with_form_source(f) do
+                        air_eval(env, f)
+                    end
                 end
             end
+            result
+        catch e
+            e isa ExitSignal || rethrow()
+            e.value
         end
-        result
     end
     return r
 end
@@ -154,6 +167,7 @@ end
 
 # `(load-air path…)` — evaluate every form in each file, in order, atomically.
 function _bi_load_air(env::Env, scope::Scope, call::FormContainer)
+    _require_filesystem(env, "load-air")
     paths = String[]
     for i in 2:length(call.seq)
         push!(paths, _load_path_arg(air_reduce(env, scope, to_form(call.seq[i]))))

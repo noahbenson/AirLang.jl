@@ -146,6 +146,21 @@ function _current_user(env::Env)
     return u isa Symbol ? u : _AIR
 end
 
+# The tools that touch a host path directly (`read-file`, `write-file`,
+# `load-air`, `read-data`, `write-data`) are gated by the `filesystem`
+# permission on `.air.sys`. No namespace policy grants that permission, so a
+# fresh instance admits only `air`, the namespace's owner; any other identity is
+# refused until `air` grants it with `(chmod! .air.sys filesystem=(:alice))`.
+# Startup code and library loads run as `air`, so configuration and `init.air`
+# files work without a grant.
+function _require_filesystem(env::Env, who::AbstractString)
+    ns = _ns_lookup(env, Symbol[_AIR, _SYS]; lazy = false)
+    ok = ns === nothing ? _current_user(env) === _AIR :
+         _can(env, ns.vf, _current_user(env), :filesystem)
+    ok || throw(AirPermissionDenied(:filesystem, _keyword_form(Symbol(who))))
+    return nothing
+end
+
 # The home namespace of a user, or `nothing` if it is absent.
 function _home_ns(env::Env, id::Symbol)
     path = _user_home_path(env, id)

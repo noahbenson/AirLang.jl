@@ -23,6 +23,12 @@ project:
       children:
         - file: libraries.md
         - file: databases.md
+        - file: tables.md
+        - file: formats.md
+    - title: Interfaces
+      children:
+        - file: ssh.md
+        - file: ui.md
     - title: Rules
       children:
         - file: rules.md

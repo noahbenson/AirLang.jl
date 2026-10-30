@@ -111,19 +111,25 @@ function _bi_task(env::Env, scope::Scope, call::FormContainer)
     # the same namespace context.
     lscope = _scope_layers_only(scope)
     c = _context(env)
-    ctx = TaskContext(c.user, c.ns, c.dbroot, clean ? naught : c.env)
+    ctx = TaskContext(c.user, c.ns, c.dbroot, clean ? naught : c.env, c.out)
     bindings = clean ? IdDict{Air.Var,Any}() : Air.vars()
     p = PromiseForm(_persist_db(env))
     Threads.@spawn begin
         _reset_block_scopes!()
         try
-            r = _with_context(env, ctx, () -> Air.setvars(() -> begin
-                r = naught
-                for b in captured
-                    r = air_reduce(env, lscope, b)
-                end
-                return r
-            end, bindings))
+            r = try
+                _with_context(env, ctx, () -> Air.setvars(() -> begin
+                    r = naught
+                    for b in captured
+                        r = air_reduce(env, lscope, b)
+                    end
+                    return r
+                end, bindings))
+            catch e
+                # `(exit v)` ends this task: its value is the task's result.
+                e isa ExitSignal || rethrow()
+                e.value
+            end
             _check_storable!(env, p.db, r)
             put!(p, r)
         catch e

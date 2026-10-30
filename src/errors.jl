@@ -27,6 +27,26 @@ const ERROR_HEAD = :error
 # original error.
 const RERAISE = :reraise
 
+# Air's predefined missing-value marker. It is an ordinary bare symbol (`NA`),
+# distinct from the keyword `:NA` and the string `"NA"`, but it is a constant: it
+# reduces to itself and no binding form may shadow it. A table column whose
+# default NA is this marker stores it in band, so it must always mean "missing".
+const NA_SYMBOL = Symbol("NA")
+
+# Whether `name` is one of the symbols that may never be bound or defined.
+_reserved_binding(name) = name === RERAISE || name === NA_SYMBOL
+
+# Raise `T` unless `name` is safe to bind or define; `what` names the operation
+# ("bound", "defined", …).
+function _check_not_reserved(name, ::Type{T}, what::AbstractString) where {T<:AirError}
+    if name === RERAISE
+        throw(T("reraise is a reserved symbol and cannot be " * what))
+    elseif name === NA_SYMBOL
+        throw(T("NA is a reserved symbol and cannot be " * what))
+    end
+    return name
+end
+
 function _is_error_object(x)
     x isa FormContainer && !isempty(x.seq) || return false
     return _symbolof(to_form(x.seq[1])) === ERROR_HEAD
@@ -76,7 +96,9 @@ end
     AirPermissionDenied(perm, target)
 
 An access check failed: the current user lacks `perm` (`:read`, `:write`,
-`:exec`, or `:assume`) on `target`. A `do` block sees it as the air error
+`:exec`, or `:assume`) on `target`, or lacks the `filesystem` grant on
+`.air.sys` that a host-path tool requires (no policy grants it, so a fresh
+instance admits only `air`). A `do` block sees it as the air error
 `(:permission-denied :perm target)`.
 """
 struct AirPermissionDenied <: AirError

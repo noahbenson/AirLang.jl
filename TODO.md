@@ -16,11 +16,15 @@ roots and homes (`$`, `@`, `.sys`, `.lib`, `.main`, `.env`), users and
 permissions (`as-user`, `create-user`, `create-constituent`, `set-admin`,
 `users`, `permissions`, `chmod!`, `chown!`, `assume`), `load-air`/`AIR_LIBPATH`
 libraries, `open-airdb`/`close-airdb` with per-database namespaces and users,
-the set verbs, the Mathematica-style list verbs (`transpose`, `riffle`,
-`tuples`, `subdivide`, `count-distinct`, `gather-by`, `split-by`, `map-thread`,
-`outer`, `array`, `trampoline`), bitwise functions (`bit-and`, `bit-or`,
-`bit-xor`, `bit-not`, `bit-shift-left`, `bit-shift-right`), the REPL
-(multi-line input, `AIR_HISTORY`, pretty-printing), and the CLI.
+the data formats (`decode`/`encode` and `read-data`/`write-data` for JSON,
+YAML, TOML, and `.env`), the set verbs, the Mathematica-style list verbs
+(`transpose`, `riffle`, `tuples`, `subdivide`, `count-distinct`, `gather-by`,
+`split-by`, `map-thread`, `outer`, `array`, `trampoline`), bitwise functions
+(`bit-and`, `bit-or`, `bit-xor`, `bit-not`, `bit-shift-left`,
+`bit-shift-right`), the REPL (multi-line input, `AIR_HISTORY`,
+pretty-printing), the SSH server (`ssh-server`: key login, a remote REPL,
+SFTP), the immutable `bytes` extern,
+`(exit)`, and the CLI.
 
 ---
 
@@ -59,6 +63,85 @@ the set verbs, the Mathematica-style list verbs (`transpose`, `riffle`,
   `get`/`value` force a delay and read an actor or promise, printing and encoding
   never force one, and the three are `un-storable` across databases. `task`
   returns a database promise whose running task is process-local.
+- [x] **SSH access.** `(ssh-server [name] opts…)` starts a server admits the
+  users its owner may assume (`air`: everyone, an admin: itself and its
+  constituents); a user logs in with a key from their own `$.config.ssh` and
+  lands in their home namespace at a line-editing REPL. `(ssh-servers)`,
+  `(ssh-host-key …)`, and `(ssh-close! …)` manage the keyed servers; host keys
+  live in `.sys.ssh.<key>`, not on disk. SFTP v3 serves the same paths —
+  a directory is a namespace and a file is an immutable `bytes` val. See
+  `book/ssh.md`.
+- [x] **Abstract user interfaces.** `(ui …)` is a reserved, inert head; a tree
+  of them describes the full widget catalog (boolean, text, numeric, selection,
+  action, display, and layout kinds). `ui-open` instantiates a named,
+  owner-scoped instance, evaluating parameters and capturing the namespace and
+  `val` bindings; `on-change` runs callbacks and `assert` maintains a
+  per-element-labeled fact in that captured namespace. `ui-values`, `ui-value`,
+  `ui-set!`, `ui-update!`, `ui-dismiss!`, `ui-close!`, `ui-instances`, and
+  `ui-run` drive it, `ui-render` is a deterministic text renderer, and
+  `ui-show` is a full-screen terminal renderer over SSH (alternate screen,
+  focus, validation line, Esc to dismiss, Ctrl-C to abort). See `book/ui.md`.
+- [ ] **More UI renderers.** A local `stty`-driven terminal renderer (v1 needs a
+  pty SSH session) and a web renderer would exercise the abstract layer; both
+  implement the same attach/draw/event contract.
+- [ ] **Incremental UI updates.** `ui-update!` re-instantiates the whole tree;
+  an incremental subtree update would avoid rebuilding and re-evaluating every
+  parameter for a dashboard-style redraw.
+- [ ] **Non-modal UIs.** `ui-show` owns the session until dismissal; a
+  dashboard that yields to the REPL needs a different run loop.
+- [ ] **Incremental SFTP uploads.** A written file is buffered whole and
+  committed as one `bytes` val at `CLOSE`, because `bytes` is immutable. A
+  mutable upload buffer (or a streaming `bytes` builder) would make large
+  transfers not require memory proportional to the file.
+- [ ] **Non-interactive exec over SSH.** `ssh host command` opens a channel
+  request air does not serve, so only the REPL and the SFTP subsystem are
+  available; legacy `scp` (`scp -O`) depends on exec and therefore fails.
+- [ ] **Preemptible evaluation.** `Ctrl-C` in a session evaluates
+  `(raise :ctrl-c)`, but air evaluation is not preemptible, so a byte sent while
+  a form runs is read only when that form finishes.
+- [x] **Data formats** — `decode`/`encode` (with `format=`) and
+  `read-data`/`write-data` (with extension inference) convert JSON, YAML, TOML,
+  CSV, TSV, and `.env` to and from plain air data: an object becomes a map form,
+  an array a sequence form, and null or an empty container `naught`. Decoding is
+  safe by construction — the YAML reader covers a practical subset and
+  constructs no tags, so nothing in a file executes — and TOML dates, times, and
+  datetimes become the marker forms `(toml-date …)`, `(toml-time …)`, and
+  `(toml-datetime …)`. Emitters sort map keys, and `write-data` defers to the
+  transaction commit like `write-file`. The path helpers require the grantable
+  `filesystem` permission on `.air.sys`: no policy grants it, so a fresh
+  instance admits only `air`, and `air` may grant another user with
+  `(chmod! .air.sys filesystem=(…))`. See `book/formats.md`.
+- [x] **Tables, CSV, and TSV.** An immutable `AirTable` extern — column-major
+  persistent columns, ordered names, per-column type and in-band NA metadata,
+  and an optional unique index — with `table`, `get`/`with`/`push`/`pop`/`drop`/
+  `wout`, row-map iteration, and `table?`/`columns`/`schema`/`nrows`/
+  `table-index`. CSV and TSV decode to a table and encode from one, with
+  header inference, arbitrary column and row delimiters, `types=`, `na=`,
+  `columns=`, and `index=`. See `book/tables.md`.
+- [ ] **Save tables as SQL tables.** The requested next step: map a table onto a
+  real database table (schema from the column metadata, NA from the declared
+  marker, the index as a unique key), with a table loaded from and written to
+  AirDB/PostgreSQL. This needs an AirDB-side facility for named tabular storage.
+- [ ] **Spreadsheets.** An `.xlsx`/`.ods` reader and writer on top of the table
+  type (CSV and TSV are done).
+- [ ] **Streaming CSV.** The parser holds the whole text and every record; a
+  streaming reader would bound memory for a file too large to hold, at the cost
+  of giving up the single-table result.
+- [ ] **Integer index keys.** An integer key always names a row position, so an
+  index column of integers cannot be addressed by a bare key; a key form
+  (e.g. `(index 5)`) would make it addressable.
+- [ ] **General `:` semantics.** `:` is a wildcard in a table path; decide
+  whether it should mean something in ordinary forms too (a wildcard key, a
+  splice, an identity), and document the answer.
+- [ ] **`with` map entries on ordinary forms.** A map entry on `with` names a
+  table column; on a non-table it is still ignored as it always was. Either
+  extend it to ordinary forms (`(with (a=1) b=2)` → `(a=1 b=2)`) or reject it
+  loudly rather than dropping it.
+- [ ] **More data formats.** XML, INI, and a streaming tokenizer for documents
+  too large to hold in memory.
+- [ ] **TOML offset datetimes.** The standard library's parser rejects
+  `2026-10-30T12:30:00-08:00` and drops a `Z` offset; a marker carrying the full
+  literal (or a real time value) would round-trip it.
 
 ---
 

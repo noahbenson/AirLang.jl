@@ -318,8 +318,10 @@ function _parse_atom(text::AbstractString, pos::Int)
     # head itself, an ordinary symbol everywhere but the first position.
     startswith(text, "'") &&
         return length(text) == 1 ? Form(Symbol("'")) : _mk_hold(_parse_atom(text[2:end], pos))
-    # A run of `:` is not a symbol; it is only valid immediately before a form
-    # (handled by the parser), so on its own it is an error.
+    # A lone `:` is the wildcard symbol — all rows or all columns in a table
+    # path. A run of two or more colons is still not a symbol, and `:(…)` is
+    # rejected by the parser in favor of the canonical `(' …)` spelling.
+    text == ":" && return Form(Symbol(":"))
     _is_colon_atom(text) && throw(AirParseError("':' is not a symbol (a keyword needs a name)", pos))
     # A trailing `...` splices, and is read before any number (`2...` splices 2).
     # The suffix binds looser than the `~` prefix, so `~x...` splices the value of
@@ -527,6 +529,16 @@ end
 _next_is_form(p::_Parser) =
     p.i <= length(p.toks) && p.toks[p.i].kind in (:lparen, :string, :atom)
 
+# `:(…)` is a held-form spelling mistake; a lone `:` followed by a space is the
+# wildcard symbol. `p.i` names the token after the colon run.
+function _colon_form_error(p::_Parser, t::_Token)
+    _is_colon_atom(t.text) || return false
+    p.i <= length(p.toks) || return false
+    nx = p.toks[p.i]
+    t.text != ":" && return nx.kind in (:lparen, :string, :atom)
+    return nx.kind == :lparen && nx.pos == t.stop + 1
+end
+
 # A bare `'` whose character sits at `qpos`. Attached atoms (`'a`, `'5`) never
 # reach here — the tokenizer keeps them together and `_parse_atom` handles them.
 # Here the quote can only be followed by a string (`'"hi"`, adjacent) or a form;
@@ -574,7 +586,7 @@ function _parse_primary(p::_Parser)::Form
             a = _parse_quote(p, t.pos)
             p.last_stop = t.stop
             return a
-        elseif _is_colon_atom(t.text) && _next_is_form(p)
+        elseif _colon_form_error(p, t)
             throw(AirParseError("a held form is written (' …), not :(…)", t.pos))
         elseif t.text == "~" && _next_is_form(p)
             # The operand owns `.key` accessors, but a trailing `...` belongs to
@@ -705,7 +717,7 @@ function _parse_container(p::_Parser)::Form
                 end
             elseif _is_quote_atom(t.text)
                 push!(frame.seq, _parse_quote(p, t.pos))
-            elseif _is_colon_atom(t.text) && _next_is_form(p)
+            elseif _colon_form_error(p, t)
                 throw(AirParseError("a held form is written (' …), not :(…)", t.pos))
             elseif t.text == "~" && _next_is_form(p)
                 push!(frame.seq, _mk_preval(_parse_preval_operand(p)))

@@ -22,15 +22,25 @@ struct ExternExpiredError <: Exception
 end
 
 """
-    air_register_extern!(name, T; immutable = true)
+    air_register_extern!(name, T; immutable = true, serialize, deserialize,
+                         equal, hash)
 
 Register the extern type `T` with AirDB under `name`. AirLang declares no
 read-edit operations for its types, so `immutable` stays at its default; a type
-that declared any would have to pass `immutable = false`.
+that declared any would have to pass `immutable = false`. `serialize` (with its
+inverse `deserialize`) makes a value storable in a database, and `equal` (with
+`hash`) gives an immutable value content equivalence; AirDB requires each pair
+together, and `equal` only for an immutable type.
 """
 function air_register_extern!(name::Symbol, ::Type{T};
-                              immutable::Bool = true) where {T<:AbstractAirExtern}
-    register_extern(name, T; immutable = immutable)
+                              immutable::Bool = true,
+                              serialize::Union{Nothing,Function} = nothing,
+                              deserialize::Union{Nothing,Function} = nothing,
+                              equal::Union{Nothing,Function} = nothing,
+                              hash::Union{Nothing,Function} = nothing) where {T<:AbstractAirExtern}
+    register_extern(name, T; immutable = immutable,
+                    serialize = serialize, deserialize = deserialize,
+                    equal = equal, hash = hash)
     return name
 end
 
@@ -250,6 +260,14 @@ function __init__()
     air_register_extern!(:promise, AirPromise)
     air_register_extern!(:future, AirFuture)
     air_register_extern!(:regex, AirRegex)
+    # `bytes` is the one value type that persists and compares by content, so a
+    # transferred file survives a database write and `eq?`/`hash` agree on it.
+    air_register_extern!(:bytes, AirBytes; serialize = _bytes_serialize,
+                         deserialize = _bytes_deserialize,
+                         equal = _bytes_equal, hash = _bytes_hash)
+    # `table` is immutable, persists through its payload, and compares by content
+    # (type, NA metadata, index, and cells), so `eq?`/`hash` agree on it.
+    _register_table!()
     # The loader that evaluates an air delay's captured thunk. AirDB's registry is
     # process-global and rejects a duplicate, so tolerate a re-registration.
     try
@@ -257,5 +275,8 @@ function __init__()
     catch e
         e isa ArgumentError || rethrow()
     end
+    # Resolve libssh once. When the artifact cannot load, `using AirLang` still
+    # works and every `ssh-*` builtin raises a catchable `(error :ssh …)`.
+    _ssh_init!()
     return nothing
 end

@@ -34,6 +34,32 @@ definitions:
 (query .app (needs ?x ?y))                 # => ((x=:app y=:lib1))
 ```
 
+Tabular data is a first-class value called a `table`: named, typed, ordered
+columns of immutable data with an optional unique index. Updates return a new
+table, rows iterate as ordinary map forms, and CSV/TSV decode to a table and
+encode from one.
+
+```air
+(let (t=(table name=("Bob" "Sue") age=(51 42) index=:name))
+  ((get t "Bob") (map (?r -> r.age) t)))
+# => ((age=51 name="Bob") (51 42))
+```
+
+See [Tables](book/tables.md).
+
+A running process can also serve SSH: `(ssh-server :myserver)` starts a server
+that admits the users its owner may assume, each logging in with a key from
+their own `$.config` and landing in their home namespace at a REPL. The same
+account serves SFTP, where a directory is a namespace and a transferred file is
+an immutable `bytes` value, so `scp` and `sftp` work against air paths. See
+[SSH access](book/ssh.md).
+
+User interfaces are abstract: a UI is a tree of inert `(ui …)` forms that air
+instantiates, validates, and renders — over SSH, as a full-screen terminal, or
+as plain text. Each element's value can be asserted as an ordinary fact, so
+rules use a form's choices without knowing a UI exists. See
+[User interfaces](book/ui.md).
+
 ## Documentation
 
 The [Air book](book/index.md) is the reference. It is built with Jupyter Book 2
@@ -52,6 +78,10 @@ The [Air book](book/index.md) is the reference. It is built with Jupyter Book 2
 | [Streams](book/streams.md) | reusable queues: `post`, `fetch`, envelopes, permissions |
 | [Loading files and libraries](book/libraries.md) | `load-air`, `AIR_LIBPATH`, `init.air` |
 | [Databases](book/databases.md) | AirDB, named forms, logic sets, JSON |
+| [Tables](book/tables.md) | typed, indexed, immutable tabular data |
+| [Data formats](book/formats.md) | JSON, YAML, TOML, CSV, TSV, and `.env` |
+| [SSH access](book/ssh.md) | `ssh-server`, key login, the remote REPL, SFTP |
+| [User interfaces](book/ui.md) | `(ui …)` trees, widgets, assertions, the terminal renderer |
 | [The two rule systems](book/rules.md) | reduction rules and the deductive engine |
 | [Times](book/time.md) · [Printing and layouts](book/printing.md) | time values, layouts, pretty printing |
 | [Errors](book/errors.md) · [Externs](book/externs.md) · [Testing](book/testing.md) | reference chapters |

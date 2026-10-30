@@ -72,3 +72,20 @@ end
 
 Base.showerror(io::IO, e::AirThrowSignal) =
     print(io, "air throw signal: ", air_string(e.tag), " ", air_string(e.value))
+
+"""
+    ExitSignal(value)
+
+`(exit value)` — end the current task, delivering `value` as its result. This is
+control flow, not an [`AirError`](@ref): no `except`, `handle`, `catch=`, or
+`finally` clause observes it, and every layer that handles air errors lets it
+pass through. The task boundaries catch it — a `task` delivers the value to its
+promise, a REPL or a load returns it — and an `(exit)` at top level in a plain
+`air_eval` escapes to the caller.
+"""
+struct ExitSignal <: Exception
+    value::Form
+end
+
+Base.showerror(io::IO, e::ExitSignal) =
+    print(io, "air exit signal: ", air_string(e.value))

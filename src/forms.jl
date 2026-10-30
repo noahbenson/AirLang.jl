@@ -95,6 +95,11 @@ const HOLD_ALIAS = Symbol("hold")
 const PIPELINE = Symbol(">>")
 const PLACEHOLDER = Symbol("_")
 
+# A UI tree. The head is inert: `(ui kind params… children…)` never reduces, at
+# any depth, so a tree is data until `ui-open` instantiates it and evaluates the
+# parameters itself (see src/ui/core.jl).
+const UI_HEAD = Symbol("ui")
+
 # The canonical infix pipeline form, recognized by its second element. A hold is
 # checked first, so `(' >> …)` is data.
 _is_pipeline(x::FormContainer) =
@@ -676,6 +681,11 @@ end
 # source (see the `extern` special form). A dead extern, an unresolved promise,
 # and any data without a payload print opaquely — printing must never block or
 # fail.
+# A hook for an extern type's own opaque spelling; the generic default falls
+# through to `(extern :type payload)`. Defined here so `forms.jl` needs no
+# knowledge of the types that supply one.
+_extern_show_text(::Any) = nothing
+
 function _air_show(io::IO, x::FormExtern)
     name = _extern_type_name(x)
     data = try
@@ -687,6 +697,12 @@ function _air_show(io::IO, x::FormExtern)
     # A regex prints as the reader's literal, `r"…"flags`, which reads back as the
     # same value; an extern with no literal spelling keeps the `(extern …)` form.
     data isa AirRegex && return print(io, _regex_literal(data))
+    # A byte string prints its length, never its contents: it may be megabytes.
+    data isa AirBytes && return print(io, "#<bytes ", length(data.data), ">")
+    # A type that renders its own opaque spelling (a table shows only its shape)
+    # supplies it here; `nothing` falls through to the generic extern spelling.
+    shown = _extern_show_text(data)
+    shown === nothing || return print(io, shown)
     payload = try
         _extern_payload(data)
     catch

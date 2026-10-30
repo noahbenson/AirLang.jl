@@ -25,7 +25,7 @@ a process exit code.
 function air_main(args::Vector{String})
     env = default_env()
     if isempty(args)
-        air_repl(; history = get(ENV, "AIR_HISTORY", nothing),
+        air_repl(; env = env, history = get(ENV, "AIR_HISTORY", nothing),
                  width = _terminal_width())
         return 0
     end

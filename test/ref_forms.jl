@@ -144,6 +144,13 @@
     @test pv("(await .pr.task.p)") == "3"
     @test pv2("(get .pr.task.p)") == "3"
 
+    # `(exit v)` in a task body delivers `v` to the promise instead of the final
+    # form; `(exit)` with no value delivers `naught`; a task that never reaches
+    # one still yields its final form.
+    @test ev("(await (task (exit 7) 9))") == "7"
+    @test ev("(await (task (exit)))") == "naught"
+    @test ev("(await (task 1 2))") == "2"
+
     # ---- history and permission modes ---------------------------------------
     # an actor with history=false still commits and reloads its latest value
     @test ev("(let (a=(actor 0 history=false)) (send a (?x -> (+ x 3))) " *

@@ -159,6 +159,33 @@
   ownership of the tree, `@` attachment, per-database users and ACL principals,
   recursive close, and the storable-form check (`(error :un-storable …)`). The
   Julia entry points are `open_airdb!`/`close_airdb!`.
+* Tables: an immutable `AirTable` extern with column-major persistent storage,
+  ordered names, per-column type and in-band NA metadata (`NaN` for float
+  columns, the predefined fixed-point symbol `NA` otherwise, overridable with
+  `na=`), and an optional unique index (`index=:col`, with `(get t "Bob")` and
+  `(with t ("Bob" :age) 60)` addressing rows by index value). The `table`
+  constructor accepts row maps, column map entries, `columns=`, `types=`, `na=`,
+  and `index=`; `get`, `with` (column, partial row, cell, and the `:` wildcard),
+  `push` (row or column), `pop`, `drop`, and `wout` maintain a new table and its
+  index; `for`, `map`, `filter`, `reduce`, `any?`, and their kin iterate row
+  maps; `table?`, `columns`, `schema`, `nrows`, and `table-index` inspect one;
+  and `eq?`/`hash` compare content, metadata, and the index declaration. See
+  `book/tables.md`.
+* Data formats: `decode`/`encode` and `read-data`/`write-data` convert JSON,
+  YAML, TOML, CSV, TSV, and `.env` to and from plain air data — an object is a
+  map form, an array a sequence form, and null or an empty container is
+  `naught` — while CSV and TSV decode to a table and encode from one (with
+  `header`, `column-delimiter`, `row-delimiter`, `types`, `na`, `columns`, and
+  `index` options). Nothing is executed: the YAML reader implements a safe
+  practical subset (block and flow collections, quoted and block scalars,
+  anchors/aliases with expansion limits, merge keys, multi-document streams,
+  core tags only) and refuses every other tag. TOML dates, times, and datetimes
+  become the marker forms `(toml-date …)`, `(toml-time …)`, and
+  `(toml-datetime …)`. Emitters sort map keys; `write-data` defers to the
+  transaction commit like `write-file`. The path helpers need the `filesystem`
+  permission on `.air.sys`, which a fresh instance grants only to `air`; an
+  ungranted user is refused with `(:permission-denied :filesystem name)`, and
+  `air` may grant the permission with `(chmod! .air.sys filesystem=(…))`.
 * Persistence: one database per namespace, so `mut`, logic sets, and named forms
   agree on where a form lives; `named-form`/`name-form!`/`named-forms` with
   aliases, `create=`, `history=`, per-database names, and the `air/` prefix
@@ -176,7 +203,31 @@
   block comment (a `...> ` continuation prompt), prints results through
   `air_pretty_string(x; width=80)` (greedy line breaking; pass `pretty=false`
   for the flat form), and appends each complete input to the file named by
-  `AIR_HISTORY` for external line editors such as `rlwrap`.
+  `AIR_HISTORY` for external line editors such as `rlwrap`. `(exit [value])` ends
+  the enclosing task: the REPL returns the value, a loaded file stops, and a
+  `task` body delivers it to its promise.
+* SSH access: `(ssh-server [name] opts…)` serves a line-editing REPL and SFTP v3
+  to users who authenticate with a key from their own `$.config.ssh` (or the
+  `ssh` val of `$.config`). Only `air` or an admin may start one, and it admits
+  exactly the users its owner may assume; the host key lives in the process
+  database at `.sys.ssh.<key>`; `(ssh-servers)`,
+  `(ssh-host-key key [private=true])`, and `(ssh-close! key)` manage the servers.
+  A directory is a namespace and a file is an immutable `bytes` val, so
+  `scp`/`sftp` transfer against air paths. An upload is buffered and committed
+  as one val at `CLOSE`, and there is no exec channel.
+* User interfaces: a UI is a tree of inert `(ui …)` forms (the head is reserved,
+  like `error`) covering the full widget catalog — boolean, text, numeric,
+  selection, action, display, and layout kinds. `(ui-open [key] tree)` creates
+  a named, owner-scoped instance and evaluates its parameters; `on-change` runs
+  a callback and `assert` maintains a fact in the namespace current at
+  instantiation, labeled per element so it never disturbs an identical fact
+  asserted elsewhere. `(ui-values)`, `(ui-value)`, `(ui-set! :key :id v)`,
+  `(ui-update! :key tree)`, `(ui-dismiss! :key)`, `(ui-close! :key)`,
+  `(ui-instances)`, and `(ui-run tree)` drive it; `(ui-render :key width=n)` is
+  a deterministic text renderer, and `(ui-show :key)` is a full-screen
+  alternate-buffer terminal renderer over an SSH session (alternate screen,
+  reverse-video focus, validation on a status line, Esc to dismiss, Ctrl-C to
+  abort with `(error :ctrl-c)`).
 * Printing and layouts: `air_string` is the flat spelling and
   `air_pretty_string(x; width=80)` the greedy line-broken one, with
   `(form->string x pretty=true width=n)` in air; the REPL reads its width from
@@ -223,7 +274,10 @@
   an extern prints as `(extern :type payload)`, so it round-trips through source
   (a regex prints as its `r"…"flags` literal instead).
   A regex is a **value**: equal source-and-flags pairs are interned to the same
-  extern, so they are `eq?` and `same?`; promises are **identities**.
+  extern, so they are `eq?` and `same?`; promises are **identities**. A `bytes`
+  value is an immutable octet string with content equality (so it hashes like a
+  value) that prints opaquely as `#<bytes N>`; it is the value a transferred
+  file holds.
   Concurrency: `(task form…)`, `(deliver p v)`, and `(await x)`; `task`
   holds its arguments, runs them on another task, and immediately returns a
   database-backed promise. `await` returns the final form's value or rethrows
@@ -265,6 +319,10 @@
   task never delivered is simply never delivered.
 * Sockets and other extern types; `pmap` and higher-level parallel helpers built
   on `task`.
+* Incremental SSH transfers and a non-interactive exec channel: an SFTP upload
+  is buffered and committed as one `bytes` val at `CLOSE` (correct and atomic,
+  but not streamed), and `ssh host command` is not served, so only the REPL and
+  the SFTP subsystem are available.
 
 **Spec notes**
 

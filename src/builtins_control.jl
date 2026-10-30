@@ -24,6 +24,18 @@ end
 special!(:if, _bi_if)
 special!(:cond, _bi_if)
 
+# `(exit [value])` — end the current task with `value` (default `naught`). The
+# signal is control flow: no error clause catches it, and the nearest task
+# boundary (a `task`, a REPL, a load, an SSH session) turns it into that
+# boundary's result. A bare `air_eval` lets it escape to the caller.
+special!(:exit, (env, scope, call::FormContainer) -> begin
+    _check_options(call, "exit", ())
+    length(call.seq) > 2 &&
+        throw(AirEvalError("exit takes at most one value"))
+    v = length(call.seq) == 2 ? air_reduce(env, scope, to_form(call.seq[2])) : naught
+    throw(ExitSignal(v))
+end)
+
 # `(let (x=1 y=2) body…)` or `(let ((a=1 b=2) (c=(a + b))) body…)` — evaluate the
 # bindings, then substitute each name in the body by its value *before* evaluating
 # the body; `let` does not introduce a scope of its own, and the substitution is
@@ -51,8 +63,7 @@ function _bi_let(env::Env, scope::Scope, call::FormContainer)
         fresh = Pair{Symbol,Form}[]
         for (k, v) in g.map
             name = _bindname(k)
-            name === RERAISE && throw(AirEvalError(
-                "reraise is a reserved symbol and cannot be bound"))
+            _check_not_reserved(name, AirEvalError, "bound")
             raw = isempty(subst) ? to_form(v) : _subst_params(to_form(v), subst)
             push!(fresh, name => (name in held ? raw : air_reduce(env, scope, raw)))
         end
@@ -180,6 +191,12 @@ special!(:map, (env, scope, call::FormContainer) -> begin
     depth = _depth_opt(env, scope, call, "map", 1)
     f = air_reduce(env, scope, to_form(call.seq[2]))
     coll = air_reduce(env, scope, to_form(call.seq[3]))
+    # A table maps over its rows, which stand in for its depth-1 elements;
+    # `depth=0` maps the table itself. A deeper level descends into the row maps.
+    t = _table_of(coll)
+    if t !== nothing && depth > 0
+        coll = _rows_view(t)
+    end
     return _map_at_depth(x -> _call(env, scope, f, [x]), coll, depth)
 end)
 
@@ -234,12 +251,12 @@ special!(Symbol("nest-while"), (env, scope, call::FormContainer) -> begin
 end)
 
 builtin!(:filter, (env, scope, args) -> begin
-    f = _arg(args, 1, "filter"); coll = _arg(args, 2, "filter")
+    f = _arg(args, 1, "filter"); coll = _rows_or(_arg(args, 2, "filter"))
     return Base.filter(x -> truthy(_call(env, scope, f, [x])), coll)
 end)
 
 builtin!(:remove, (env, scope, args) -> begin
-    f = _arg(args, 1, "remove"); coll = _arg(args, 2, "remove")
+    f = _arg(args, 1, "remove"); coll = _rows_or(_arg(args, 2, "remove"))
     return Base.filter(x -> !truthy(_call(env, scope, f, [x])), coll)
 end)
 
@@ -247,6 +264,13 @@ end)
 builtin!(:reduce, (env, scope, args) -> begin
     f = _arg(args, 1, "reduce"); acc = _arg(args, 2, "reduce")
     coll = _arg(args, 3, "reduce")
+    t = _table_of(coll)
+    if t !== nothing
+        for i in 1:t.nrows
+            acc = _call(env, scope, f, [acc, _table_row(t, i)])
+        end
+        return acc
+    end
     if coll isa FormContainer
         for v in coll.seq
             acc = _call(env, scope, f, [acc, to_form(v)])
@@ -260,7 +284,7 @@ builtin!(:fold, (env, scope, args) -> BUILTINS[:reduce].fn(env, scope, args))
 
 # `(mapcat f coll)` — map then join the results.
 builtin!(:mapcat, (env, scope, args) -> begin
-    f = _arg(args, 1, "mapcat"); coll = _arg(args, 2, "mapcat")
+    f = _arg(args, 1, "mapcat"); coll = _rows_or(_arg(args, 2, "mapcat"))
     mapped = Base.map(x -> _call(env, scope, f, [to_form(x)]), coll)
     return _join_forms(mapped)
 end)
@@ -268,6 +292,13 @@ end)
 # `(each f coll)` — apply `f` to every value for its effect; returns `naught`.
 builtin!(:each, (env, scope, args) -> begin
     f = _arg(args, 1, "each"); coll = _arg(args, 2, "each")
+    t = _table_of(coll)
+    if t !== nothing
+        for i in 1:t.nrows
+            _call(env, scope, f, [_table_row(t, i)])
+        end
+        return naught
+    end
     if coll isa FormContainer
         for v in values(coll)
             _call(env, scope, f, [to_form(v)])
@@ -278,7 +309,7 @@ end)
 
 # `(apply f args-form)` — build and reduce `(f …)`.
 builtin!(:apply, (env, scope, args) -> begin
-    f = _arg(args, 1, "apply"); as = _arg(args, 2, "apply")
+    f = _arg(args, 1, "apply"); as = _rows_or(_arg(args, 2, "apply"))
     xs = as isa FormContainer ? Form[to_form(v) for v in as.seq] : Form[as]
     return _call(env, scope, f, xs)
 end)
@@ -348,6 +379,14 @@ function _for_step(env::Env, scope::Scope, binds, i::Int, body, results)
         i + 1 <= n || throw(AirEvalError("for: a binding needs a collection"))
         name = _leafof(head)
         coll = air_reduce(env, scope, to_form(binds[i + 1]))
+        t = _table_of(coll)
+        if t !== nothing
+            for j in 1:t.nrows
+                _for_step(env, scope_extend(scope, [name => _table_row(t, j)]),
+                          binds, i + 2, body, results)
+            end
+            return nothing
+        end
         if coll isa FormContainer
             for v in values(coll)
                 _for_step(env, scope_extend(scope, [name => to_form(v)]), binds, i + 2, body, results)
@@ -373,6 +412,14 @@ function _doseq_step(env::Env, scope::Scope, pairs::Vector{Form}, i::Int, body)
     name = _leafof(pairs[i])
     name isa Symbol || throw(AirEvalError("doseq binding names must be symbols"))
     coll = air_reduce(env, scope, pairs[i + 1])
+    t = _table_of(coll)
+    if t !== nothing
+        for j in 1:t.nrows
+            _doseq_step(env, scope_extend(scope, [name => _table_row(t, j)]),
+                        pairs, i + 2, body)
+        end
+        return nothing
+    end
     for v in _elems(coll)
         _doseq_step(env, scope_extend(scope, [name => to_form(v)]), pairs, i + 2, body)
     end

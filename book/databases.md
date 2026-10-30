@@ -55,6 +55,15 @@ root. Closing a database also closes any database rooted beneath it. From Julia,
 `open_airdb!(env, path, db)` roots an already-opened database — the way the
 tests use `MemoryDatabase` — and `close_airdb!(env, path)` closes it.
 
+## System records
+
+The process database also holds `.sys.ssh.<key>` for every SSH server that has
+been started under that name: `private` and `public` vals holding the host key
+and a `config` mapping recording the owner and key type. `.sys` is readable only
+by `air`, so the record is reached through the SSH builtins
+(`(ssh-host-key key)`), never by a path; it is what makes a reopened server the
+same host. See [SSH access](ssh.md).
+
 ## The database of a form
 
 A form's database is the database of the **namespace it is written in**, never

@@ -905,9 +905,47 @@ function _path_root(x::Form)
     return nothing
 end
 
+# A `$`-rooted address: `$` itself, or `(get $ :a :b)` — the reader's spelling of
+# `$.a.b` — giving the segments after the root. `$` is the current user's home,
+# so `(namespace $.config …)` writes below that user's home namespace.
+function _home_path_from_form(x::Form)
+    if x isa FormScalar
+        return value(x) === HOME_ROOT ? Symbol[] : nothing
+    end
+    x isa FormContainer || return nothing
+    head_symbol(x) === Symbol("get") || return nothing
+    length(x.seq) >= 2 || return nothing
+    root = to_form(x.seq[2])
+    (root isa FormScalar && value(root) === HOME_ROOT) || return nothing
+    out = Symbol[]
+    for i in 3:length(x.seq)
+        k = _symbolof(to_form(x.seq[i]))
+        (k === nothing || !is_keyword(k)) && return nothing
+        push!(out, _bindname(k))
+    end
+    return out
+end
+
+# Whether `x` is a `$` address whose root the local scope shadows. `$` is a
+# capability a binding may shadow, and a shadowed one is an ordinary value.
+_shadowed_home(scope::Scope, x::Form) =
+    _home_path_from_form(x) !== nothing && scope_get(scope, HOME_ROOT) !== nothing
+
+# The absolute path a `$` address denotes for the current user.
+function _home_address(env::Env, segs::Vector{Symbol})
+    id = _current_user(env)
+    home = _user_home_path(env, id)
+    home === nothing &&
+        throw(AirEvalError("user :$id has no home namespace"))
+    return vcat(home, segs)
+end
+
 # An address path with an `@` root made absolute: `@` is the attached database's
-# root, so `@.a` denotes db-root `.a` while `.a` denotes `.a` at the air root.
+# root, so `@.a` denotes db-root `.a` while `.a` denotes `.a` at the air root. A
+# `$` root is the current user's home.
 function _ns_address_path(env::Env, x::Form)
+    hp = _home_path_from_form(x)
+    hp === nothing || return _home_address(env, hp)
     path = _path_from_form(x)
     path === nothing && return nothing
     _path_root(x) === :at || return path
@@ -925,8 +963,12 @@ function _ns_target_path(env::Env, scope::Scope, form::Form)
             throw(AirEvalError("expected a namespace, got $(air_string(form))"))
         return copy(ns.path)
     end
-    path = _ns_address_path(env, form)
-    path === nothing || return path
+    # A shadowed `$` is an ordinary value, so it is evaluated below like any
+    # other expression.
+    if !_shadowed_home(scope, form)
+        path = _ns_address_path(env, form)
+        path === nothing || return path
+    end
     v = air_reduce(env, scope, form)
     ns = _ns_from_value(env, v)
     ns === nothing &&
@@ -1009,8 +1051,7 @@ function _ns_add_def!(env::Env, ns::Namespace, pattern::Form, body::Form;
                       src = nothing, memo::Union{Nothing,_MemoConfig} = nothing)
     _check_ns!(env, ns, :write)
     name = _def_name(pattern)
-    name === RERAISE && throw(AirDefError(
-        "reraise is a reserved symbol and cannot be defined"))
+    name === nothing || _check_not_reserved(name, AirDefError, "defined")
     _check_reserved_pattern(pattern)
     if name !== nothing && _ns_is_sub_name(env, ns, name)
         _ns_shadow_error(ns, Symbol(":", String(name)))
@@ -1040,8 +1081,7 @@ function _ns_add_val!(env::Env, ns::Namespace, pattern::Form, value::Form;
                       src = nothing)
     _check_ns!(env, ns, :write)
     name = _def_name(pattern)
-    name === RERAISE && throw(AirDefError(
-        "reraise is a reserved symbol and cannot be defined"))
+    name === nothing || _check_not_reserved(name, AirDefError, "defined")
     _check_reserved_pattern(pattern)
     if name !== nothing && _ns_is_sub_name(env, ns, name)
         _ns_shadow_error(ns, Symbol(":", String(name)))
@@ -1136,7 +1176,8 @@ end
 # Resolve a base namespace form (after any options have been split off).
 function _resolve_spec_base(env::Env, scope::Scope, base::Form)
     s = _symbolof(base)
-    if s !== nothing && is_raw_symbol(s) && scope_get(scope, s) !== nothing
+    if (s !== nothing && is_raw_symbol(s) && scope_get(scope, s) !== nothing) ||
+       _shadowed_home(scope, base)
         ns = _ns_from_value(env, air_reduce(env, scope, base))
         ns === nothing &&
             throw(AirEvalError("expected a namespace, got $(air_string(base))"))
@@ -1161,7 +1202,8 @@ function _resolve_spec(env::Env, scope::Scope, form::Form)
     # with no options; splitting it as if its elements were options would be
     # wrong (`(get . :util)` is one path, not three parts).
     s = _symbolof(form)
-    bound = s !== nothing && is_raw_symbol(s) && scope_get(scope, s) !== nothing
+    bound = (s !== nothing && is_raw_symbol(s) && scope_get(scope, s) !== nothing) ||
+            _shadowed_home(scope, form)
     path = bound ? nothing : _ns_address_path(env, form)
     if path !== nothing
         ns = _lookup_ns_or_library(env, path)
@@ -1176,7 +1218,7 @@ end
 # The specs of `using`, whose single argument may be one spec or a list of them.
 function _using_specs(env::Env, scope::Scope, form::Form)
     if form isa FormContainer && !_has_spec_options(form) &&
-       _path_from_form(form) === nothing
+       _path_from_form(form) === nothing && _home_path_from_form(form) === nothing
         return UseRef[_resolve_spec(env, scope, to_form(v)) for v in form.seq]
     end
     return UseRef[_resolve_spec(env, scope, form)]

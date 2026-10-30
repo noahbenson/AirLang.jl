@@ -18,6 +18,7 @@ using AirDB: FormSeq, FormMap
 using Random
 import Dates   # only qualified: `Dates` exports names (`now`, `day`, …) that
                # would shadow air's own
+import TOML    # only qualified, for the TOML data format
 
 # Types and helpers, then the engine, then the builtin library (which registers
 # itself at load time), then the public surface.
@@ -39,8 +40,11 @@ include("builtins_core.jl")
 include("builtins_math.jl")
 include("builtins_collection.jl")
 include("externs.jl")
+include("bytes.jl")
+include("tables.jl")
 include("builtins_string.jl")
 include("builtins_io.jl")
+include("formats.jl")
 include("builtins_control.jl")
 include("builtins_hold.jl")
 include("builtins_iter.jl")
@@ -61,6 +65,8 @@ include("logic.jl")
 include("builtins_extern.jl")
 include("builtins_stream.jl")
 include("api.jl")
+include("ssh.jl")
+include("ui.jl")
 include("cli.jl")
 
 export read_air, read_all_air, air_eval, air_repl, air_main, air_string,
@@ -70,7 +76,7 @@ export read_air, read_all_air, air_eval, air_repl, air_main, air_string,
     AirPermissionDenied, AirProxyUnresolved, AirUnstorable, AirStreamError,
     air_match, check_anchor, params_of, raw_symbols, head_symbol,
     is_keyword, is_wildcard, is_raw_symbol,
-    air_register_extern!, AirPromise, AirFuture, AirRegex,
+    air_register_extern!, AirPromise, AirFuture, AirRegex, AirBytes,
     open_airdb!, close_airdb!
 
 end # module AirLang

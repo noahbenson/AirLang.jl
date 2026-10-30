@@ -59,6 +59,9 @@ installing a watch (which also needs `read`); `filter` and `finalize` gate
 replacing a mutable's filter or finalizer. `anchor=true` is a per-entry flag
 rather than a permission — it forces imports of that entry to be proxies (see
 [`using`, `use`, and `import`](namespaces.md#using-use-and-import)).
+`filesystem` is different from the rest: no policy grants it, it is checked on
+the system namespace `.air.sys` rather than on an entry, and it admits the
+holder to the host-path tools (see [the filesystem](#the-filesystem)).
 
 The four fact/rule permissions govern a namespace's implicit logic set (see
 [logic sets](databases.md#logic-sets-namespaces-and-facts)): `readfact`/`readrule` for
@@ -69,8 +72,9 @@ keeps the older mapping, where those operations need the set's `read` or
 
 `(permissions target)` returns the metadata, `(chmod! target read=(…) write=(…)
 exec=(…) readfact=(…) writefact=(…) readrule=(…) writerule=(…) assume=(…)
-hide=(…) watch=(…) filter=(…) finalize=(…) anchor=…)` replaces the listed
-permission maps, and `(chown! target user)` gives the target a new owner. A
+hide=(…) watch=(…) filter=(…) finalize=(…) filesystem=(…) anchor=…)` replaces
+the listed permission maps, and `(chown! target user)` gives the target a new
+owner. A
 `target` is a namespace, a definition (by name or by `(get …)`), or a `mut`.
 `chmod!` and `chown!` need `write` on the target.
 
@@ -87,6 +91,7 @@ permission maps, and `(chown! target user)` gives the target a new owner. A
 | reading/writing a `mut` | `read`/`write` on the mutable |
 | `watch`/`unwatch`/`watches` | `watch` (and `read` for `watch`) on the mutable |
 | `set-filter!`/`set-finalize!` | `filter`/`finalize` on the mutable |
+| `read-file`/`write-file`/`load-air`/`read-data`/`write-data` | `filesystem` on `.air.sys` |
 | `(open-airdb …)` | `write` on the containing namespace |
 
 A denial is a catchable error object, `(error :permission-denied
@@ -115,3 +120,37 @@ granting read or write on the data itself:
 extends it for the dynamic extent of `body`. Both `.env` and `val` bindings
 travel into a `task`; `(task clean=true …)` starts with empty bindings and
 an empty `.env` but keeps identity and namespace context.
+
+## The filesystem
+
+Ordinary users have no filesystem. The tools that touch a host path directly —
+`read-file`, `write-file`, `load-air`, `read-data`, and `write-data` — are
+gated by the **`filesystem`** permission on `.air.sys`. No namespace policy
+grants that permission, so a fresh instance admits only `air`, which owns the
+namespace and bypasses every check; any other identity, including an admin or a
+constituent, is refused until it is granted:
+
+```air
+(create-user :bob)
+(as-user :bob (read-file "/etc/hosts"))   # raises (:permission-denied :filesystem :read-file)
+(as-user :bob (read-data "conf.toml"))    # raises (:permission-denied :filesystem :read-data)
+
+(chmod! .air.sys filesystem=(bob=true))   # air grants bob the filesystem
+(as-user :bob (read-file "/etc/hosts"))   # now reads
+(chmod! .air.sys filesystem=(bob=false))  # and revokes it
+```
+
+Only `air` may change the grant: `chmod!` needs `write` on `.air.sys`, which the
+namespace policy gives to nobody else. `(permissions .air.sys)` shows the
+`filesystem` mapping once it exists. The grant admits a user to every host-path
+helper, not to one function.
+
+The refusal is a catchable error object, so an `except` clause matches
+`(:permission-denied :filesystem name)` where `name` is the function.
+
+Configuration is therefore read at startup, by `air`, rather than on demand by
+a user; a library's `init.air` also runs as `air`, so it needs no grant. Data
+that users share travels through namespaces, `bytes` (over [SSH/SFTP](ssh.md)),
+and databases, never through a host path. In-memory conversion — `decode` and
+`encode` — operates on a string or a `bytes` value, touches no file, and needs
+no permission at all.

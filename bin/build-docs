@@ -35,9 +35,10 @@ done
 flags=()
 if $strict; then flags+=(--strict); fi
 
+# `${flags[@]+…}` keeps an empty array from tripping `set -u` (macOS bash 3.2).
 if $serve; then
-    exec npx -y mystmd@latest start "${flags[@]}"
+    exec npx -y mystmd@latest start ${flags[@]+"${flags[@]}"}
 else
-    npx -y mystmd@latest build --html "${flags[@]}"
+    npx -y mystmd@latest build --html ${flags[@]+"${flags[@]}"}
     echo "book built in $root/book/_build/html"
 fi

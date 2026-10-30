@@ -69,6 +69,8 @@ reader reports an unterminated form, string, or block comment, another line is
 read under a `...> ` continuation prompt. Each complete input may hold several
 forms; each result is printed as air source, broken across lines to fit `width`
 when `pretty` is true. Parse and eval errors are printed and the loop continues.
+An `(exit)` in an input ends the loop and the REPL returns its value (`naught`
+when none was given), printing nothing for that form.
 
 When `history` is a path, every complete input is appended to it as one line (a
 multi-line input is flattened with spaces). The REPL has no line editor of its
@@ -99,6 +101,8 @@ function air_repl(io_in::IO = stdin, io_out::IO = stdout; env::Env = default_env
                     println(io_out, pretty ? air_pretty_string(env, r; width = width) :
                                             air_string(env, r))
                 catch e
+                    # `(exit v)` ends the loop and returns `v` from the REPL.
+                    e isa ExitSignal && return e.value
                     e isa AirError || rethrow()
                     println(io_out, "error: ", sprint(showerror, e))
                 end

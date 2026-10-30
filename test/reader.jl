@@ -82,9 +82,12 @@
     @test_throws AirParseError read_air("(a !==b)")     # `=b` is not a symbol
     @test_throws AirParseError read_air("(a ==b)")
 
-    # `:` is a hold marker, not a symbol; after `=` it holds the following form
-    @test_throws AirParseError read_air(":")
+    # `:` alone is the wildcard symbol (all rows/columns in a table path); a run
+    # of colons is not a symbol, and `:(…)` is still rejected as a hold spelling.
+    @test isequal(read_air(":"), Form(Symbol(":")))
+    @test air_string(read_air("(: :age)")) == "(: :age)"
     @test_throws AirParseError read_air("::")
+    @test_throws AirParseError read_air(":(a b)")
     @test air_string(read_air("(f=(' sq 6))")) == "(f=(' sq 6))"
 
     # strings

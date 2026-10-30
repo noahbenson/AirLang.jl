@@ -17,6 +17,7 @@ using AirDB
     include("strings.jl")
     include("collections.jl")
     include("io.jl")
+    include("formats.jl")
     include("def.jl")
     include("defblock.jl")
     include("equality.jl")
@@ -39,6 +40,8 @@ using AirDB
     include("logic.jl")
     include("logic_ns.jl")
     include("extern.jl")
+    include("bytes.jl")
+    include("tables.jl")
     include("ref_forms.jl")
     include("streams.jl")
     include("namespace.jl")
@@ -47,6 +50,10 @@ using AirDB
     include("database.jl")
     include("persistence.jl")
     include("users.jl")
+    include("ui.jl")
+    if Base.find_package("OpenSSH_jll") !== nothing
+        include("ssh.jl")
+    end
     include("permissions.jl")
     include("scope.jl")
     include("quote.jl")

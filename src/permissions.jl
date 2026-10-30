@@ -31,8 +31,12 @@ const _HIDDEN_KEY = Symbol(":hidden")
 const _WATCH_KEY = Symbol(":watch")
 const _FILTER_KEY = Symbol(":filter")
 const _FINALIZE_KEY = Symbol(":finalize")
+# `filesystem` is the grant that admits a user to the host-path tools; it is
+# checked on `.air.sys` rather than on an entry, and no policy grants it by
+# default, so a fresh instance admits only `air` (see `_require_filesystem`).
 const _PERM_NAMES = (:read, :write, :exec, :readfact, :writefact, :readrule,
-                     :writerule, :assume, :hide, :watch, :filter, :finalize)
+                     :writerule, :assume, :hide, :watch, :filter, :finalize,
+                     :filesystem)
 
 # The fact/rule permissions a namespace target uses, and the entry permission a
 # standalone logic set maps each onto.

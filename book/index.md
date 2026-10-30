@@ -70,6 +70,14 @@ Facts and rules live in a namespace, which is implicitly a logic set:
   path, and `init.air`.
 - **[Databases](databases.md)** — opening an AirDB database, named forms, logic
   sets, synchronization, and JSON.
+- **[Tables](tables.md)** — typed, indexed tabular values: the `table`
+  constructor, `with`/`push` updates, row iteration, and CSV/TSV interchange.
+- **[Data formats](formats.md)** — reading and writing JSON, YAML, TOML, CSV,
+  TSV, and `.env` as plain air data, safely.
+- **[SSH access](ssh.md)** — `ssh-server`, authorized-key login, the remote
+  REPL, and SFTP with `bytes` files.
+- **[User interfaces](ui.md)** — inert `(ui …)` trees, the widget catalog,
+  assertions, and the terminal and text renderers.
 - **[The two rule systems](rules.md)** — reduction rules and the deductive
   engine, with the [production-rule reference](production-rules.md) in detail.
 - **[Errors](errors.md)**, **[externs](externs.md)**, **[times](time.md)**,

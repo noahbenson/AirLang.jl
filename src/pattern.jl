@@ -28,15 +28,14 @@ function _pattern_binding_name(s::Symbol)
     return Symbol(String(s)[2:end])
 end
 
-# Reject binding the reserved symbol `reraise` (used at match time so that a
-# replacement-rule lambda, `replace`, or `case` pattern cannot bind it either).
+# Reject binding a reserved symbol (`reraise`, `NA`) at match time, so that a
+# replacement-rule lambda, `replace`, or `case` pattern cannot bind it either.
 function _check_binding_name(name::Symbol)
-    name === RERAISE &&
-        throw(AirDefError("reraise is a reserved symbol and cannot be bound"))
+    _check_not_reserved(name, AirDefError, "bound")
     return name
 end
 
-# Reject a pattern that binds the reserved symbol `reraise`.
+# Reject a pattern that binds a reserved symbol.
 function _check_reserved_pattern(x::Form)
     if x isa FormContainer
         for v in x.seq
@@ -47,8 +46,8 @@ function _check_reserved_pattern(x::Form)
         end
     elseif x isa FormScalar
         s = value(x)
-        if s isa Symbol && is_wildcard(s) && _pattern_binding_name(s) === RERAISE
-            throw(AirDefError("reraise is a reserved symbol and cannot be bound"))
+        if s isa Symbol && is_wildcard(s) && _reserved_binding(_pattern_binding_name(s))
+            _check_not_reserved(_pattern_binding_name(s), AirDefError, "bound")
         end
     end
     return nothing

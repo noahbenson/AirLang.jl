@@ -87,8 +87,7 @@ function _let_scope(env::Env, scope::Scope, raw::Form, name::AbstractString)
         fresh = Pair{Symbol,Form}[]
         for (k, v) in g.map
             nm = _bindname(k)
-            nm === RERAISE && throw(AirEvalError(
-                "reraise is a reserved symbol and cannot be bound"))
+            _check_not_reserved(nm, AirEvalError, "bound")
             rawv = isempty(subst) ? to_form(v) : _subst_params(to_form(v), subst)
             push!(fresh, nm => air_reduce(env, scope, rawv))
         end
@@ -230,9 +229,11 @@ end
 # ---- running a block ---------------------------------------------------------
 
 # The exceptions that carry control flow rather than a diagnosable error: an
-# interrupt, a `throw`, and a `recur`. They pass through every block unchanged.
+# interrupt, a `throw`, a `recur`, and an `exit`. They pass through every block
+# unchanged.
 _is_control_exception(e) =
-    e isa InterruptException || e isa AirThrowSignal || e isa _Recur
+    e isa InterruptException || e isa AirThrowSignal || e isa _Recur ||
+    e isa ExitSignal
 
 # Apply the except clauses to an escaping error. The first matching clause runs
 # under the handling context; a final `reraise` continues with the next clause

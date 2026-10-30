@@ -8,6 +8,9 @@ Air = "0c3b9dc7-9fea-4423-80ce-ed7c11218d4a"
 AirDB = "73fd445c-d6bc-414c-af00-abfc8fd116f6"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+libssh_jll = "a8d4f100-aa25-5708-be18-96e0805c2c9d"
 
 [sources]
 Air = { path = "../Air.jl" }
@@ -17,10 +20,12 @@ AirDB = { path = "../AirDB.jl" }
 Air = "0.3"
 AirDB = "0.1"
 julia = "1.11"
+libssh_jll = "0.10, 0.11, 0.12"
 
 [extras]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+OpenSSH_jll = "9bd350c2-7e96-507f-8002-3f2e150b4e1b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "Test"]
+test = ["Aqua", "OpenSSH_jll", "Test"]

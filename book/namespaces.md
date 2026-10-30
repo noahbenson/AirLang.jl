@@ -14,7 +14,7 @@ The root holds the process's system namespaces:
 | path | contents |
 | --- | --- |
 | `.air` | the generated core namespace: builtins, operators, constants (owned by `air`, world `r-x`) |
-| `.air.sys` | the system functions: `load-air`, `read-file`, `write-file`, `open-airdb`, `close-airdb` |
+| `.air.sys` | the system functions: `load-air`, `read-file`, `write-file`, `read-data`, `write-data`, `open-airdb`, `close-airdb` |
 | `.sys` | system state; readable only by `air` |
 | `.sys.user.<name>` | a system user's record and `home` |
 | `.lib` | the library cache (owned by `air`, world `r-x`) |
@@ -73,6 +73,15 @@ Three addresses are resolved by the running task rather than by fixed paths:
 
 `$` and `@` are ordinary symbols: a lexically bound name shadows them and `let`
 may rebind them (`(let ($=8) $)` → `8`), so bind them as data, not as code.
+
+A **`.`-atom** address is not the only spelling a namespace-taking form accepts.
+`(get $ :config)` and a leading-`.` path name the same namespace, and every form
+that resolves an address — `namespace`, `using`, `use`, `import`, `unuse`,
+`clear`, `open-airdb`, and the logic-set targets — accepts either, so
+`(namespace $.config.ssh (val authorized-keys ("…")))` writes
+`.sys.user.<u>.home.config.ssh`. The resolver checks a bound name first: when
+the body has bound `$` (or `@`) lexically, the form is evaluated normally and
+the binding wins, exactly as it does for a bare `$`.
 
 The task's identity, current namespace, database root, and `.env` mapping
 travel with spawned tasks, so a `task` sees the same roots (see

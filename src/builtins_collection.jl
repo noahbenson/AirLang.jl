@@ -11,7 +11,11 @@ _seqvals(x) = PVector{FormValue}([_store_form(x)])
 
 # A collection's values; a scalar is a singleton form (a scalar *is* a singleton).
 _elems(c::FormContainer) = c.seq
-_elems(x::Form) = Form[x]
+function _elems(x::Form)
+    t = _table_of(x)
+    t === nothing || return Form[_table_row(t, i) for i in 1:t.nrows]
+    return Form[x]
+end
 
 # ---- level-aware traversal ---------------------------------------------------
 #
@@ -118,18 +122,28 @@ end
 
 builtin!(:first, (env, scope, args) -> begin
     c = _arg(args, 1, "first")
+    t = _table_of(c)
+    t === nothing || return t.nrows == 0 ? naught : _table_row(t, 1)
     (c isa FormContainer && !isempty(c.seq)) || return c
     return to_form(c.seq[1])
 end)
 
 builtin!(:last, (env, scope, args) -> begin
     c = _arg(args, 1, "last")
+    t = _table_of(c)
+    t === nothing || return t.nrows == 0 ? naught : _table_row(t, t.nrows)
     (c isa FormContainer && !isempty(c.seq)) || return c
     return to_form(c.seq[length(c.seq)])
 end)
 
 builtin!(:rest, (env, scope, args) -> begin
     c = _arg(args, 1, "rest")
+    t = _table_of(c)
+    if t !== nothing
+        t.nrows == 0 && return naught
+        rows = FormValue[_store_form(_table_row(t, i)) for i in 2:t.nrows]
+        return canonicalize(FormContainer(FormSeq(rows), FormMap()))
+    end
     c isa FormContainer || return naught
     n = length(c.seq)
     return canonicalize(FormContainer(FormSeq(FormValue[c.seq[i] for i in 2:n]), c.map))
@@ -137,10 +151,14 @@ end)
 
 builtin!(:second, (env, scope, args) -> begin
     c = _arg(args, 1, "second")
+    t = _table_of(c)
+    t === nothing || return t.nrows >= 2 ? _table_row(t, 2) : naught
     (c isa FormContainer && length(c.seq) >= 2) ? to_form(c.seq[2]) : naught
 end)
 builtin!(:third, (env, scope, args) -> begin
     c = _arg(args, 1, "third")
+    t = _table_of(c)
+    t === nothing || return t.nrows >= 3 ? _table_row(t, 3) : naught
     (c isa FormContainer && length(c.seq) >= 3) ? to_form(c.seq[3]) : naught
 end)
 
@@ -154,6 +172,18 @@ function _nth_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Bool
     c = strip ? _strip_hold(args[1]) : args[1]
     k = _leafof(args[2])
     k isa Integer || throw(AirEvalError("nth needs an integer index"))
+    t = _table_of(c)
+    if t !== nothing
+        i = try
+            _index_of(k, t.nrows)
+        catch e
+            e isa AirEvalError || rethrow()
+            length(args) >= 3 && return args[3]
+            rethrow()
+        end
+        r = i === nothing ? c : _table_row(t, i)
+        return held ? _ensure_hold(r) : r
+    end
     c isa FormContainer || (c = _as_container(c))
     i = try
         _index_of(k, length(c.seq))
@@ -636,6 +666,13 @@ function _bi_where(env::Env, scope::Scope, call::FormContainer)
     _check_options(call, "where", (DEPTH_KEY,))
     subject = air_reduce(env, scope, to_form(call.seq[2]))
     obj = air_reduce(env, scope, to_form(call.seq[3]))
+    # A table is searched by rows; `depth=0` still compares the table itself.
+    st = _table_of(subject)
+    if st !== nothing
+        keep = haskey(call.map, DEPTH_KEY) &&
+            _leafof(air_reduce(env, scope, to_form(call.map[DEPTH_KEY]))) === 0
+        keep || (subject = _rows_view(st))
+    end
     if !haskey(call.map, DEPTH_KEY)
         paths = Vector{Any}[]
         _where_paths_at!(paths, subject, obj, 1, Any[])
@@ -685,6 +722,8 @@ end)
 # a one-element group), and `naught` is empty.
 builtin!(:count, (env, scope, args) -> begin
     c = _arg(args, 1, "count")
+    t = _table_of(c)
+    t === nothing || return Form(t.nrows)
     c isa StreamForm && return Form(_stream_count(env, c))
     c isa FormContainer && return Form(length(c.seq))
     return Form(isequal(c, naught) ? 0 : 1)
@@ -832,6 +871,8 @@ end
 # empty form, and any other scalar is promoted to a one-element form (so
 # `(with 2 :a 10)` is `(2 a=10)`).
 function _as_container(base::Form)
+    _table_of(base) === nothing || throw(AirEvalError(
+        "a table is not a sequence; use get, with, push, or wout"))
     base isa FormContainer && return base
     isequal(base, naught) && return FormContainer(FormSeq(FormValue[]), FormMap())
     return FormContainer(FormSeq(FormValue[_store_form(base)]), FormMap())
@@ -894,11 +935,14 @@ function _delete_key(c::FormContainer, k)
 end
 
 # Set the subform at `path` to `val`, creating intermediate containers.
-function _with_set(base::Form, path::Vector{Any}, val::Form)
+function _with_set(base::Form, path::Vector{Any}, val::Form,
+                   red::Function = identity)
+    t = _table_of(base)
+    t === nothing || return _table_with_set(t, path, red(val))
     isempty(path) && return val
     c = _as_container(base)
     length(path) == 1 && return _set_key(c, path[1], val)
-    child = _with_set(_at_key(c, path[1]), path[2:end], val)
+    child = _with_set(_at_key(c, path[1]), path[2:end], val, red)
     return _set_key(c, path[1], child)
 end
 
@@ -927,8 +971,23 @@ function _with_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Boo
     while i <= n
         val = to_form(call.seq[i + 1])
         strip && (val = _strip_hold(val))
-        result = _with_set(result, _path_keys(env, scope, to_form(call.seq[i])), val)
+        # An ordinary form stores its value exactly as written; a table cell must
+        # be a value, so a table reduces its value first.
+        red = _table_of(result) === nothing ? identity :
+            (v -> air_reduce(env, scope, v))
+        result = _with_set(result, _path_keys(env, scope, to_form(call.seq[i])),
+                           val, red)
         i += 2
+    end
+    # A map entry on the call names a column of a table: `(with t score=(1 2))`
+    # is the map-entry spelling of `(with t :score (1 2))`. An ordinary form
+    # ignores its own map entries, as it always has.
+    if _table_of(result) !== nothing
+        for (k, v) in call.map
+            k === HOLD_KEY && continue
+            val = air_reduce(env, scope, to_form(v))
+            result = _with_set(result, Any[k], val, identity)
+        end
     end
     result = canonicalize(result)
     return held ? _holdify(result) : result
@@ -980,13 +1039,20 @@ function _wout_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Boo
     result = air_reduce(env, scope, to_form(call.seq[2]))
     strip && (result = _strip_hold(result))
     if n == 2
-        c = _as_container(result)
-        m = length(c.seq)
-        m == 0 || (result = canonicalize(FormContainer(
-            FormSeq(FormValue[c.seq[i] for i in 1:(m - 1)]), c.map)))
+        t = _table_of(result)
+        if t !== nothing
+            result = _table_pop(t)
+        else
+            c = _as_container(result)
+            m = length(c.seq)
+            m == 0 || (result = canonicalize(FormContainer(
+                FormSeq(FormValue[c.seq[i] for i in 1:(m - 1)]), c.map)))
+        end
     else
         for i in 3:n
-            result = _wout_path(result, _path_keys(env, scope, to_form(call.seq[i])))
+            keys = _path_keys(env, scope, to_form(call.seq[i]))
+            t = _table_of(result)
+            result = t === nothing ? _wout_path(result, keys) : _table_wout(t, keys)
         end
     end
     result = canonicalize(result)

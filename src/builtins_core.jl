@@ -53,11 +53,28 @@ builtin!(Symbol("contains?"), (env, scope, args) -> begin
 end)
 builtin!(Symbol("member?"), (env, scope, args) -> begin
     x = _arg(args, 1, "member?"); c = _arg(args, 2, "member?")
+    t = _table_of(c)
+    if t !== nothing
+        for i in 1:t.nrows
+            isequal(x, _table_row(t, i)) && return Form(true)
+        end
+        return Form(false)
+    end
     c isa FormContainer || return Form(false)
     return _bool(any(v -> isequal(to_form(v), x), values(c)))
 end)
 
 function _quantify(env::Env, scope::Scope, f::Form, coll::Form, mode::Symbol)
+    t = _table_of(coll)
+    if t !== nothing
+        for i in 1:t.nrows
+            r = truthy(_call(env, scope, f, [_table_row(t, i)]))
+            mode === :all && !r && return Form(false)
+            mode === :any && r && return Form(true)
+            mode === :none && r && return Form(false)
+        end
+        return Form(mode !== :any)
+    end
     if coll isa FormContainer
         for v in values(coll)
             r = truthy(_call(env, scope, f, [to_form(v)]))
@@ -137,7 +154,15 @@ function _push_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Boo
     strip, held = _hold_mode(call, is_hold_fn)
     args = _call_args(env, scope, call)
     isempty(args) && throw(AirEvalError("push needs a form"))
-    c = _as_container(strip ? _strip_hold(args[1]) : args[1])
+    base = strip ? _strip_hold(args[1]) : args[1]
+    # A table appends each positional mapping as a row and each map entry on the
+    # call as a column; the `hold=` option is the only non-column entry.
+    t = _table_of(base)
+    if t !== nothing
+        r = _table_push(env, scope, call, t, args[2:end])
+        return held ? _ensure_hold(r) : r
+    end
+    c = _as_container(base)
     seq = FormValue[c.seq...]
     for x in args[2:end]
         push!(seq, _store_form(strip ? _strip_hold(x) : x))
@@ -149,21 +174,40 @@ _hold_pair!(:push, _push_call)
 
 builtin!(:pop, (env, scope, args) -> begin
     c = _arg(args, 1, "pop")
+    t = _table_of(c)
+    t === nothing || return _table_pop(t)
     c isa FormContainer ? canonicalize(pop(c)) : naught
 end)
 
 builtin!(:drop, (env, scope, args) -> begin
     c = _arg(args, 1, "drop"); k = _keyof(_arg(args, 2, "drop"))
+    t = _table_of(c)
+    if t !== nothing
+        return _table_wout(t, Any[k])
+    end
     c isa FormContainer || throw(AirEvalError("drop expects a collection"))
     k isa Integer || k isa Symbol ||
         throw(AirEvalError("drop expects an integer or keyword key"))
     return canonicalize(delete(c, k))
 end)
 
-builtin!(:length, (env, scope, args) -> Form(length(_arg(args, 1, "length"))))
+builtin!(:length, (env, scope, args) -> begin
+    c = _arg(args, 1, "length")
+    t = _table_of(c)
+    t === nothing || return Form(t.nrows)
+    return Form(length(c))
+end)
 
 builtin!(:haskey, (env, scope, args) -> begin
     c = _arg(args, 1, "haskey"); k = _keyof(_arg(args, 2, "haskey"))
+    t = _table_of(c)
+    if t !== nothing
+        k isa Integer && return _bool(1 <= k <= t.nrows || -t.nrows <= k <= -1)
+        k isa Symbol && return _bool(haskey(t.schema, k))
+        # A string names a column when it matches one, as in `get`.
+        k isa AbstractString && return _bool(haskey(t.schema, Symbol(":" * String(k))))
+        return Form(false)
+    end
     (k isa Integer || k isa Symbol) || return Form(false)
     c isa FormContainer || return Form(false)
     return _bool(haskey(c, k))
@@ -237,6 +281,10 @@ function _get_one(env::Env, scope::Scope, form::Form, key::Form, default, held::
     k = _get_key(key)
     src = form
     form = _ns_contents(env, form)
+    # A table answers an integer key with a row, a keyword with a column, and any
+    # other key with an index lookup.
+    t = _table_of(form)
+    t === nothing || return _table_get(env, scope, form, t, k, key, default, held)
     # A missing name under `.lib` may be an unloaded library; the loader triggers
     # on the namespace object, so recover it from the volatile we were handed.
     if k isa Symbol && !(form isa FormContainer && haskey(form, k)) &&
@@ -285,6 +333,13 @@ end
 
 builtin!(:in, (env, scope, args) -> begin
     x = _arg(args, 1, "in"); c = _arg(args, 2, "in")
+    t = _table_of(c)
+    if t !== nothing
+        for i in 1:t.nrows
+            isequal(x, _table_row(t, i)) && return Form(true)
+        end
+        return Form(false)
+    end
     if c isa FormContainer
         any(v -> isequal(to_form(v), x), c.seq) && return Form(true)
         any(v -> isequal(to_form(v), x), values(c.map)) && return Form(true)
@@ -297,6 +352,10 @@ end)
 builtin!(:merge, (env, scope, args) -> begin
     length(args) >= 1 || throw(AirEvalError("merge expects at least one argument"))
     result = args[1]
+    for a in args
+        (_table_of(a) === nothing) || throw(AirEvalError(
+            "merge does not accept a table; use with or push"))
+    end
     for a in args[2:end]
         (result isa FormContainer && a isa FormContainer) ||
             throw(AirEvalError("merge expects collections"))

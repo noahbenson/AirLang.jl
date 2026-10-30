@@ -172,7 +172,7 @@ end
 function _bi_sandbox(env::Env, scope::Scope, call::FormContainer)
     block = _parse_block(call, "sandbox")
     c = _context(env)
-    ctx = TaskContext(c.user, c.ns, c.dbroot, c.env)
+    ctx = TaskContext(c.user, c.ns, c.dbroot, c.env, c.out)
     bindings = Air.vars()
     prevlogic = env.logic_ctx
     snap = _sandbox_snapshot(env)

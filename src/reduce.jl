@@ -93,6 +93,10 @@ function _air_reduce(env::Env, scope::Scope, x::Form)
         s = value(x)
         # The dot root marker evaluates to the global namespace volatile.
         s === DOT_ROOT && return _ns_root(env)
+        # `NA` is air's predefined missing-value marker and a fixed point: it
+        # reduces to itself. No binding form admits it as a name, but `let`
+        # substitutes textually, so guard here before any scope lookup.
+        s === NA_SYMBOL && return x
         if s isa Symbol && is_raw_symbol(s)
             bound = scope_get(scope, s)
             if bound !== nothing
@@ -122,6 +126,10 @@ function _air_reduce(env::Env, scope::Scope, x::Form)
         # A signal object is the same kind of constant: `(signal :tag data…)`
         # never reduces, so `notify` can dispatch it exactly.
         h === SIGNAL_HEAD && return x
+        # A UI tree is descriptive data: `(ui kind …)` never reduces, so an
+        # `assert=` body stays raw until the runtime instantiates the element
+        # and evaluates the parameter itself.
+        h === UI_HEAD && return x
         # A held form is data: it stays as it is, but its `preval` holes (written
         # `~e`) are filled in eagerly. This precedes splice expansion, so a `...`
         # inside a hold stays literal.
@@ -672,6 +680,7 @@ _resolve(scope::Scope, x::Form) = _resolve(scope, x, Set{Symbol}())
 function _resolve(scope, x::Form, bound::Set{Symbol})
     if x isa FormScalar
         s = value(x)
+        s === NA_SYMBOL && return x   # a fixed point, as in `_air_reduce`
         if s isa Symbol && is_raw_symbol(s) && !(s in bound)
             b = scope_get(scope, s)
             b === nothing || return b.value
@@ -690,9 +699,9 @@ function _resolve(scope, x::Form, bound::Set{Symbol})
         # `_air_reduce`; this covers the ones nested in an argument position.
         _is_replacement_rule(x) && return x
         h = head_symbol(x)
-        (h === HOLD || h === RULE || h === NS_FN || h === NS_SUB ||
-         h === NS_VAL || h === NS_PROXY || h === NS_PROXY_APPLY ||
-         h === NS_SUB_LINK || h === NS_ALIAS) && return x
+        (h === HOLD || h === RULE || h === UI_HEAD || h === NS_FN ||
+         h === NS_SUB || h === NS_VAL || h === NS_PROXY ||
+         h === NS_PROXY_APPLY || h === NS_SUB_LINK || h === NS_ALIAS) && return x
         # `:let` markers in a block body hide their real `let` from
         # `_scope_form`; expand them first so their binders shadow correctly.
         x = _expand_block_markers(x)

@@ -127,6 +127,8 @@ end
 function _bi_def(env::Env, scope::Scope, call::FormContainer)
     d = _parse_def_call(call, "def")
     check_anchor(d.pattern)
+    _def_name(d.pattern) === nothing ||
+        _check_not_reserved(_def_name(d.pattern), AirDefError, "defined")
     ns = _write_ns(env)
     if ns === nothing
         memo = d.memo === nothing ? nothing : _memo_table(d.memo)
@@ -150,6 +152,8 @@ special!(:def, _bi_def)
 function _bi_val(env::Env, scope::Scope, call::FormContainer)
     d = _parse_def_call(call, "val")
     check_anchor(d.pattern)
+    _def_name(d.pattern) === nothing ||
+        _check_not_reserved(_def_name(d.pattern), AirDefError, "defined")
     d.implicit &&
         throw(AirDefError("val needs a value form"))
     value = canonicalize(air_reduce(env, scope, d.body))

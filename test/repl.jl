@@ -67,4 +67,21 @@
              env = default_env(), width = 20, pretty = false)
     text = String(take!(out))
     @test !occursin("\n ", text)
+
+    # `(exit v)` ends the loop and the REPL returns `v`; nothing after it runs
+    # and no error is printed.
+    out = IOBuffer()
+    r = air_repl(IOBuffer("(println :before)\n(exit 3)\n(println :after)\n"), out;
+                 env = default_env())
+    text = String(take!(out))
+    @test air_string(r) == "3"
+    @test occursin("naught", text)      # `(println :before)` ran
+    @test !occursin(":after", text)
+    @test !occursin("error", text)
+
+    # `(exit)` with no value returns `naught`
+    out = IOBuffer()
+    r = air_repl(IOBuffer("(exit)\n"), out; env = default_env())
+    @test air_string(r) == "naught"
+    @test !occursin("error", String(take!(out)))
 end

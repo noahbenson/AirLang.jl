@@ -101,7 +101,8 @@ _logic_name(path::Vector{Symbol}) =
 # that names a namespace or a logic-set handle. A raw address is not evaluated,
 # so a write-only target need not be readable.
 function _logic_target(env::Env, scope::Scope, form::Form)
-    if _path_root(form) !== nothing
+    if _path_root(form) !== nothing ||
+       (_home_path_from_form(form) !== nothing && !_shadowed_home(scope, form))
         path = _ns_address_path(env, form)
         ns = _ns_lookup(env, path; lazy = false)
         ns === nothing && throw(AirEvalError(
