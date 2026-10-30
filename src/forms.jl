@@ -25,6 +25,10 @@ const naught = Form(nothing)
 
 is_keyword(s::Symbol) = startswith(String(s), ":")
 is_wildcard(s::Symbol) = startswith(String(s), "?")
+
+# The lone `:` is the wildcard key: it names every key at its level. It is a
+# keyword by spelling (the empty keyword), so it is inert data and never reduces.
+const COLON = Symbol(":")
 # The hold head and its alias, the namespace-root marker, and the two internal
 # namespace-entry heads are reserved: they never anchor a rule (and a pattern does
 # not have to contain one as its anchor). The dot root is written `.` and resolves

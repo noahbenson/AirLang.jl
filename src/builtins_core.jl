@@ -187,6 +187,7 @@ builtin!(:drop, (env, scope, args) -> begin
         return _table_wout(t, Any[k])
     end
     c isa FormContainer || throw(AirEvalError("drop expects a collection"))
+    k === COLON && return _wild_delete(c, "drop")
     k isa Integer || k isa Symbol ||
         throw(AirEvalError("drop expects an integer or keyword key"))
     return canonicalize(delete(c, k))
@@ -241,6 +242,13 @@ function _bi_get(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Bool =
     strip, held = _hold_mode(call, is_hold_fn)
     form0 = call.seq[2]
     path = _sx(call.seq, 3:length(call.seq))
+    if any(p -> _symbolof(to_form(p)) === COLON, path)
+        # A wildcard step selects a whole level and maps the rest of the path
+        # over each element, which the nested-`get` rewrite cannot express.
+        form = air_reduce(env, scope, to_form(form0))
+        strip && (form = _strip_hold(form))
+        return _get_wild(env, scope, form, path, default, held)
+    end
     if length(path) > 1 && !strip
         # Plain `get`: a path is nested lookups — `(get f a b)` is
         # `(get (get f a) b)` — so a user rule can override `get` for a subform.
@@ -330,6 +338,62 @@ function _get_one(env::Env, scope::Scope, form::Form, key::Form, default, held::
     default === nothing &&
         throw(AirEvalError("key $(air_string(key)) not found in $(air_string(form))"))
     return air_reduce(env, scope, default)
+end
+
+# The elements of an ordered level addressed by the wildcard key `:`. A
+# sequence's elements are its level, a scalar is its own sole element, and
+# `naught` is empty. A form with map entries has no order and a table has its
+# own path rules, so the wildcard refuses both.
+function _wild_elems(form::Form, who::AbstractString)
+    _table_of(form) === nothing || throw(AirEvalError(
+        "$who: ':' has no meaning for a table here; a table path names rows " *
+        "and columns, as in (with t (: :age) v)"))
+    if form isa FormContainer
+        isempty(form.map) || throw(AirEvalError(
+            "$who: ':' needs an ordered level, but $(air_string(form)) has map entries"))
+        return Form[to_form(v) for v in form.seq]
+    end
+    isequal(form, naught) && return Form[]
+    return Form[form]
+end
+
+# The values a wildcard-replacing setter inserts: one per element of the level,
+# in order. A scalar is a one-element value.
+function _wild_values(val::Form, n::Integer, who::AbstractString)
+    c = _as_container(val)
+    length(c.seq) == n || throw(AirEvalError(
+        "$who: ':' needs one value per element; $(air_string(val)) has " *
+        "$(length(c.seq)) for $(n) elements"))
+    return Form[to_form(v) for v in c.seq]
+end
+
+# Removing a wildcard level: every element goes, so the level becomes `naught`.
+function _wild_delete(c::FormContainer, who::AbstractString)
+    isempty(c.map) || throw(AirEvalError(
+        "$who: ':' needs an ordered level, but $(air_string(c)) has map entries"))
+    return naught
+end
+
+# `get` with a wildcard path step: `:` selects every element of an ordered level
+# and maps the rest of the path over each one; as the final key it is the level
+# itself. The result is an ordinary sequence, empty when the level is empty.
+function _get_wild(env::Env, scope::Scope, form::Form, keys::AbstractVector,
+                   default, held::Bool)
+    key = _get_key(air_reduce(env, scope, to_form(keys[1])))
+    if key === COLON
+        elems = _wild_elems(_ns_contents(env, form), "get")
+        if length(keys) == 1
+            v = _ns_form(elems)
+        else
+            rest = keys[2:end]
+            v = _ns_form(Form[_get_wild(env, scope, e, rest, default, false)
+                              for e in elems])
+        end
+        return held ? _ensure_hold(v) : v
+    end
+    sub = _get_one(env, scope, form, to_form(keys[1]), default, false)
+    length(keys) == 1 && return held ? _ensure_hold(sub) : sub
+    return _get_wild(env, scope, sub, keys[2:end], default, held)
 end
 
 builtin!(:in, (env, scope, args) -> begin

@@ -922,6 +922,7 @@ end
 # Remove key `k` from the container. A missing key is a no-op; key `0` removes the
 # whole form.
 function _delete_key(c::FormContainer, k)
+    k === COLON && return _wild_delete(c, "wout")
     if k isa Integer
         i = _index_of(k, length(c.seq))
         i === nothing && return naught
@@ -940,6 +941,16 @@ function _with_set(base::Form, path::Vector{Any}, val::Form,
     t = _table_of(base)
     t === nothing || return _table_with_set(t, path, red(val))
     isempty(path) && return val
+    if path[1] === COLON
+        elems = _wild_elems(base, "with")
+        vals = _wild_values(val, length(elems), "with")
+        length(path) == 1 && return canonicalize(FormContainer(
+            FormSeq(FormValue[_store_form(v) for v in vals]), FormMap()))
+        rest = path[2:end]
+        out = FormValue[_store_form(_with_set(elems[j], rest, vals[j], red))
+                        for j in 1:length(elems)]
+        return canonicalize(FormContainer(FormSeq(out), FormMap()))
+    end
     c = _as_container(base)
     length(path) == 1 && return _set_key(c, path[1], val)
     child = _with_set(_at_key(c, path[1]), path[2:end], val, red)
@@ -949,6 +960,12 @@ end
 # Remove the subform at `path` (the final key is the one removed).
 function _wout_path(base::Form, path::Vector{Any})
     isempty(path) && return base
+    if path[1] === COLON
+        elems = _wild_elems(base, "wout")
+        length(path) == 1 && return naught
+        out = FormValue[_store_form(_wout_path(e, path[2:end])) for e in elems]
+        return canonicalize(FormContainer(FormSeq(out), FormMap()))
+    end
     c = _as_container(base)
     length(path) == 1 && return _delete_key(c, path[1])
     child = _wout_path(_at_key(c, path[1]), path[2:end])
@@ -1053,10 +1070,22 @@ function _wout_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Boo
                 FormSeq(FormValue[c.seq[i] for i in 1:(m - 1)]), c.map)))
         end
     else
-        for i in 3:n
-            keys = _path_keys(env, scope, to_form(call.seq[i]))
+        paths = Any[_path_keys(env, scope, to_form(call.seq[i])) for i in 3:n]
+        if any(p -> COLON in p, paths)
+            # A wildcard needs a path, so the arguments become one: `(wout coll
+            # : :x)` removes `:x` from every element rather than removing every
+            # element and then `:x`.
+            path = Any[]
+            for p in paths
+                append!(path, p)
+            end
             t = _table_of(result)
-            result = t === nothing ? _wout_path(result, keys) : _table_wout(t, keys)
+            result = t === nothing ? _wout_path(result, path) : _table_wout(t, path)
+        else
+            for keys in paths
+                t = _table_of(result)
+                result = t === nothing ? _wout_path(result, keys) : _table_wout(t, keys)
+            end
         end
     end
     result = canonicalize(result)

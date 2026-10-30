@@ -55,7 +55,6 @@ AirTable(names, columns, schema, nrows, index, indexmap) =
 
 const _TABLE_TYPES =
     (:int, :float, :number, :string, :bool, :symbol, :keyword, :naught, :any)
-const COLON = Symbol(":")
 const _TABLE_COLUMNS_KEY = Symbol(":columns")
 const _TABLE_TYPES_KEY = Symbol(":types")
 const _TABLE_NA_KEY = Symbol(":na")

@@ -27,6 +27,19 @@
     @test_throws AirEvalError air_eval(env, read_air("(let (f=(a=1)) (get f :b))"))
     @test ev("(let (f=(a=1)) (get f :b default=9))") == "9"
 
+    # the wildcard key `:` names every element of an ordered level; the rest of
+    # the path is mapped over each one, and the result is an ordinary sequence
+    @test ev("(get (1 2 3) :)") == "(1 2 3)"
+    @test ev("(get ((a=1) (a=2)) : :a)") == "(1 2)"
+    @test ev("(get ((a=(1 2)) (a=(3 4))) : :a 2)") == "(2 4)"
+    @test ev("(get ((a=1) (a=2)) : :a hold=true)") == "(' 1 2)"
+    @test ev("(get (1 2) : 0)") == "(1 2)"
+    @test ev("(get 5 :)") == "(5)"
+    @test ev("(get naught :)") == "naught"
+    @test ev("(get (1 2 3) : default=9)") == "(1 2 3)"
+    @test_throws AirEvalError air_eval(env, read_air("(get (a=1 b=2) :)"))
+    @test_throws AirEvalError air_eval(env, read_air("(get ((a=1) (b=2)) : :a)"))
+
     # a user rule can override get for a particular form
     air_eval(env, read_air("(def (get (widget n=?n) :size) (* n 2))"))
     @test ev("(get (widget n=3) :size)") == "6"
