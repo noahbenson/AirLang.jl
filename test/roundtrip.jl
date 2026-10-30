@@ -4,7 +4,10 @@
 # without adding a test dependency.
 @testset "form round-trips" begin
     atoms = ["0", "1", "-2", "3.5", "2.0", "\"hi\"", "\"a b\"", ":a", ":b",
-             "a", "b", "true", "false", "naught"]
+             "a", "b", "true", "false", "naught",
+             # the numeric-tower leaves
+             "123456789012345678901234567890", "1//3", "-2//3", "big\"1.5\"",
+             "4.4+2.0i", "2i", "Inf", "-Inf", "NaN", "-0.0"]
 
     # A 64-bit linear congruential generator; `pick(rng, n)` is uniform in 0:n-1.
     mutable struct LCG
@@ -35,14 +38,17 @@
             src = gen(rng, 3)
             x = air_eval(env, read_air(src))
             s = air_string(x)
-            # printing and reading back is the same value, and it hashes alike
+            # printing and reading back is the same value, and it hashes alike.
+            # `isequiv` is the relation to test here: `isequal` on a container
+            # compares children with `==`, under which a `NaN` is never equal to
+            # itself.
             y = air_eval(env, read_air(s))
-            @test isequal(x, y)
+            @test AirDB.isequiv(x, y)
             @test hash(x) == hash(y)
             # the JSON codec round-trips the same value
             j = air_eval(env, read_air("(to-json " * s * ")"))
             z = air_eval(env, read_air("(from-json " * air_string(j) * ")"))
-            @test isequal(x, z)
+            @test AirDB.isequiv(x, z)
         end
     end
 

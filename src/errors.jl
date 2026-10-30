@@ -118,6 +118,24 @@ Base.showerror(io::IO, e::AirUnstorable) =
     print(io, "cannot store this form in the database: ", air_string(e.target))
 
 """
+    AirStreamError(tag, msg, data = Form[])
+
+A stream operation failed: the stream is closed, the operation would deadlock
+inside its own transaction, or the stream belongs to an uncommitted or aborted
+transaction. A `do` block sees it as the air error `(error :tag data…)`.
+"""
+struct AirStreamError <: AirError
+    tag::Symbol
+    msg::String
+    data::Vector{Form}
+end
+AirStreamError(tag::Symbol, msg::AbstractString) =
+    AirStreamError(tag, String(msg), Form[])
+
+Base.showerror(io::IO, e::AirStreamError) =
+    print(io, "air stream error: ", e.msg)
+
+"""
     AirThrown(form)
 
 An air error thrown by `(raise …)`. It carries the error object `form` — a form

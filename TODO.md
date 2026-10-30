@@ -187,6 +187,13 @@ class-based exception hierarchies.
 - [x] `tx` accepts the same grammar and runs it in one transaction: an internal
   catch or `except` commits, an escaping error aborts, and a throw caught
   outside is deferred until after the commit (watches included).
+- [x] `(sandbox body…)` runs that grammar in a transaction that is deliberately
+  aborted: it yields the body's value and keeps none of its writes (`def`,
+  `val`, `mut`, facts, rules, named forms, namespaces). Air's `tx` joins rather
+  than nests, so the body runs in its own transaction on a private task; it
+  reads committed state (not an enclosing transaction's staged writes), and
+  non-database side effects escape. `throw` and `notify` still reach the
+  caller's `catch=` and `handle`.
 - [x] `reraise` is a reserved bare symbol: when it is the final value of an
   `except` body, the original error resumes through the remaining clauses (side
   effects kept) and escapes if unhandled. It cannot be bound by `let`, `def`, or
@@ -223,9 +230,11 @@ class-based exception hierarchies.
 - [x] **`i` vs. a symbol.** Bare `i` is the imaginary base (`0 + 1i`); a user may
   still rebind it or shadow it with a `let` binding, so it is not a reserved
   name.
-- [ ] **Numeric tower.** AirDB's `FormLeaf` is `Int64`/`Float64`/`ComplexF64`
-  only. Bignums, exact rationals, and decimals need an AirDB change; `//` as
-  *integer division* does not. Deferred for now (settled 2026-10-28: wait).
+- [x] **Numeric tower.** AirDB's `FormLeaf` now carries `BigInt`, `BigFloat`,
+  `Rational{Int64}`, `Rational{BigInt}`, and `Complex{BigFloat}`. Air reads and
+  prints every leaf exactly, keeps `//` as the exact rational constructor
+  (integer division moved to `div`), and adopts AirDB's `isequiv`/`equivhash`.
+  See `book/numbers.md`.
 - [x] **Recursion depth.** A call in tail position — the selected `if`/`cond`
   branch, the last form of a `let` body, the last form of a `do` with no
   `catch=`/`except`/`handle`/`finally` (including `:let`/`let=`), a
@@ -252,8 +261,9 @@ class-based exception hierarchies.
 - [x] String escapes (Julia's rules) and raw strings `raw"…"` / `raw"""…"""`;
   `~` interpolation for `string-format`.
 - [x] Block comments `#| … |#` (nestable; may span lines or sit inside a form).
-- [ ] Regex literals (low priority; `(regex "…")` values already cover the
-  functionality).
+- [x] Regex literals — `r"…"` is a raw string compiled at read time into the
+  same value `(regex "…" ["flags"])` builds; the letters `i m s x a` immediately
+  after the closing quote are flags, and a regex prints as the literal again.
 
 ## 2. Evaluation & rules
 
@@ -287,7 +297,8 @@ class-based exception hierarchies.
   `+ - * / ^ // mod = != < > <= >=`.
 - [x] ★ `^` power/exponent.
 - [x] ★ `mod` (modulo).
-- [x] ★ `//` integer division.
+- [x] ★ `//` exact rational constructor (`(7 // 2)` is `7//2`); `div` is the
+  integer division verb.
 - [x] `<=`, `>=`, `!=`; variadic chains for every comparison.
 - [x] `and`, `or`, `not`, `xor` (short-circuiting where needed).
 - [x] `abs`, `sign`, `min`, `max`, `floor`, `ceil`, `round`, `truncate`.
@@ -414,7 +425,7 @@ class-based exception hierarchies.
   recursion remains depth-bounded.
 - [x] `doseq` (nested over collections) and `dotimes` — run a body for its
   effect and return `naught`.
-- [ ] `assert` — reserved for logic-sets.
+- [x] `assert` — reserved for logic-sets (§16).
 
 ## 8. Mutables & STM
 
@@ -443,7 +454,10 @@ class-based exception hierarchies.
   (`isequal` on the AirDB id), never by its value, and no pattern walk descends
   into a mutable's value. A wildcard may still bind one, and `(get m)` is the
   explicit way to inspect it. Covered in `test/pattern.jl`.
-- [ ] Deref sugar (`@form`?) — decide.
+- [x] Deref sugar (`@form`?) — settled (2026-10-29): not wanted. `get` already
+  dereferences a mutable, actor, promise, or delay, and `@` is the attached
+  database root, so a deref operator would add a third spelling for an
+  operation that already reads well.
 
 ## 9. Persistence & AirDB integration
 
@@ -475,8 +489,8 @@ class-based exception hierarchies.
   valid JSON and cannot collide with a string, symbol, or link marker; complex
   components use the same encoding. The `.air` constants are stored as values.
 - [x] **Serializable promises.** `(promise)` is a single-assignment database
-  value: an undelivered promise serializes as `"~uuid"` and a delivered one as
-  its value, so it round-trips through the database without an AirDB change.
+  value that always serializes as the link `"~uuid"` (pending or delivered), so
+  a reader waits on the same promise and a delivery survives the round trip.
 - [ ] **Storing a `task` in the database.** `(task body…)` returns a database
   `PromiseForm`, so the promise itself serializes (`"~uuid"` until delivered).
   The running task, however, is a process item: its held body and context are
@@ -620,6 +634,23 @@ class-based exception hierarchies.
   rollback on error).
 - [x] `update` is the collection update only; set edits are `revise`.
 - [x] Provenance / JTMS (`why`, `because`, `rule?`).
+- [x] Implicit namespace logic sets (hidden `air/logic/<path>` named forms,
+  created lazily), the `readfact`/`writefact`/`readrule`/`writerule`
+  permissions, `query`, `defrule`, and `ingest`.
+- [x] `facts`/`rules` return one held list (`(' (p 1) (q 2))`, `(')` when
+  empty) instead of one hold per element; the hold keeps the list inert and
+  its elements are the unheld facts.
+- [ ] `depend` (live propagation between logic sets). Freeze the semantics of
+  `(depend source [destination])`: record a dependency edge from the source set
+  to the destination (the current namespace unless given); on any commit that
+  changes the source's base facts or rules, propagate the delta — copied facts
+  and rules carry the dependency as their reason, so a source retraction
+  retracts the copies and a source revision revises them — then saturate the
+  destination immediately so dependants are consistent before the committing
+  transaction returns. Cycles must terminate: propagate within the enclosing
+  transaction, deduplicate repeated deltas, and either process edges in a
+  fixed order or reject a cycle at `depend` time. `ingest` stays the one-shot
+  copy; `depend` is the live subscription.
 - [ ] Incremental alpha/beta network (a full re-saturation runs per change).
 - [ ] `explain` (natural-language narration of a `why` record).
 
@@ -673,7 +704,8 @@ class-based exception hierarchies.
 
 1. `drop` naming — settled: `drop` is key removal; rename `drop-first` later.
 2. `i` — settled: bare `i` is the imaginary base, rebindable like any name.
-3. Numeric tower — deferred: exact rationals/bignums need an AirDB change.
+3. Numeric tower — settled 2026-10-29: AirDB supplies the leaves; air adopts
+   them fully (`book/numbers.md`).
 4. N-ary infix: `(1 + 2 + 3)` should reduce to `((1 + 2) + 3)` eventually
    (deferred — it currently stays unevaluated).
 5. Conditions: today a condition whose predicate is an *unbound* symbol passes

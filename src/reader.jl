@@ -5,7 +5,8 @@
 # separate AST — air code *is* air data.
 #
 # Supported in this milestone: atoms (plain symbols, keywords, wildcards,
-# strings, numbers, booleans, `naught`), parenthesized forms, the `|`
+# strings, raw strings (`raw"…"`), regex literals (`r"…"`), numbers, booleans,
+# `naught`), parenthesized forms, the `|`
 # pattern-alternative sugar, `#` line comments, and `k=v` mapping/hybrid form
 # elements. The
 # reader normalizes the empty form to `naught` (so `()` is `naught` at every
@@ -22,7 +23,14 @@ struct _Token
     text::String   # atom text, or the decoded value of a string
     pos::Int       # 1-based source position of the first character
     stop::Int      # 1-based source position of the last character
+    value::Union{Nothing,Form}  # a literal's value (a regex); see `_token_form`
 end
+_Token(kind::Symbol, text::String, pos::Int, stop::Int) =
+    _Token(kind, text, pos, stop, nothing)
+
+# The form a literal token denotes: a string is its own text, while a regex token
+# was compiled when it was scanned.
+_token_form(t::_Token) = t.value === nothing ? Form(t.text) : t.value
 
 # Delimiters end an atom. A comma is treated as a separator (whitespace), as in
 # Mathematica; the README's symbol character set does not include it.
@@ -56,15 +64,55 @@ function _tokenize(s::AbstractString)
                cs[i + 3] == '"'
             tok, i = _scan_raw_string(cs, i)
             push!(toks, tok)
+        elseif c == 'r' && i + 1 <= n && cs[i + 1] == '"'
+            tok, i = _scan_regex(cs, i)
+            push!(toks, tok)
+        elseif c == 'b' && i + 3 <= n && cs[i + 1] == 'i' && cs[i + 2] == 'g' &&
+               cs[i + 3] == '"'
+            tok, i = _scan_big_string(cs, i)
+            push!(toks, tok)
         else
             start = i
             while i <= n && !(cs[i] in _DELIMS)
                 i += 1
             end
-            push!(toks, _Token(:atom, String(cs[start:(i - 1)]), start, i - 1))
+            i = _push_atom!(toks, cs, start, i)
         end
     end
     return toks
+end
+
+# The prefix of a literal that begins immediately after an atom, and its length:
+# the `x=` of a map value (`x=r"…"`, `x=raw"…"`, `x=big"…"`) or the quote sugar
+# (`'r"…"`, `'big"…"`). The quote is a delimiter, so the atom stops before it;
+# splitting there lets the literal be one form, as `x="…"` already reads.
+function _literal_prefix(text::AbstractString)
+    (endswith(text, "=raw") || text == "'raw") && return (:raw, 3)
+    (endswith(text, "=big") || text == "'big") && return (:big, 3)
+    (endswith(text, "=r") || text == "'r") && return (:regex, 1)
+    return (:none, 0)
+end
+
+# Push the atom spanning `start:(i - 1)` and return the index of the next
+# character to tokenize, splitting off a literal prefix (see above) when the
+# next character opens one.
+function _push_atom!(toks::Vector{_Token}, cs, start::Int, i::Int)
+    text = String(cs[start:(i - 1)])
+    kind, npre = i <= length(cs) && cs[i] == '"' ? _literal_prefix(text) : (:none, 0)
+    if npre > 0
+        prefix = text[1:(end - npre)]
+        if !isempty(prefix)
+            push!(toks, _Token(:atom, prefix, start, start + length(prefix) - 1))
+            litstart = start + length(prefix)
+            tok, j = kind === :raw ? _scan_raw_string(cs, litstart) :
+                     kind === :big ? _scan_big_string(cs, litstart) :
+                     _scan_regex(cs, litstart)
+            push!(toks, tok)
+            return j
+        end
+    end
+    push!(toks, _Token(:atom, text, start, i - 1))
+    return i
 end
 
 # Skip a `#| … |#` block comment, returning the index just past its close. Block
@@ -122,9 +170,18 @@ end
 # triple-quoted literal is dedented as well). This is what makes a regex pattern
 # readable: `raw"\d+"` is the three characters `\d+`.
 function _scan_raw_string(cs, i)
+    (val, stop) = _scan_raw_literal(cs, i + 3, i, "raw string")
+    return _Token(:string, val, i, stop), stop + 1
+end
+
+# Scan the literal whose opening quote is at `q`, returning its decoded content
+# and the index of its closing quote. `start` is the token's first character and
+# `what` names the literal in an error message. The whole literal is handed to
+# Julia's parser as a raw string, so the result has exactly Julia's raw-string
+# semantics — only `\"` and `\\` are escapes — and a triple-quoted literal is
+# dedented as well.
+function _scan_raw_literal(cs, q::Int, start::Int, what::AbstractString)
     n = length(cs)
-    start = i
-    q = i + 3                       # the opening quote
     triple = q + 2 <= n && cs[q + 1] == '"' && cs[q + 2] == '"'
     body = triple ? q + 3 : q + 1
     j = body
@@ -141,13 +198,13 @@ function _scan_raw_string(cs, i)
         j += 1
     end
     if triple
-        j + 2 <= n || throw(AirParseError("unterminated raw string", start))
+        j + 2 <= n || throw(AirParseError("unterminated $what", start))
         stop = j + 2
     else
-        j <= n || throw(AirParseError("unterminated raw string", start))
+        j <= n || throw(AirParseError("unterminated $what", start))
         stop = j
     end
-    text = String(cs[start:stop])
+    text = "raw" * String(cs[q:stop])
     val = try
         v = Meta.parse(text)
         if v isa AbstractString
@@ -165,10 +222,58 @@ function _scan_raw_string(cs, i)
         nothing
     end
     if val === nothing
-        triple && throw(AirParseError("invalid raw string", start))
+        triple && throw(AirParseError("invalid $what", start))
         val = _raw_unescape(String(cs[body:(stop - 1)]))
     end
-    return _Token(:string, val, start, stop), stop + 1
+    return (val, stop)
+end
+
+# The letters a regex literal may carry immediately after its closing quote
+# (`r"a+"i`); a letter outside this set ends the literal. These are Julia's.
+const _REGEX_FLAGS = ('a', 'i', 'm', 's', 'x')
+
+# `r"…"` (and `r"""…"""`) is a regex literal: a raw string — the same escaping,
+# so `r"\d+"` is the three patterns `\d+` — compiled into a regex value as it is
+# read, followed by any flag letters. It builds the same value as
+# `(regex "…" "flags")`, so the two spellings are equal, and it is a value
+# wherever a form may appear (including inside a hold).
+function _scan_regex(cs, i)
+    n = length(cs)
+    (src, stop) = _scan_raw_literal(cs, i + 1, i, "regular expression")
+    j = stop + 1
+    fstart = j
+    while j <= n && cs[j] in _REGEX_FLAGS
+        j += 1
+    end
+    flags = String(cs[fstart:(j - 1)])
+    val = try
+        _extern_form(AirRegex(src, flags))
+    catch e
+        e isa AirEvalError || rethrow()
+        throw(AirParseError(e.msg, i))
+    end
+    return _Token(:string, src, i, j - 1, val), j
+end
+
+# `big"…"` (and `big"""…"""`) is a `BigFloat` literal: the quoted digits are
+# parsed at the ambient precision, exactly as Julia's `big"…"` macro does. A
+# trailing `i`, attached with no space, makes it the imaginary part, so
+# `big"2.0"i` is a `Complex{BigFloat}` with a zero real part (`2i` is the same
+# sugar for `ComplexF64`).
+function _scan_big_string(cs, i)
+    n = length(cs)
+    (src, stop) = _scan_raw_literal(cs, i + 3, i, "bigfloat literal")
+    v = try
+        parse(BigFloat, src)
+    catch
+        throw(AirParseError("malformed bigfloat literal: $src", i))
+    end
+    j = stop + 1
+    if j <= n && cs[j] == 'i' && (j == n || cs[j + 1] in _DELIMS)
+        v = Complex{BigFloat}(zero(BigFloat), v)
+        j += 1
+    end
+    return _Token(:string, src, i, j - 1, to_form(v)), j
 end
 
 # The fallback decoder for a single-quoted raw string: only `\"` is an escape;
@@ -226,10 +331,17 @@ function _parse_atom(text::AbstractString, pos::Int)
     if startswith(text, "~") && length(text) > 1
         return _mk_preval(_parse_atom(text[2:end], pos))
     end
+    # A non-finite float is spelled the way it prints, so printing round-trips.
+    if text == "Inf" || text == "-Inf" || text == "NaN"
+        return to_form(text == "NaN" ? NaN : text == "Inf" ? Inf : -Inf)
+    end
     if _looks_numeric(text)
         v = _try_number(text)
         v === nothing && throw(AirParseError("malformed number: $text", pos))
-        return Form(v)
+        # `to_form` rather than `Form`, so AirDB canonicalizes the leaf (a
+        # `BigInt` that would fit an `Int64`, a `Rational{BigInt}` with small
+        # components, a `Complex` whose parts are exactly `Float64`).
+        return to_form(v)
     end
     # A leading dot is a namespace path from the global root: `.` alone is the
     # root volatile and `.air.string-join` is `(get . :air :string-join)`. The
@@ -256,8 +368,17 @@ end
 function _try_number(t::AbstractString)
     v = tryparse(Int64, t)
     v === nothing || return v
+    # An integer too large for `Int64` is exact, so it becomes a `BigInt` rather
+    # than falling through to the `Float64` branch below.
+    b = _try_integer(t)
+    b === nothing || return b
     f = tryparse(Float64, t)
     f === nothing || return f
+    # `n//d` is an exact rational. It must be written with no spaces: the spaced
+    # `(n // d)` is the rational operator, and the adjacent characters are one
+    # atom, as for every other literal.
+    r = _try_rational(t)
+    r === nothing || return r
     # A trailing `i`, attached to the number with no space, marks the imaginary
     # unit, so `2i` and `4.4+2.0i` are complex literals. Julia's `im` is not
     # accepted; the spaced `4.4 + 2.0i` is the infix sum `(+ 4.4 2.0i)`.
@@ -266,6 +387,36 @@ function _try_number(t::AbstractString)
         c === nothing || return c
     end
     return nothing
+end
+
+# The `BigInt` a decimal integer literal denotes, or `nothing` when the text is
+# not an (optionally signed) run of digits. `Int64` is tried first, so this is
+# only reached for a value that does not fit it.
+function _try_integer(t::AbstractString)
+    s = startswith(t, "+") || startswith(t, "-") ? t[2:end] : t
+    (isempty(s) || !all(isdigit, s)) && return nothing
+    return tryparse(BigInt, t)
+end
+
+# The integer an integer literal denotes (`Int64` when it fits, else `BigInt`),
+# or `nothing`.
+function _try_int_text(s::AbstractString)
+    v = tryparse(Int64, s)
+    v === nothing || return v
+    return _try_integer(s)
+end
+
+# The `Rational` an `n//d` literal denotes, or `nothing`. A zero denominator is
+# not a rational (and is reported as a malformed number by the caller).
+function _try_rational(t::AbstractString)
+    k = findfirst("//", t)
+    k === nothing && return nothing
+    n = _try_int_text(String(t[1:(k.start - 1)]))
+    n === nothing && return nothing
+    d = _try_int_text(String(t[(k.stop + 1):end]))
+    d === nothing && return nothing
+    iszero(d) && return nothing
+    return n // d
 end
 
 # ---- the `.` accessor and `...` splat ----------------------------------------
@@ -387,7 +538,7 @@ function _parse_quote(p::_Parser, qpos::Int)::Form
         adjacent = nx.pos == qpos + 1
         if adjacent && nx.kind == :string
             p.i += 1
-            return _mk_hold(Form(nx.text))
+            return _mk_hold(_token_form(nx))
         elseif adjacent && nx.kind == :lparen
             throw(AirParseError("a held form is written (' …), not '(…)", qpos))
         end
@@ -439,7 +590,7 @@ function _parse_primary(p::_Parser)::Form
     elseif t.kind == :string
         p.i += 1
         p.last_stop = t.stop
-        return Form(t.text)
+        return _token_form(t)
     else
         throw(AirParseError("unexpected '$(t.text)'", t.pos))
     end
@@ -565,7 +716,7 @@ function _parse_container(p::_Parser)::Form
             frame.last_stop = p.toks[p.i - 1].stop
         elseif t.kind == :string
             p.i += 1
-            push!(stack[end].seq, Form(t.text))
+            push!(stack[end].seq, _token_form(t))
             stack[end].last_stop = t.stop
             stack[end].last_map = false
         else

@@ -25,14 +25,20 @@ const _ACL_KEY = Symbol(":acl")
 const _ENTRY_KEY = Symbol(":entry")
 const _NAME_KEY = Symbol(":name")
 const _ANCHOR_KEY = Symbol(":anchor")
-const _SOURCE_KEY = Symbol(":source")
+const _SOURCE_META_KEY = Symbol(":source")
 const _LINK_KEY = Symbol(":link")
 const _HIDDEN_KEY = Symbol(":hidden")
 const _WATCH_KEY = Symbol(":watch")
 const _FILTER_KEY = Symbol(":filter")
 const _FINALIZE_KEY = Symbol(":finalize")
-const _PERM_NAMES = (:read, :write, :exec, :assume, :hide, :watch, :filter,
-                     :finalize)
+const _PERM_NAMES = (:read, :write, :exec, :readfact, :writefact, :readrule,
+                     :writerule, :assume, :hide, :watch, :filter, :finalize)
+
+# The fact/rule permissions a namespace target uses, and the entry permission a
+# standalone logic set maps each onto.
+const _FACT_RULE_PERMS = (:readfact, :writefact, :readrule, :writerule)
+_standalone_logic_perm(perm::Symbol) =
+    perm === :readfact || perm === :readrule ? :read : :write
 const _ALL_USERS = Symbol("_")
 
 _perm_key(p::Symbol) = Symbol(":", String(p))
@@ -43,12 +49,17 @@ _user_of_key(k::Symbol) = _bindname(k)
 
 _perms_acl(owner::Symbol) = Dict{Symbol,Dict{Symbol,Bool}}(
     :read => Dict(owner => true), :write => Dict(owner => true),
-    :exec => Dict(owner => true))
+    :exec => Dict(owner => true),
+    :readfact => Dict(owner => true), :writefact => Dict(owner => true),
+    :readrule => Dict(owner => true), :writerule => Dict(owner => true))
 
-# World read/execute, owner write: the core and library namespaces.
+# World read/execute, owner write: the core and library namespaces. Facts and
+# rules are world-readable too, so `.air` and `.lib` logic is usable by anyone.
 _world_read_exec_acl(owner::Symbol = _AIR) = Dict{Symbol,Dict{Symbol,Bool}}(
     :read => Dict(_ALL_USERS => true), :write => Dict(owner => true),
-    :exec => Dict(_ALL_USERS => true))
+    :exec => Dict(_ALL_USERS => true),
+    :readfact => Dict(_ALL_USERS => true), :readrule => Dict(_ALL_USERS => true),
+    :writefact => Dict(owner => true), :writerule => Dict(owner => true))
 
 # One permission mapping `(bob=true game:bob=false)` as a user=>bool dict.
 function _acl_user_map(x::Form)
@@ -96,7 +107,7 @@ function _metadata_form(owner::Symbol; acl = nothing, entry::Bool = false,
     entry && push!(pairs, _ENTRY_KEY => Form(true))
     name === nothing || push!(pairs, _NAME_KEY => Form(_user_key(name)))
     anchor && push!(pairs, _ANCHOR_KEY => Form(true))
-    source === nothing || push!(pairs, _SOURCE_KEY => _ns_path_form(source))
+    source === nothing || push!(pairs, _SOURCE_META_KEY => _ns_path_form(source))
     link === nothing || push!(pairs, _LINK_KEY => _ns_path_form(link))
     hidden && push!(pairs, _HIDDEN_KEY => Form(true))
     watch === nothing || push!(pairs, _WATCH_KEY => watch)
@@ -161,7 +172,7 @@ function _meta_anchor(vf::VolatileForm)
 end
 
 function _meta_source(vf::VolatileForm)
-    x = _meta_get(vf, _SOURCE_KEY)
+    x = _meta_get(vf, _SOURCE_META_KEY)
     x === nothing && return nothing
     return _stored_path(x)
 end
@@ -192,6 +203,60 @@ end
 _is_entry_vf(vf::VolatileForm) = _meta_get(vf, _ENTRY_KEY) !== nothing &&
     truthy(_meta_get(vf, _ENTRY_KEY))
 
+# ---- stream metadata ---------------------------------------------------------
+#
+# A `StreamForm` carries owner+ACL metadata but none of the volatile-only fields
+# (entry, name, anchor, source, link, hooks). Its metadata lives in the database
+# row and is read lazily, so an unloaded stream must be read through the AirDB
+# accessor — reading the raw field would see "no metadata" and bypass the ACL.
+# Printing a stream on a closed database must not raise, hence the fallback.
+
+_vf_metadata(sf::StreamForm) = try
+    AirDB.metadata(sf)
+catch
+    sf.metadata
+end
+
+_meta_form(sf::StreamForm) =
+    (m = _vf_metadata(sf); m isa FormContainer ? m : nothing)
+
+_meta_get(sf::StreamForm, key::Symbol) = begin
+    m = _meta_form(sf)
+    (m === nothing || !haskey(m, key)) && return nothing
+    to_form(m[key])
+end
+
+_meta_owner(sf::StreamForm) = begin
+    x = _meta_get(sf, _OWNER_KEY)
+    s = x === nothing ? nothing : _symbolof(x)
+    s === nothing ? _AIR : _user_of_key(s)
+end
+
+_meta_acl(sf::StreamForm) = begin
+    out = Dict{Symbol,Dict{Symbol,Bool}}()
+    x = _meta_get(sf, _ACL_KEY)
+    if x isa FormContainer
+        for (k, v) in x.map
+            perm = _user_of_key(k)
+            perm in _PERM_NAMES || continue
+            out[perm] = _acl_user_map(to_form(v))
+        end
+    end
+    out
+end
+
+_meta_name(::StreamForm) = nothing
+_meta_anchor(::StreamForm) = false
+_meta_source(::StreamForm) = nothing
+_meta_link(::StreamForm) = nothing
+_meta_hidden(sf::StreamForm) = (x = _meta_get(sf, _HIDDEN_KEY); x !== nothing && truthy(x))
+_is_entry_vf(::StreamForm) = false
+
+_metadata_like(sf::StreamForm; owner::Symbol = _meta_owner(sf),
+               acl = _meta_acl(sf), anchor::Bool = false,
+               watch = nothing, filter = nothing, finalize = nothing) =
+    _metadata_form(owner; acl = acl)
+
 # The stored watch table: a sequence of `(key=… owner=… ns=… fn=…)` forms, in
 # registration order. A single watch may be stored as the table itself.
 function _meta_watches(vf::VolatileForm)
@@ -212,8 +277,10 @@ _meta_with_watches(vf::VolatileForm, ws::Vector{Form}) =
 
 # Whether `user` holds `perm` on `vf`. A non-volatile (a rule without an entry,
 # say) is unrestricted. `air` bypasses every check; a hidden user holds nothing.
+# A stream carries owner+ACL metadata like a volatile, so it is gated by the same
+# logic: `read` is receiving from it and `write` is delivering to it.
 function _can(env::Env, vf, user::Symbol, perm::Symbol)
-    vf isa VolatileForm || return true
+    (vf isa VolatileForm || vf isa StreamForm) || return true
     user === _AIR && return true
     # A volatile with no metadata is unmanaged (an ordinary `mut` created before
     # ownership existed); its contents are unrestricted.
@@ -232,6 +299,11 @@ function _can(env::Env, vf, user::Symbol, perm::Symbol)
         return true
     end
     d = get(acl, perm, nothing)
+    if d === nothing && perm in _FACT_RULE_PERMS
+        # Metadata written before the fact/rule permissions existed falls back
+        # to the entry permission it split from.
+        d = get(acl, _standalone_logic_perm(perm), nothing)
+    end
     d === nothing && return false
     haskey(d, user) && return d[user]
     return get(d, _ALL_USERS, false)
@@ -253,6 +325,8 @@ function _vf_target(env::Env, vf::VolatileForm)
     name = _meta_name(vf)
     return name === nothing ? Form(Symbol(":volatile")) : _keyword_form(name)
 end
+
+_vf_target(env::Env, ::StreamForm) = Form(Symbol(":stream"))
 
 # Raise unless `user` (by default the current one) holds `perm` on `vf`.
 function _check!(env::Env, vf, perm::Symbol, target::Union{Nothing,Form} = nothing;
@@ -314,7 +388,7 @@ function _perm_target(env::Env, scope::Scope, form::Form)
         end
     end
     v = air_reduce(env, scope, form)
-    v isa VolatileForm && return v
+    (v isa VolatileForm || v isa StreamForm) && return v
     if _is_ns_proxy(v)
         # An imported proxy is stored in the namespace that imported it; a
         # proxy's marker names the source, so its own entry is found by name in
@@ -353,7 +427,17 @@ function _permissions_form(vf::VolatileForm)
     isempty(acl) || push!(pairs, _ACL_KEY => _acl_form(acl))
     _meta_anchor(vf) && push!(pairs, _ANCHOR_KEY => Form(true))
     src = _meta_source(vf)
-    src === nothing || push!(pairs, _SOURCE_KEY => _ns_path_form(src))
+    src === nothing || push!(pairs, _SOURCE_META_KEY => _ns_path_form(src))
+    return _ns_form(Form[], pairs)
+end
+
+# A stream has no anchor, name, or source: its permissions are its owner and ACL.
+function _permissions_form(sf::StreamForm)
+    m = _meta_form(sf)
+    m === nothing && return _metadata_form(_AIR; acl = _perms_acl(_AIR))
+    pairs = Pair{Symbol,Form}[_OWNER_KEY => Form(_user_key(_meta_owner(sf)))]
+    acl = _meta_acl(sf)
+    isempty(acl) || push!(pairs, _ACL_KEY => _acl_form(acl))
     return _ns_form(Form[], pairs)
 end
 
@@ -372,6 +456,8 @@ function _bi_chmod(env::Env, scope::Scope, call::FormContainer)
     length(call.seq) == 2 || throw(AirEvalError("chmod! expects a target"))
     vf = _perm_target(env, scope, to_form(call.seq[2]))
     _check!(env, vf, :write)
+    vf isa StreamForm && haskey(call.map, _ANCHOR_KEY) &&
+        throw(AirEvalError("chmod!: a stream has no anchor"))
     acl = _meta_acl(vf)
     anchor = _meta_anchor(vf)
     for (k, v) in call.map
@@ -388,8 +474,9 @@ function _bi_chmod(env::Env, scope::Scope, call::FormContainer)
     _check_db_acl!(env, vf.db, acl)
     md = _metadata_like(vf; acl = acl, anchor = anchor)
     tx() do
-        set_metadata!(vf, md)
+        _set_metadata!(vf, md)
     end
+    _flush_metadata!()      # the grant must be visible to the next check
     return vf
 end
 special!(Symbol("chmod!"), _bi_chmod)
@@ -406,8 +493,9 @@ function _bi_chown(env::Env, scope::Scope, call::FormContainer)
     _user_exists(env, user) || throw(AirEvalError("no such user: :$user"))
     md = _metadata_like(vf; owner = user)
     tx() do
-        set_metadata!(vf, md)
+        _set_metadata!(vf, md)
     end
+    _flush_metadata!()      # the new owner must be visible to the next check
     return _keyword_form(user)
 end
 special!(Symbol("chown!"), _bi_chown)
@@ -448,3 +536,9 @@ special!(:assume, _bi_assume)
 # read opaquely instead of revealing its body.
 air_string(env::Env, x::Form) =
     task_local_storage(() -> air_string(x), :airlang_show_env, env)
+
+# The pretty-printing counterpart: the same permission-aware view, broken across
+# lines by `air_pretty_string`.
+air_pretty_string(env::Env, x::Form; width::Integer = 80) =
+    task_local_storage(() -> air_pretty_string(x; width = width),
+                       :airlang_show_env, env)

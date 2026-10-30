@@ -49,8 +49,11 @@
     @test ev("(do (chown! .m.acl :mallory) (except ?e :bad-user))") == ":bad-user"
     @test ev("(chmod! .m.acl read=(_=true))") != ":err"
     @test ev("(chown! .m.acl :bob)") == ":bob"
+    # Every ACL carries the four fact/rule permissions alongside the entry ones.
     @test ev("(permissions .m.acl)") ==
-        "(acl=(exec=(air=true) read=(_=true) write=(air=true)) owner=:bob)"
+        "(acl=(exec=(air=true) read=(_=true) readfact=(air=true) " *
+        "readrule=(air=true) write=(air=true) writefact=(air=true) " *
+        "writerule=(air=true)) owner=:bob)"
     # `air` is always a principal.
     @test ev("(chmod! .m.acl read=(air=true))") != ":err"
 
@@ -83,11 +86,17 @@
     @test ev2("(users)") == "(:air :bob)"
     @test ev2("(as-user :bob (.m.work.f 2))") == "3"
     @test ev2("(permissions .m.work.f)") ==
-        "(acl=(exec=(bob=true) read=(bob=true) write=(air=true)) owner=:air)"
+        "(acl=(exec=(bob=true) read=(bob=true) readfact=(air=true) " *
+        "readrule=(air=true) write=(air=true) writefact=(air=true) " *
+        "writerule=(air=true)) owner=:air)"
     @test ev2("(permissions .m.work)") ==
-        "(acl=(exec=(bob=true) read=(bob=true) write=(air=true)) owner=:air)"
+        "(acl=(exec=(bob=true) read=(bob=true) readfact=(air=true) " *
+        "readrule=(air=true) write=(air=true) writefact=(air=true) " *
+        "writerule=(air=true)) owner=:air)"
     @test ev2("(permissions .m.acl)") ==
-        "(acl=(exec=(air=true) read=(air=true) write=(air=true)) owner=:bob)"
+        "(acl=(exec=(air=true) read=(air=true) readfact=(air=true) " *
+        "readrule=(air=true) write=(air=true) writefact=(air=true) " *
+        "writerule=(air=true)) owner=:bob)"
     @test ev2("(as-user :bob (h 1))") == "8"
 
     # ---- a nested database root ---------------------------------------------
@@ -135,8 +144,9 @@
     @test open_airdb!(dbenv, [:o], db3; opener = :carol) isa VolatileForm
     # A new root belongs to its opener, even when the call comes from Julia.
     @test dv("(permissions .o)") ==
-        "(acl=(exec=(carol=true) read=(carol=true) write=(carol=true)) " *
-        "owner=:carol)"
+        "(acl=(exec=(carol=true) read=(carol=true) readfact=(carol=true) " *
+        "readrule=(carol=true) write=(carol=true) writefact=(carol=true) " *
+        "writerule=(carol=true)) owner=:carol)"
     @test dv("(as-user :carol (current-user))") == ":carol"
     @test dv("(as-user :carol (create-constituent :game))") == ":carol:game"
     @test startswith(dv("(as-user :carol:game \$)"), "(mut ")

@@ -1,0 +1,44 @@
+name: Docs
+
+# Builds the Air book (Jupyter Book 2 / MyST) and publishes it to GitHub Pages.
+# Pull requests build the book but do not publish it. `bin/deploy-docs` does
+# the same from a local checkout; it pushes to the same `gh-pages` branch.
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build the book
+        working-directory: book
+        env:
+          # GitHub project pages are served from /AirLang.jl/.
+          BASE_URL: /AirLang.jl
+        run: npx -y mystmd@latest build --html --strict
+
+      - name: Deploy to GitHub Pages
+        if: github.event_name != 'pull_request'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: book/_build/html
+          publish_branch: gh-pages
+          force_orphan: true

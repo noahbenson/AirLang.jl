@@ -65,6 +65,110 @@ const _MAX_ROUNDS = 1_000
 
 # ---- the set value -----------------------------------------------------------
 
+# ---- targets -----------------------------------------------------------------
+
+# A logic target: a namespace (whose set is a hidden named form) or a
+# standalone logic-set handle. A namespace target carries no resolved set; it is
+# looked up (and created lazily on the first write) per operation.
+struct _LogicTarget
+    ns::Union{Nothing,Namespace}
+    vf::Union{Nothing,VolatileForm}
+end
+
+_current_ns_target(env::Env) = begin
+    ns = _context(env).ns
+    ns isa Namespace || throw(AirEvalError(
+        "there is no current namespace for a logic operation"))
+    _LogicTarget(ns, nothing)
+end
+
+_same_target(a::_LogicTarget, b::_LogicTarget) =
+    if a.ns !== nothing || b.ns !== nothing
+        a.ns !== nothing && b.ns !== nothing && a.ns.vf.id == b.ns.vf.id
+    else
+        a.vf === b.vf || (a.vf !== nothing && b.vf !== nothing &&
+                          a.vf.id == b.vf.id)
+    end
+
+# The named-form name of a namespace's implicit set; `air/` is reserved, so it
+# is invisible to `named-forms` and cannot be opened by name.
+const _LOGIC_NAME_ROOT = "air/logic"
+
+_logic_name(path::Vector{Symbol}) =
+    isempty(path) ? _LOGIC_NAME_ROOT : _LOGIC_NAME_ROOT * "/" * join(String.(path), "/")
+
+# Resolve an explicit target argument: a leading-dot/`@` address or any value
+# that names a namespace or a logic-set handle. A raw address is not evaluated,
+# so a write-only target need not be readable.
+function _logic_target(env::Env, scope::Scope, form::Form)
+    if _path_root(form) !== nothing
+        path = _ns_address_path(env, form)
+        ns = _ns_lookup(env, path; lazy = false)
+        ns === nothing && throw(AirEvalError(
+            "no namespace at $(_ns_display(path))"))
+        return _LogicTarget(ns, nothing)
+    end
+    v = air_reduce(env, scope, form)
+    v isa VolatileForm || throw(AirEvalError(
+        "expected a namespace or logic-set, got $(air_string(v))"))
+    ns = _ns_from_value(env, v)
+    return ns === nothing ? _LogicTarget(nothing, v) : _LogicTarget(ns, nothing)
+end
+
+# The target a bare operation uses: the enclosing `logic` block or rule
+# firing, else the current namespace.
+function _bare_logic_target(env::Env)
+    ctx = env.logic_ctx
+    ctx isa _LogicCtx && return ctx.target
+    return _current_ns_target(env)
+end
+
+# The set volatile behind a target, or `nothing` for an absent namespace set.
+# With `create`, a namespace's set is created inside the caller's transaction.
+function _logic_vf(env::Env, t::_LogicTarget; create::Bool = false)
+    t.vf !== nothing && return t.vf
+    ns = t.ns
+    ns === nothing && return nothing
+    db = _ns_db(env, ns)
+    name = _logic_name(ns.path)
+    vf = named_form(db, name; create = nothing)
+    vf !== nothing && return vf
+    create || return nothing
+    owner = _check_db_principal!(env, db, _meta_owner(ns.vf))
+    return named_form(db, name; create = true, value = _empty_logic_set(),
+                      metadata = _metadata_form(owner; acl = _perms_acl(owner)))
+end
+
+# The target's current set value; an absent namespace set reads as empty.
+function _logic_value(env::Env, t::_LogicTarget)
+    vf = _logic_vf(env, t)
+    return vf === nothing ? _empty_logic_set() : vf[]
+end
+
+function _target_form(env::Env, t::_LogicTarget)
+    t.ns !== nothing && return _ns_path_form(t.ns.path)
+    t.vf === nothing && return Form(Symbol(":logic-set"))
+    return _vf_target(env, t.vf)
+end
+
+# Check a fact/rule permission on a namespace target, or its entry equivalent on
+# a standalone set.
+function _check_target!(env::Env, t::_LogicTarget, perm::Symbol)
+    if t.ns !== nothing
+        _check!(env, t.ns.vf, perm, _ns_path_form(t.ns.path))
+    elseif t.vf !== nothing
+        _check!(env, t.vf, _standalone_logic_perm(perm))
+    end
+    return nothing
+end
+
+# Whether operations are currently unchecked: a rule's side effects run with the
+# authority of the write that triggered them.
+_logic_unchecked(env::Env) = begin
+    ctx = env.logic_ctx
+    ctx isa _LogicCtx && ctx.gated
+end
+
 # A logic-set's initial (empty) value.
 function _empty_logic_set()
     mp = Pair{Symbol,Any}[k => _store_form(FormContainer(FormSeq(FormValue[]), FormMap()))
@@ -393,30 +497,37 @@ end
 
 # ---- matching ----------------------------------------------------------------
 
+# The universe a pattern ranges over: a `(rule …)`-headed pattern matches the
+# rule list, everything else the fact list.
+_universe_for(p::Form, facts::Vector{Form}, rules::Vector{Form}) =
+    _is_logic_rule(p) ? rules : facts
+
 # Every (binding, held-premise) pair of the positive patterns that also
 # satisfies the negations. Premises are kept in positive-pattern order. Facts
-# are stored held, so matching looks through the hold.
-function _join_all(env::Env, lr::_LogicRule, facts::Vector{Form})
+# and rules are stored held, so matching looks through the hold. The rule list
+# defaults to the fact list (the ordinary forward-chaining case).
+function _join_all(env::Env, lr::_LogicRule, facts::Vector{Form},
+                   rules::Vector{Form} = facts)
     out = Tuple{Dict{Symbol,Form},Vector{Form}}[]
-    _join_step!(env, lr, 1, Dict{Symbol,Form}(), Form[], facts, out)
+    _join_step!(env, lr, 1, Dict{Symbol,Form}(), Form[], facts, rules, out)
     return out
 end
 
-function _join_step!(env::Env, lr, i::Int, binds, prems, facts, out)
+function _join_step!(env::Env, lr, i::Int, binds, prems, facts, rules, out)
     if i > length(lr.pos)
-        for np in lr.neg, f in facts
+        for np in lr.neg, f in _universe_for(np, facts, rules)
             air_match(env, _base_scope(env), np, _strip_hold(f), copy(binds)) === nothing ||
                 return nothing
         end
         push!(out, (binds, copy(prems)))
         return nothing
     end
-    for f in facts
+    for f in _universe_for(lr.pos[i], facts, rules)
         # `air_match` mutates its binding dict, so each branch gets its own copy.
         b = air_match(env, _base_scope(env), lr.pos[i], _strip_hold(f), copy(binds))
         b === nothing && continue
         push!(prems, f)
-        _join_step!(env, lr, i + 1, b, prems, facts, out)
+        _join_step!(env, lr, i + 1, b, prems, facts, rules, out)
         pop!(prems)
     end
     return nothing
@@ -830,8 +941,7 @@ mutable struct _LogicCtx
     ops::Vector{Any}
     trigger::Symbol
     gated::Bool
-    base::Set{Form}
-    set::Any
+    target::_LogicTarget
 end
 
 # The mapping bound to `_` during `:=`: each matched wildcard whose value changed,
@@ -883,15 +993,15 @@ end
 # the consequences are skipped (the activation is gone) and only `:if`, `:let`,
 # and `:-` run, with the vanished activation's bindings.
 function _run_program(env::Env, lr::_LogicRule, act::_Activation,
-                      trigger::Symbol, old_binds, ops::Vector{Any})
+                      trigger::Symbol, old_binds, ops::Vector{Any},
+                      target::_LogicTarget)
     binds = copy(act.binds)
     if trigger === :revise && old_binds !== nothing
         binds[Symbol("_")] = _changed_bindings(old_binds, act.binds)
     end
     outs = Union{Nothing,Form}[nothing for _ in 1:lr.nslots]
     slot = 0
-    ctx = _LogicCtx(binds, act.premises, lr.rests, ops, trigger, true,
-                    Set{Form}(), nothing)
+    ctx = _LogicCtx(binds, act.premises, lr.rests, ops, trigger, true, target)
     for (kind, form) in lr.program
         if kind === _INS_IF
             truthy(_eval_with(env, form, binds)) || break
@@ -946,17 +1056,24 @@ function _rewrite_fact(env::Env, f::Form, binds::Dict{Symbol,Form}, kmap)
     return nf
 end
 
-# Replace every occurrence of `old` in `x` by `new`.
+# Replace every occurrence of `old` in `x` by `new`. An untouched leaf keeps its
+# stored representation (`FormScalar` versus raw leaf); a replaced one is stored
+# in canonical form. Rewriting a form must not make an identical fact compare
+# unequal to itself after a round trip.
 function _replace_value(x::Form, old::Form, new::Form)
     isequal(x, old) && return new
     x isa FormContainer || return x
     seq = FormValue[]
     for a in x.seq
-        push!(seq, _store_form(_replace_value(to_form(a), old, new)))
+        af = to_form(a)
+        r = _replace_value(af, old, new)
+        push!(seq, r === af ? a : _store_form(r))
     end
     mp = Pair{Symbol,FormValue}[]
     for (k, v) in x.map
-        push!(mp, k => _store_form(_replace_value(to_form(v), old, new)))
+        vf = to_form(v)
+        r = _replace_value(vf, old, new)
+        push!(mp, k => (r === vf ? v : _store_form(r)))
     end
     return FormContainer(FormSeq(seq), FormMap(mp))
 end
@@ -1061,7 +1178,8 @@ end
 # each as an assertion / retraction / revision against the stored records, runs
 # the eligible instructions, folds their consequences and operations, and
 # reconciles the fact identities. The loop ends when a round changes nothing.
-function _fire(env::Env, value::Form; initial_ops = Any[])
+function _fire(env::Env, value::Form; initial_ops = Any[], target = nothing)
+    tgt = target === nothing ? _current_ns_target(env) : target
     rules = _set_forms(value, _SET_RULES)
     reasons = _load_reasons(value)
     ids = _load_ids(value)
@@ -1105,17 +1223,17 @@ function _fire(env::Env, value::Form; initial_ops = Any[])
         for o in gone
             lr = _parsed_for(parsed, o.rule)
             lr === nothing && continue    # the rule itself was retracted
-            _run_program(env, lr, o, :retract, nothing, buf)
+            _run_program(env, lr, o, :retract, nothing, buf, tgt)
         end
         for (o, a) in revs
             lr = parsed[a.ruleidx]
             newout[_activation_key(a)] =
-                _run_program(env, lr, a, :revise, o.binds, buf)
+                _run_program(env, lr, a, :revise, o.binds, buf, tgt)
         end
         for a in fresh
             lr = parsed[a.ruleidx]
             newout[_activation_key(a)] =
-                _run_program(env, lr, a, :assert, nothing, buf)
+                _run_program(env, lr, a, :assert, nothing, buf, tgt)
         end
 
         # ---- the new activation records -----------------------------------
@@ -1194,12 +1312,26 @@ function _bi_logic_set(env::Env, scope::Scope, call::FormContainer)
 end
 special!(Symbol("logic-set"), _bi_logic_set)
 
-# A logic-set handle argument. Every operation gates on the set's own metadata:
-# mutating it needs write, querying it needs read.
+# A logic-set handle argument. Standalone sets gate on their own metadata:
+# mutating one needs write, querying it needs read.
 function _as_logic_set(env::Env, x::Form, who::String, perm::Symbol = :write)
     x isa VolatileForm || throw(AirEvalError("$who needs a logic-set handle"))
     _check!(env, x, perm)
     return x
+end
+
+# Check a fact/rule permission (unless a rule side effect is running) and either
+# collect the operation into the active block/handler or fire it now.
+function _record_or_fire!(env::Env, t::_LogicTarget, op, perm::Symbol;
+                          join::Bool)
+    _logic_unchecked(env) || _check_target!(env, t, perm)
+    ctx = env.logic_ctx
+    if join && ctx isa _LogicCtx
+        push!(ctx.ops, op)
+    else
+        _fire_op(env, t, op)
+    end
+    return nothing
 end
 
 # The reason a fact-carrying operation records. Inside a gated side effect
@@ -1217,121 +1349,123 @@ function _read_reason(env::Env, scope::Scope, call::FormContainer, gated::Bool)
     return naught
 end
 
-# Apply one operation to a set and saturate; the transaction rolls back on error.
-function _fire_op(env::Env, vf, op)
+# Apply one operation to a target and saturate; the transaction rolls back on
+# error. A namespace's implicit set is created here, inside that transaction.
+function _fire_op(env::Env, t::_LogicTarget, op)
     _tx_boundary(env) do
-        vf[] = _fire(env, vf[], initial_ops = Any[op])
+        vf = _logic_vf(env, t; create = true)
+        vf[] = _fire(env, vf[], initial_ops = Any[op], target = t)
     end
     return nothing
 end
 
-# `(assert s form [reason=…])` or, in a side effect or block, `(assert form)`.
+# `(assert s form [reason=…])` or, with no target, `(assert form)` against the
+# enclosing `logic` block/handler or the current namespace.
 function _bi_assert(env::Env, scope::Scope, call::FormContainer)
     args = _sx(call.seq, 2:length(call.seq))
     ctx = env.logic_ctx
+    gated = ctx isa _LogicCtx && ctx.gated
     if length(args) == 1
-        ctx === nothing && throw(AirEvalError(
-            "assert needs a logic-set: write (assert set form)"))
+        t = _bare_logic_target(env)
         f = _factify(air_reduce(env, scope, to_form(args[1])))
-        push!(ctx.ops, (:assert, f, _read_reason(env, scope, call, ctx.gated)))
+        label = _read_reason(env, scope, call, gated)
+        _record_or_fire!(env, t, (:assert, f, label),
+                         _is_logic_rule(f) ? :writerule : :writefact; join = true)
         return f
     elseif length(args) == 2
-        vf = _as_logic_set(env, air_reduce(env, scope, to_form(args[1])), "assert")
+        t = _logic_target(env, scope, to_form(args[1]))
         f = _factify(air_reduce(env, scope, to_form(args[2])))
-        label = _read_reason(env, scope, call, ctx !== nothing && ctx.gated)
-        if ctx !== nothing && ctx.set === vf
-            push!(ctx.ops, (:assert, f, label))
-        else
-            _fire_op(env, vf, (:assert, f, label))
-        end
+        label = _read_reason(env, scope, call, gated)
+        join = ctx isa _LogicCtx && _same_target(ctx.target, t)
+        _record_or_fire!(env, t, (:assert, f, label),
+                         _is_logic_rule(f) ? :writerule : :writefact; join = join)
         return f
     end
-    throw(AirEvalError("assert takes a logic-set and a form"))
+    throw(AirEvalError("assert takes a target and a form, or a form in a block"))
 end
 special!(:assert, _bi_assert)
 
-# `(retract s form [reason=…])` or, in a side effect or block, `(retract form)`.
+# `(retract s form [reason=…])` or, with no target, `(retract form)`.
 function _bi_retract(env::Env, scope::Scope, call::FormContainer)
     args = _sx(call.seq, 2:length(call.seq))
     ctx = env.logic_ctx
+    gated = ctx isa _LogicCtx && ctx.gated
     if length(args) == 1
-        ctx === nothing && throw(AirEvalError(
-            "retract needs a logic-set: write (retract set form)"))
+        t = _bare_logic_target(env)
         f = _factify(air_reduce(env, scope, to_form(args[1])))
-        push!(ctx.ops, (:retract, f, _read_reason(env, scope, call, ctx.gated)))
+        label = _read_reason(env, scope, call, gated)
+        _record_or_fire!(env, t, (:retract, f, label),
+                         _is_logic_rule(f) ? :writerule : :writefact; join = true)
         return f
     elseif length(args) == 2
-        vf = _as_logic_set(env, air_reduce(env, scope, to_form(args[1])), "retract")
+        t = _logic_target(env, scope, to_form(args[1]))
         f = _factify(air_reduce(env, scope, to_form(args[2])))
-        label = _read_reason(env, scope, call, ctx !== nothing && ctx.gated)
-        if ctx !== nothing && ctx.set === vf
-            push!(ctx.ops, (:retract, f, label))
-        else
-            _fire_op(env, vf, (:retract, f, label))
-        end
+        label = _read_reason(env, scope, call, gated)
+        join = ctx isa _LogicCtx && _same_target(ctx.target, t)
+        _record_or_fire!(env, t, (:retract, f, label),
+                         _is_logic_rule(f) ? :writerule : :writefact; join = join)
         return f
     end
-    throw(AirEvalError("retract takes a logic-set and a form"))
+    throw(AirEvalError("retract takes a target and a form, or a form in a block"))
 end
 special!(:retract, _bi_retract)
 
-# `(revise s condition changes [reason=…])`, or in a side effect,
+# `(revise s condition changes [reason=…])`, or with no target,
 # `(revise condition changes)`. The condition's wildcards name the positions to
 # rewrite; the map gives their new values. Only base facts can be revised.
 function _bi_revise(env::Env, scope::Scope, call::FormContainer)
     seq = _sx(call.seq, 1:length(call.seq))
     ctx = env.logic_ctx
+    gated = ctx isa _LogicCtx && ctx.gated
     if length(seq) == 3
-        ctx === nothing && throw(AirEvalError(
-            "revise needs a logic-set: write (revise set condition changes)"))
+        t = _bare_logic_target(env)
         cond = to_form(seq[2]); kmap = to_form(seq[3])
-        push!(ctx.ops, (:revise, cond, kmap, _read_reason(env, scope, call, ctx.gated)))
+        label = _read_reason(env, scope, call, gated)
+        _record_or_fire!(env, t, (:revise, cond, kmap, label), :writefact;
+                         join = true)
         return naught
     elseif length(seq) == 4
-        vf = _as_logic_set(env, air_reduce(env, scope, to_form(seq[2])), "revise")
+        t = _logic_target(env, scope, to_form(seq[2]))
         cond = to_form(seq[3]); kmap = to_form(seq[4])
-        label = _read_reason(env, scope, call, ctx !== nothing && ctx.gated)
-        if ctx !== nothing && ctx.set === vf
-            push!(ctx.ops, (:revise, cond, kmap, label))
-        else
-            _fire_op(env, vf, (:revise, cond, kmap, label))
-        end
+        label = _read_reason(env, scope, call, gated)
+        join = ctx isa _LogicCtx && _same_target(ctx.target, t)
+        _record_or_fire!(env, t, (:revise, cond, kmap, label), :writefact;
+                         join = join)
         return naught
     end
     throw(AirEvalError(
-        "revise takes (revise set condition changes) or, in a side effect, " *
+        "revise takes (revise target condition changes) or, with no target, " *
         "(revise condition changes)"))
 end
 special!(:revise, _bi_revise)
 
-# `(revise-fact s old new [reason=…])`, or in a side effect,
+# `(revise-fact s old new [reason=…])`, or with no target,
 # `(revise-fact old new)`. Both facts are written out; only a base fact can be
 # revised.
 function _bi_revise_fact(env::Env, scope::Scope, call::FormContainer)
     args = _sx(call.seq, 2:length(call.seq))
     ctx = env.logic_ctx
+    gated = ctx isa _LogicCtx && ctx.gated
     if length(args) == 2
-        ctx === nothing && throw(AirEvalError(
-            "revise-fact needs a logic-set: write (revise-fact set old new)"))
+        t = _bare_logic_target(env)
         old = _factify(air_reduce(env, scope, to_form(args[1])))
         new = _factify(air_reduce(env, scope, to_form(args[2])))
-        push!(ctx.ops, (:revise_fact, old, new,
-                        _read_reason(env, scope, call, ctx.gated)))
+        label = _read_reason(env, scope, call, gated)
+        _record_or_fire!(env, t, (:revise_fact, old, new, label), :writefact;
+                         join = true)
         return naught
     elseif length(args) == 3
-        vf = _as_logic_set(env, air_reduce(env, scope, to_form(args[1])), "revise-fact")
+        t = _logic_target(env, scope, to_form(args[1]))
         old = _factify(air_reduce(env, scope, to_form(args[2])))
         new = _factify(air_reduce(env, scope, to_form(args[3])))
-        label = _read_reason(env, scope, call, ctx !== nothing && ctx.gated)
-        if ctx !== nothing && ctx.set === vf
-            push!(ctx.ops, (:revise_fact, old, new, label))
-        else
-            _fire_op(env, vf, (:revise_fact, old, new, label))
-        end
+        label = _read_reason(env, scope, call, gated)
+        join = ctx isa _LogicCtx && _same_target(ctx.target, t)
+        _record_or_fire!(env, t, (:revise_fact, old, new, label), :writefact;
+                         join = join)
         return naught
     end
     throw(AirEvalError(
-        "revise-fact takes (revise-fact set old new) or, in a side effect, " *
+        "revise-fact takes (revise-fact target old new) or, with no target, " *
         "(revise-fact old new)"))
 end
 special!(Symbol("revise-fact"), _bi_revise_fact)
@@ -1357,15 +1491,15 @@ function _update_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::B
 end
 _hold_pair!(:update, _update_call)
 
-# `(logic s body…)` — evaluate the body with `s` as the set of any bare or
-# set-targeted operation, collecting them into one event. Reads inside the body
-# see the set as it was on entry; the edits are applied together at the end.
+# `(logic s body…)` — evaluate the body with `s` as the target of any bare or
+# same-targeted operation, collecting them into one event. `s` may be a
+# namespace or a standalone logic-set. Reads inside the body see the set as it
+# was on entry; the edits are applied together at the end.
 function _bi_logic(env::Env, scope::Scope, call::FormContainer)
-    length(call.seq) >= 2 || throw(AirEvalError("logic needs a logic-set"))
-    vf = _as_logic_set(env, air_reduce(env, scope, to_form(call.seq[2])), "logic")
+    length(call.seq) >= 2 || throw(AirEvalError("logic needs a target"))
+    t = _logic_target(env, scope, to_form(call.seq[2]))
     ops = Any[]
-    ctx = _LogicCtx(nothing, Form[], Set{Symbol}(), ops, :block, false,
-                    Set{Form}(_unique_facts(_load_reasons(vf[]))), vf)
+    ctx = _LogicCtx(nothing, Form[], Set{Symbol}(), ops, :block, false, t)
     prev = env.logic_ctx
     env.logic_ctx = ctx
     result = naught
@@ -1377,26 +1511,55 @@ function _bi_logic(env::Env, scope::Scope, call::FormContainer)
         env.logic_ctx = prev
     end
     isempty(ops) || _tx_boundary(env) do
-        vf[] = _fire(env, vf[], initial_ops = ops)
+        vf = _logic_vf(env, t; create = true)
+        vf[] = _fire(env, vf[], initial_ops = ops, target = t)
     end
     return result
 end
 special!(:logic, _bi_logic)
 
-# `(facts s)` / `(rules s)` — the set's facts (including derived) or rules.
-function _set_part(env::Env, vf, key::Symbol, who::String)
-    vf = _as_logic_set(env, vf, who, :read)
-    return canonicalize(FormContainer(FormSeq(_set_seq(vf[], key)), FormMap()))
+# The facts (including derived) or rules of a target, as one held list. A set
+# holds each fact and rule held, so the list strips that layer and holds the
+# whole list instead: `(' (p 1) (q 2))`, and `(')` when there are none. The
+# hold keeps the result data — evaluating it does not reduce the facts.
+function _set_part(env::Env, t::_LogicTarget, key::Symbol, who::String,
+                   perm::Symbol)
+    _logic_unchecked(env) || _check_target!(env, t, perm)
+    vf = _logic_vf(env, t)
+    vf === nothing && return _hold_form(FormValue[], FormMap())
+    seq = FormValue[_store_form(_strip_hold(f)) for f in _set_forms(vf[], key)]
+    return _hold_form(seq, FormMap())
 end
-builtin!(:facts, (env, scope, args) -> _set_part(env, args[1], _SET_FACTS, "facts"))
-builtin!(:rules, (env, scope, args) -> _set_part(env, args[1], _SET_RULES, "rules"))
 
-# `(why s fact)` — every reason recorded for a fact: explicit base labels and
-# the `(because rule premises…)` provenance of each derivation, deduplicated.
-builtin!(:why, (env, scope, args) -> begin
-    vf = _as_logic_set(env, args[1], "why", :read)
-    length(args) >= 2 || throw(AirEvalError("why needs a fact"))
-    target = _factify(args[2])
+# `(facts target)` / `(rules target)` — a namespace or logic-set's facts or rules.
+function _bi_facts(env::Env, scope::Scope, call::FormContainer)
+    length(call.seq) == 2 || throw(AirEvalError("facts expects a target"))
+    t = _logic_target(env, scope, to_form(call.seq[2]))
+    return _set_part(env, t, _SET_FACTS, "facts", :readfact)
+end
+special!(:facts, _bi_facts)
+
+function _bi_rules(env::Env, scope::Scope, call::FormContainer)
+    length(call.seq) == 2 || throw(AirEvalError("rules expects a target"))
+    t = _logic_target(env, scope, to_form(call.seq[2]))
+    return _set_part(env, t, _SET_RULES, "rules", :readrule)
+end
+special!(:rules, _bi_rules)
+
+# `(why target fact)` — every reason recorded for a fact: explicit base labels
+# and the `(because rule premises…)` provenance of each derivation,
+# deduplicated. A namespace target needs both fact and rule read permission.
+function _bi_why(env::Env, scope::Scope, call::FormContainer)
+    length(call.seq) >= 3 || throw(AirEvalError("why needs a target and a fact"))
+    t = _logic_target(env, scope, to_form(call.seq[2]))
+    if !_logic_unchecked(env)
+        _check_target!(env, t, :readfact)
+        t.ns === nothing || _check_target!(env, t, :readrule)
+    end
+    target = _factify(air_reduce(env, scope, to_form(call.seq[3])))
+    vf = _logic_vf(env, t)
+    vf === nothing && return naught
+    value = vf[]
     out = FormValue[]
     seen = Set{String}()
     push_reason! = r -> begin
@@ -1404,17 +1567,168 @@ builtin!(:why, (env, scope, args) -> begin
         (s in seen) && return nothing
         push!(seen, s); push!(out, _store_form(r))
     end
-    for (f, label) in _load_reasons(vf[])
+    for (f, label) in _load_reasons(value)
         isequal(f, target) && push_reason!(label)
     end
-    for w in _set_seq(vf[], _SET_WHY)
+    for w in _set_seq(value, _SET_WHY)
         rec = to_form(w)
         (rec isa FormContainer && length(rec.seq) >= 2) || continue
         isequal(to_form(rec.seq[1]), target) || continue
         push_reason!(to_form(rec.seq[2]))
     end
     return canonicalize(FormContainer(FormSeq(out), FormMap()))
-end)
+end
+special!(:why, _bi_why)
+
+# ---- query -------------------------------------------------------------------
+
+# The target-valued heads a query's first argument may have. (An address path
+# and a bound handle are recognized without reduction; reducing an arbitrary
+# pattern could run a user rule.)
+const _QUERY_TARGET_HEADS = (Symbol("logic-set"), Symbol("named-form"),
+                             Symbol("get"), Symbol("form-at"), Symbol("preval"))
+
+function _is_query_target(env::Env, scope::Scope, form::Form)
+    form isa VolatileForm && return true
+    _path_root(form) !== nothing && return true
+    s = _symbolof(form)
+    if s !== nothing
+        is_raw_symbol(s) || return false
+        scope_get(scope, s) === nothing && return false
+        return air_reduce(env, scope, form) isa VolatileForm
+    end
+    if form isa FormContainer
+        head_symbol(form) in _QUERY_TARGET_HEADS || return false
+        return air_reduce(env, scope, form) isa VolatileForm
+    end
+    return false
+end
+
+# A query's condition block: the rule grammar's positive/negated patterns, with
+# no instructions and no accumulators.
+function _query_rule(forms::Vector{Form})
+    pos = Form[]; neg = Form[]
+    for f in forms
+        _flatten_cond!(f, pos, neg)
+    end
+    (isempty(pos) && isempty(neg)) &&
+        throw(AirEvalError("query needs at least one pattern"))
+    return _LogicRule(naught, pos, neg, _AccumSpec[], Tuple{Symbol,Form}[],
+                      0, Set{Symbol}())
+end
+
+# One satisfier as a plain map of `:name` keys; an unbound satisfier is `naught`.
+function _query_answer(binds::Dict{Symbol,Form})
+    pairs = Pair{Symbol,Form}[Symbol(":" * String(k)) => v for (k, v) in binds]
+    return _ns_form(Form[], pairs)
+end
+
+# `(query [target] pattern…)` — every distinct satisfier of a rule-like pattern
+# block over the target's facts and rules. The target defaults to the enclosing
+# `logic` block/handler, else the current namespace. Returns a plain list.
+function _bi_query(env::Env, scope::Scope, call::FormContainer)
+    raw = Form[to_form(v) for v in _sx(call.seq, 2:length(call.seq))]
+    t = nothing
+    if !isempty(raw) && _is_query_target(env, scope, raw[1])
+        t = _logic_target(env, scope, popfirst!(raw))
+    end
+    t === nothing && (t = _bare_logic_target(env))
+    isempty(raw) && throw(AirEvalError("query needs at least one pattern"))
+    lr = _query_rule(raw)
+    if !_logic_unchecked(env)
+        factp = any(p -> !_is_logic_rule(p), lr.pos) ||
+                any(p -> !_is_logic_rule(p), lr.neg)
+        rulep = any(_is_logic_rule, lr.pos) || any(_is_logic_rule, lr.neg)
+        factp && _check_target!(env, t, :readfact)
+        rulep && _check_target!(env, t, :readrule)
+    end
+    value = _logic_value(env, t)
+    facts = _set_forms(value, _SET_FACTS)
+    rules = _set_forms(value, _SET_RULES)
+    out = Form[]; seen = Set{Form}()
+    for (binds, _) in _join_all(env, lr, facts, rules)
+        a = _query_answer(binds)
+        (a in seen) && continue
+        push!(seen, a); push!(out, a)
+    end
+    return _ns_form(out)
+end
+special!(:query, _bi_query)
+
+# ---- defrule -----------------------------------------------------------------
+
+# `(defrule conditions… instructions… [reason=…])` — assert `(rule …)` into the
+# active target (the `logic` block/handler, else the current namespace) without
+# reducing the rule's arguments.
+function _bi_defrule(env::Env, scope::Scope, call::FormContainer)
+    length(call.seq) >= 2 || throw(AirEvalError("defrule needs a rule body"))
+    for k in keys(call.map)
+        k === _REASON_KEY ||
+            throw(AirEvalError("defrule takes no key=value entries besides reason="))
+    end
+    seq = FormValue[_store_form(Form(_RULE_HEAD))]
+    for v in _sx(call.seq, 2:length(call.seq))
+        push!(seq, v)
+    end
+    rule = Form(PVector{Any}(seq), PDict{Symbol,Any}())
+    f = _factify(rule)
+    t = _bare_logic_target(env)
+    ctx = env.logic_ctx
+    label = _read_reason(env, scope, call, ctx isa _LogicCtx && ctx.gated)
+    _record_or_fire!(env, t, (:assert, f, label), :writerule;
+                     join = ctx isa _LogicCtx)
+    return f
+end
+special!(:defrule, _bi_defrule)
+
+# ---- ingest ------------------------------------------------------------------
+
+# `(ingest source)` — copy a namespace's or logic-set's base facts and rules
+# into the active target (the `logic` block/handler, else the current
+# namespace), then saturate. All required permissions are checked before any
+# mutation, so the ingest is all-or-nothing.
+function _bi_ingest(env::Env, scope::Scope, call::FormContainer)
+    length(call.seq) == 2 || throw(AirEvalError("ingest takes one source"))
+    src = _logic_target(env, scope, to_form(call.seq[2]))
+    ctx = env.logic_ctx
+    dst = ctx isa _LogicCtx ? ctx.target : _current_ns_target(env)
+    value = _logic_value(env, src)
+    base = _set_forms(value, _SET_BASE)
+    rules = _set_forms(value, _SET_RULES)
+    has_facts = !isempty(base)
+    has_rules = !isempty(rules)
+    if !_logic_unchecked(env)
+        if has_facts
+            _check_target!(env, src, :readfact)
+            _check_target!(env, dst, :writefact)
+        end
+        if has_rules
+            _check_target!(env, src, :readrule)
+            _check_target!(env, dst, :writerule)
+        end
+    end
+    (has_facts || has_rules) || return naught
+    label = _keyword_form(:ingest)
+    ops = Any[(:assert, f, label) for f in base]
+    append!(ops, Any[(:assert, r, label) for r in rules])
+    if ctx isa _LogicCtx
+        # Inside a `logic` block or a rule side effect the copies join the
+        # enclosing batch, so the block stays one transaction.
+        append!(ctx.ops, ops)
+        return naught
+    end
+    _tx_boundary(env) do
+        vf = _logic_vf(env, dst; create = true)
+        vf[] = _fire(env, vf[], initial_ops = ops, target = dst)
+    end
+    return naught
+end
+special!(:ingest, _bi_ingest)
+
+# `(depend …)` — reserved for live propagation between logic sets.
+special!(:depend, (env, scope, call) -> throw(AirEvalError(
+    "depend is not implemented; live propagation between logic sets is " *
+    "tracked in TODO.md")))
 
 # `(because rule premises…)` — the reason form of a derivation. The first
 # argument is a rule form, a keyword label, or naught.

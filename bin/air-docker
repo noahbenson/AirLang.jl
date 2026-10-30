@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Run the air command line inside the airlang image.
+#
+#     bin/air-docker                     # the REPL
+#     bin/air-docker -e '(+ 1 2)'        # => 3
+#     bin/air-docker program.air
+#     bin/air-docker --build -e '(+ 1 2)'  # rebuild the image first
+#
+# The image is built from this repository's Dockerfile; the sibling Air.jl and
+# AirDB.jl checkouts are passed as the named build contexts `air` and `airdb`.
+# The host's ./lib is mounted at /air/lib (the first AIR_LIBPATH entry) and the
+# current directory at /work, so file arguments are resolved on the host. Set
+# AIR_IMAGE to use a different image tag.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+image="${AIR_IMAGE:-airlang:latest}"
+
+if [ "${1:-}" = "--build" ]; then
+    shift
+    docker build -t "$image" \
+        --build-context air="$root/../Air.jl" \
+        --build-context airdb="$root/../AirDB.jl" \
+        "$root"
+fi
+
+run=(docker run --rm
+     -v "$root/lib:/air/lib:ro"
+     -v "$PWD:/work" -w /work
+     "$image")
+
+# An interactive terminal gets a TTY (for the REPL); a pipe does not.
+if [ -t 0 ] && [ -t 1 ]; then
+    exec "${run[@]}" -it "$@"
+else
+    exec "${run[@]}" "$@"
+fi

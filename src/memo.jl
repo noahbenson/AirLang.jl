@@ -45,7 +45,7 @@ function _memo_parse(raw::Form, name::AbstractString = "def")
         n = to_form(raw.seq[2])
         (n isa FormScalar && value(n) isa Integer && value(n) > 0) ||
             throw(AirDefError("$name: (:lru max) needs a positive integer maximum"))
-        return _MemoConfig(:lru, Int(value(n)))
+        return _MemoConfig(:lru, _as_int(value(n), "$name: (:lru max)"))
     end
     throw(AirDefError(
         "$name: memoize= must be :weak, true, false, or (:lru max), got $(air_string(raw))"))

@@ -96,8 +96,8 @@ function air_repl(io_in::IO = stdin, io_out::IO = stdout; env::Env = default_env
             for x in val
                 try
                     r = air_eval(env, x)
-                    println(io_out, pretty ? air_pretty_string(r; width = width) :
-                                            air_string(r))
+                    println(io_out, pretty ? air_pretty_string(env, r; width = width) :
+                                            air_string(env, r))
                 catch e
                     e isa AirError || rethrow()
                     println(io_out, "error: ", sprint(showerror, e))

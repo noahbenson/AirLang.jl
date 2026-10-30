@@ -289,7 +289,24 @@ builtin!(Symbol("string-lines"), (env, scope, args) -> begin
     return FormContainer(FormSeq(FormValue[Form(l) for l in split(s, '\n')]), FormMap())
 end)
 
-builtin!(Symbol("form->string"), (env, scope, args) -> Form(air_string(env, _arg(args, 1, "form->string"))))
+# `(form->string x pretty=true width=n)` — the source text of a form. The default
+# is the flat spelling; `pretty=true` breaks it across lines to fit `width`.
+function _bi_form_to_string(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "form->string", (Symbol(":pretty"), Symbol(":width")))
+    length(call.seq) == 2 || throw(AirEvalError("form->string takes one form"))
+    x = air_reduce(env, scope, to_form(call.seq[2]))
+    pretty = haskey(call.map, Symbol(":pretty")) &&
+             truthy(air_reduce(env, scope, to_form(call.map[Symbol(":pretty")])))
+    width = 80
+    if haskey(call.map, Symbol(":width"))
+        l = _leafof(air_reduce(env, scope, to_form(call.map[Symbol(":width")])))
+        (l isa Integer && l >= 1) ||
+            throw(AirEvalError("form->string: width must be a positive integer"))
+        width = _as_int(l, "form->string: width")
+    end
+    return Form(pretty ? air_pretty_string(env, x; width = width) : air_string(env, x))
+end
+special!(Symbol("form->string"), _bi_form_to_string)
 builtin!(Symbol("string->form"), (env, scope, args) -> read_air(_str(_arg(args, 1, "string->form"), "string->form")))
 
 # ---- string-format -----------------------------------------------------------

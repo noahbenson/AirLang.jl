@@ -75,7 +75,7 @@ end
 # Walk `x` and refuse any volatile that does not belong to `db`: a form bound for
 # a database must not embed a link it cannot resolve there.
 function _walk_storable!(db::AirDB.AbstractDatabase, x::Form)
-    if x isa VolatileForm || x isa ActorForm
+    if x isa VolatileForm || x isa ActorForm || x isa StreamForm
         x.db === db || throw(AirUnstorable(x))
     elseif x isa PromiseForm
         x.db === db || throw(AirUnstorable(x))
@@ -120,7 +120,7 @@ function _db_int_opt(env::Env, scope::Scope, call, name::Symbol)
     v = _db_opt(env, scope, call, name)
     v === nothing && return nothing
     l = _leafof(v)
-    l isa Integer && return Int(l)
+    l isa Integer && return _as_int(l, String(name))
     throw(AirEvalError("$name must be an integer"))
 end
 
@@ -212,7 +212,7 @@ function open_airdb!(env::Env, path::Vector{Symbol}, db::AirDB.AbstractDatabase;
         # The opener's system record, read before attachment changes where a
         # user record is looked for.
         details = _user_details(env, opener)
-        return tx() do
+        root = tx() do
             haskey(env.dbs, key) && throw(AirEvalError(
                 "a database is already open at $(_ns_display(path))"))
             # A namespace rooted in another database cannot become this
@@ -230,11 +230,13 @@ function open_airdb!(env::Env, path::Vector{Symbol}, db::AirDB.AbstractDatabase;
             # came from Julia with an opener other than the current user.
             if !existed && opener !== _AIR
                 _check_db_principal!(env, db, opener)
-                set_metadata!(ns.vf, _metadata_form(opener;
-                                                    acl = _perms_acl(opener)))
+                _set_metadata!(ns.vf, _metadata_form(opener;
+                                                     acl = _perms_acl(opener)))
             end
             ns.vf
         end
+        _flush_metadata!()  # a new root's policy must be in place before use
+        return root
     catch
         c.dbroot = prevroot
         registered && delete!(env.dbs, key)

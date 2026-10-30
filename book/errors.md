@@ -1,4 +1,4 @@
-# AirLang Error Handling Specification
+# Error handling
 
 Air features a pattern-matched, structural error system integrated directly into
 its core evaluation engine, replacing traditional class-based exception

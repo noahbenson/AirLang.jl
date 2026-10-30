@@ -2,7 +2,8 @@
 # `permissions`, execute-without-read, `assume`, denial forms, printing, and the
 # permissions of `mut` volatiles.
 @testset "permissions" begin
-    env = Env(db = MemoryDatabase())
+    db = MemoryDatabase()
+    env = Env(db = db)
     ev(s) = air_string(air_eval(env, read_air(s)))
 
     @test ev("(create-user :alice)") == ":alice"
@@ -85,4 +86,18 @@
     @test ev("(as-user :alice (do (value .shared.shared-m) (except ?e :err)))") ==
           ":err"
     @test ev("(as-user :bob (value .shared.shared-m))") == "5"
+
+    # ---- metadata durability -------------------------------------------------
+    # A metadata edit is committed to the form's metadata row before the
+    # operation returns. A later payload read forces `load!`, which re-reads that
+    # row; it must see the new ACL, not revert to the old one. The same value is
+    # visible from a fresh environment over the database.
+    @test ev("(namespace .meta (val m (mut 5)))") == "naught"
+    @test ev("(chmod! (get . :meta :m) read=(bob=true))") != "naught"
+    @test ev("(value (get . :meta :m))") == "5"        # forces `load!`
+    @test ev("(get (permissions (get . :meta :m)) :acl :read :bob)") == "true"
+    let ev2 = s -> air_string(air_eval(Env(db = db), read_air(s)))
+        @test ev2("(get (permissions (get . :meta :m)) :acl :read :bob)") == "true"
+        @test ev2("(value (get . :meta :m))") == "5"
+    end
 end

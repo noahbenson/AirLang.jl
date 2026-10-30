@@ -1,0 +1,8 @@
+# The image needs the sources, not the repository's history or artifacts.
+.git
+.gitignore
+book/_build
+node_modules
+Manifest.toml
+pgdata
+.air

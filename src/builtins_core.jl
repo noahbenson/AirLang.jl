@@ -10,9 +10,9 @@
 # ---- predicates --------------------------------------------------------------
 
 builtin!(Symbol("form?"), (env, scope, args) -> Form(true))
-builtin!(Symbol("int?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "int?")) isa Int64))
-builtin!(Symbol("integer?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "integer?")) isa Int64))
-builtin!(Symbol("float?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "float?")) isa Float64))
+builtin!(Symbol("int?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "int?")) isa Integer))
+builtin!(Symbol("integer?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "integer?")) isa Integer))
+builtin!(Symbol("float?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "float?")) isa AbstractFloat))
 builtin!(Symbol("string?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "string?")) isa String))
 builtin!(Symbol("bool?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "bool?")) isa Bool))
 builtin!(Symbol("symbol?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "symbol?")) isa Symbol))
@@ -26,7 +26,7 @@ builtin!(Symbol("imm?"), (env, scope, args) -> _bool(!(_arg(args, 1, "imm?") isa
 builtin!(Symbol("true?"), (env, scope, args) -> _bool(isequal(_arg(args, 1, "true?"), Form(true))))
 builtin!(Symbol("false?"), (env, scope, args) -> _bool(isequal(_arg(args, 1, "false?"), Form(false))))
 builtin!(Symbol("empty?"), (env, scope, args) -> _bool(isequal(_arg(args, 1, "empty?"), naught)))
-builtin!(Symbol("complex?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "complex?")) isa ComplexF64))
+builtin!(Symbol("complex?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "complex?")) isa Complex))
 builtin!(Symbol("number?"), (env, scope, args) -> _bool(_leafof(_arg(args, 1, "number?")) isa Number))
 builtin!(Symbol("zero?"), (env, scope, args) -> _bool((l = _leafof(_arg(args, 1, "zero?")); l isa Number && iszero(l))))
 builtin!(Symbol("even?"), (env, scope, args) -> _bool((l = _leafof(_arg(args, 1, "even?")); l isa Integer && iseven(l))))
@@ -314,7 +314,8 @@ end)
 # containers, with `naught` first and containers last.
 function _cmp_rank(x::Form)
     x isa FormContainer && return 7
-    (x isa VolatileForm || x isa ActorForm || x isa PromiseForm || x isa DelayForm) && return 5
+    (x isa VolatileForm || x isa ActorForm || x isa PromiseForm || x isa DelayForm ||
+     x isa StreamForm) && return 5
     x isa FormExtern && return 6
     l = _leafof(x)
     l === nothing && return 0
@@ -348,11 +349,14 @@ function _cmp_forms(a::Form, b::Form)
         return 0
     elseif a isa VolatileForm || b isa VolatileForm || a isa FormExtern || b isa FormExtern ||
            a isa ActorForm || b isa ActorForm || a isa PromiseForm || b isa PromiseForm ||
-           a isa DelayForm || b isa DelayForm
+           a isa DelayForm || b isa DelayForm || a isa StreamForm || b isa StreamForm
         return isequal(a, b) ? 0 : cmp(air_string(a), air_string(b))
     end
     la, lb = _leafof(a), _leafof(b)
     if la isa Number && lb isa Number
+        # A complex value has no order, so it falls back to the printed spelling
+        # (the order stays total).
+        (la isa Real && lb isa Real) || return cmp(air_string(a), air_string(b))
         return la < lb ? -1 : (la > lb ? 1 : 0)
     elseif la isa AbstractString && lb isa AbstractString
         return cmp(la, lb)

@@ -3,8 +3,11 @@
 This directory is the first entry on `AIR_LIBPATH`, the `:`-separated library
 search path air reads when a library is first needed. The default path is
 `<repo>/lib` followed by `~/.air/lib`; set `AIR_LIBPATH` to change it, and the
-first directory containing a match wins. In the container this directory is the
-host's `./lib`, mounted at `/air/lib`.
+first directory containing a match wins.
+
+In the container this directory is mounted at `/air/lib` (the image's
+`AIR_LIBPATH`), so a library dropped here is available to `bin/air-docker` and
+`docker compose run --rm air` without rebuilding anything.
 
 ## Layout
 

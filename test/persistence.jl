@@ -57,7 +57,7 @@
     @test ev("(namespace .p (logic-set :s))") ==
         "(mut (active=naught base=naught facts=naught ids=naught reasons=naught rules=naught why=naught))"
     @test occursin("s=(mut", ev("(namespace .p (named-forms))"))
-    @test ev("(namespace .p (facts (logic-set :s)))") == "naught"
+    @test ev("(namespace .p (facts (logic-set :s)))") == "(')"
 
     # ---- persistence across environments ------------------------------------
     # A second environment over the same (still-open) database recovers the
@@ -66,7 +66,7 @@
     open_airdb!(env2, [:p], db)
     ev2(s) = air_string(air_eval(env2, read_air(s)))
     @test ev2("(namespace .p (value (named-form :a)))") == "42"
-    @test ev2("(namespace .p (facts (logic-set :s)))") == "naught"
+    @test ev2("(namespace .p (facts (logic-set :s)))") == "(')"
     # A handle to a form that is not in the database is unloaded, and reading it
     # reports the missing form; a real one is loaded once its body is read.
     @test ev("(loaded? (form-at \"00000000-0000-0000-0000-000000000001\"))") ==
@@ -105,13 +105,13 @@
     # `named-forms` filters out names the user cannot read.
     @test !occursin("s=", ev("(as-user :bob (named-forms))"))
     @test ev("(namespace .p (chmod! (named-form :s) read=(bob=true)))") != ":err"
-    @test ev("(as-user :bob (facts (logic-set :s)))") == "naught"
+    @test ev("(as-user :bob (facts (logic-set :s)))") == "(')"
     # Reading is not writing: `bob` may query but not assert until granted.
     @test ev("(as-user :bob (do (assert (logic-set :s) (p 1)) " *
              "(except (:permission-denied ?p ?t) :denied)))") == ":denied"
     @test ev("(namespace .p (chmod! (named-form :s) write=(bob=true)))") != ":err"
     @test ev("(as-user :bob (assert (logic-set :s) (p 1)))") == "(' p 1)"
-    @test ev("(namespace .p (facts (logic-set :s)))") == "((' p 1))"
+    @test ev("(namespace .p (facts (logic-set :s)))") == "(' (p 1))"
 
     # `bob` may create a named form in his own home, and `air` can see it; but he
     # may not overwrite an alias owned by someone else.

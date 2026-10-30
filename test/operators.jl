@@ -4,7 +4,11 @@
 
     # infix operators
     @test ev("(2 ^ 10)") == "1024"
-    @test ev("(7 // 2)") == "3"
+    @test ev("(7 // 2)") == "7//2"      # exact rational, as in Julia
+    @test ev("(7 / 2)") == "3.5"
+    @test ev("(div 7 2)") == "3"        # integer division
+    @test ev("(+ 1//3 1//6)") == "1//2"
+    @test ev("(+ 7//2 1)") == "9//2"
     @test ev("(7 mod 3)") == "1"
     @test ev("(1 <= 2)") == "true"
     @test ev("(3 >= 2)") == "true"

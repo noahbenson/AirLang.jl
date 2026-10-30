@@ -152,6 +152,9 @@ function _error_form(e)
                              _ns_path_form(e.path))
     e isa AirUnstorable &&
         return _error_object(Form(Symbol(":un-storable")), e.target)
+    e isa AirStreamError &&
+        return _error_object(Form[Form(Symbol(":" * String(e.tag))), e.data...],
+                             Pair{Symbol,Form}[])
     return _internal_error_form(e)
 end
 

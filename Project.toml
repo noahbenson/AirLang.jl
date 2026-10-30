@@ -6,6 +6,7 @@ version = "0.1.0"
 [deps]
 Air = "0c3b9dc7-9fea-4423-80ce-ed7c11218d4a"
 AirDB = "73fd445c-d6bc-414c-af00-abfc8fd116f6"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [sources]
@@ -13,7 +14,7 @@ Air = { path = "../Air.jl" }
 AirDB = { path = "../AirDB.jl" }
 
 [compat]
-Air = "0.2"
+Air = "0.3"
 AirDB = "0.1"
 julia = "1.11"
 

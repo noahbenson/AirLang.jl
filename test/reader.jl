@@ -7,7 +7,9 @@
     @test isequal(read_air("2i"), Form(0.0 + 2.0im))
     @test isequal(read_air("4.4+2.0i"), Form(4.4 + 2.0im))
     @test isequal(read_air("4.4-2.0i"), Form(4.4 - 2.0im))
-    @test air_string(read_air("4.4+2.0i")) == "4.4 + 2.0i"
+    # a complex value prints as one atom, so the spelling re-reads as one value
+    @test air_string(read_air("4.4+2.0i")) == "4.4+2.0i"
+    @test isequal(read_air(air_string(read_air("4.4+2.0i"))), Form(4.4 + 2.0im))
     # raw strings: backslashes are literal (only `\"` and `\\` are escapes), and
     # a triple-quoted raw string follows Julia's indentation handling
     @test isequal(read_air("raw\"\\d+\""), Form("\\d+"))
@@ -15,6 +17,41 @@
     @test isequal(read_air("raw\"a\\\\b\""), Form("a\\\\b"))
     @test isequal(read_air("raw\"\"\"a\n        b\"\"\""), Form("a\nb"))
     @test_throws AirParseError read_air("raw\"abc")
+
+    # regex literals: `r"…"` is a raw string (only `\"` and `\\` are escapes)
+    # compiled into a regex value as it is read, with Julia's flag letters —
+    # `i`, `m`, `s`, `x`, `a` — immediately after the closing quote
+    let env = default_env()
+        ev(s) = air_string(air_eval(env, read_air(s)))
+        @test air_string(read_air("r\"a+\"")) == "r\"a+\""
+        @test ev("(regex? r\"a+\")") == "true"
+        @test ev("(eq? r\"a+\" (regex \"a+\"))") == "true"
+        @test ev("(eq? r\"\\d+\" (regex \"\\\\d+\"))") == "true"
+        @test ev("(eq? r\"a+\"i (regex \"a+\" \"i\"))") == "true"
+        @test ev("(eq? r\"a+\"imx (regex \"a+\" \"imx\"))") == "true"
+        # the flag letters are adjacent only; a space makes `i` a symbol
+        @test air_string(read_air("(f r\"a\"i)")) == "(f r\"a\"i)"
+        @test air_string(read_air("(f r\"a\" i)")) == "(f r\"a\" i)"
+        @test air_string(read_air("(f r\"a\" z)")) == "(f r\"a\" z)"
+        # a triple-quoted regex is a triple-quoted raw string
+        @test air_string(read_air("r\"\"\"a+b\"\"\"")) == "r\"a+b\""
+        # a map value may be a literal, as `x="…"` already reads: `x=r"…"`,
+        # `x=raw"…"`, and the quote sugar `'r"…"`
+        @test air_string(read_air("(f x=r\"a+\")")) == "(f x=r\"a+\")"
+        @test air_string(read_air("(f x=raw\"\\d\")")) == "(f x=\"\\\\d\")"
+        @test air_string(read_air("'r\"a+\"")) == "'r\"a+\""
+        @test ev("(eq? 'r\"a+\" (hold r\"a+\"))") == "true"
+        @test ev("(regex? (get (f x=r\"a+\") :x))") == "true"
+        # a regex literal prints as the same literal, so it round-trips
+        for s in ["r\"a+\"", "r\"a+\"i", "r\"\\d+\"", "r\"a\\\"b\"", "r\"\\\\\\\\\"",
+                  "'r\"a+\""]
+            f = read_air(s)
+            @test isequal(read_air(air_string(f)), f)
+        end
+    end
+    # a malformed pattern or an unterminated literal is a parse error
+    @test_throws AirParseError read_air("r\"a[\"")
+    @test_throws AirParseError read_air("r\"abc")
 
     @test isequal(read_air("i"), Form(Symbol("i")))       # bare i is a symbol
     @test read_all_air("2 i") == [Form(2), Form(Symbol("i"))]  # spaced i is separate

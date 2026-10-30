@@ -40,6 +40,81 @@ for (name, fn) in _MATH2
     builtin!(name, _math_builtin2(name, fn))
 end
 
+# ---- the numeric tower -------------------------------------------------------
+#
+# A numeric leaf is one of `Int64`, `BigInt`, `Float64`, `BigFloat`,
+# `Rational{Int64}`, `Rational{BigInt}`, `ComplexF64`, or `Complex{BigFloat}`
+# (AirDB's `FormLeaf`). The reader has a literal for each of the real ones and a
+# one-token spelling for `ComplexF64`; these constructors fill in the spellings
+# the printer needs for the rest.
+
+# `(rational n d)` — the exact rational `n/d`.
+builtin!(:rational, (env, scope, args) -> begin
+    x = _arg(args, 1, "rational"); y = _arg(args, 2, "rational")
+    lx, ly = _leafof(x), _leafof(y)
+    (lx isa Integer && ly isa Integer) || return _mk_prefix(:rational, [x, y])
+    iszero(ly) && throw(AirEvalError("rational: a zero denominator"))
+    return to_form(lx // ly)
+end)
+
+# `(complex re im)` — the complex value with the given parts; it is
+# `ComplexF64` when both parts are exactly `Float64` and `Complex{BigFloat}`
+# otherwise, as AirDB canonicalizes it.
+builtin!(:complex, (env, scope, args) -> begin
+    x = _arg(args, 1, "complex"); y = _arg(args, 2, "complex")
+    lx, ly = _leafof(x), _leafof(y)
+    (lx isa Real && ly isa Real) || return _mk_prefix(:complex, [x, y])
+    # A part that is neither exactly a `Float64` nor exactly a `BigFloat` (an
+    # exact third, say) has no complex leaf, and rounding it would change the
+    # value, so this is an air error rather than AirDB's raw `ArgumentError`.
+    return try
+        to_form(complex(lx, ly))
+    catch
+        throw(AirEvalError("complex: parts must be exactly representable as " *
+                           "Float64 or BigFloat, got $(air_string(x)) and " *
+                           "$(air_string(y))"))
+    end
+end)
+
+const PRECISION_KEY = Symbol(":precision")
+
+# `(bigfloat "1.5" precision=512)` — the `BigFloat` the text denotes, parsed at
+# `precision` (default: the ambient one). The printer uses this spelling for a
+# value whose precision is not the ambient default, which `big"…"` cannot carry.
+special!(:bigfloat, (env, scope, call) -> begin
+    _check_options(call, "bigfloat", (PRECISION_KEY,))
+    args = _call_args(env, scope, call)
+    length(args) == 1 ||
+        throw(AirEvalError("bigfloat expects one string argument"))
+    l = _leafof(args[1])
+    l isa AbstractString ||
+        throw(AirEvalError("bigfloat expects a string, got $(air_string(args[1]))"))
+    p = precision(BigFloat)
+    if haskey(call.map, PRECISION_KEY)
+        pl = _leafof(air_reduce(env, scope, to_form(call.map[PRECISION_KEY])))
+        (pl isa Integer && pl >= 2) ||
+            throw(AirEvalError("bigfloat: precision must be an integer >= 2"))
+        p = _as_int(pl, "bigfloat: precision")
+    end
+    v = try
+        setprecision(BigFloat, p) do
+            parse(BigFloat, String(l))
+        end
+    catch
+        throw(AirEvalError("bigfloat: malformed number $(repr(String(l)))"))
+    end
+    return to_form(v)
+end)
+
+# `(div x y)` — integer division, the operation `//` used to be.
+builtin!(:div, (env, scope, args) -> begin
+    x = _arg(args, 1, "div"); y = _arg(args, 2, "div")
+    lx, ly = _leafof(x), _leafof(y)
+    (lx isa Integer && ly isa Integer) || return _mk_prefix(:div, [x, y])
+    iszero(ly) && throw(AirEvalError("div: division by zero"))
+    return to_form(div(lx, ly))
+end)
+
 function _minmax(name::Symbol, cmp::Function, args::Vector{Form})::Form
     isempty(args) && return _mk_prefix(name, args)
     # A single collection argument aggregates over its elements (so `(min ?g)`

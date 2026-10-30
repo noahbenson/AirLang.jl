@@ -1,6 +1,6 @@
-# AirLang Examples
+# Worked examples
 
-Worked solutions to the 25 problems in `example-problems.md`, written in air and
+Worked solutions to the 25 problems in the [problem set](problem-set.md), written in air and
 checked against the interpreter. Each entry gives the air code and a status:
 
 - **✓** — works as written.
@@ -160,8 +160,9 @@ without unwinding. The handler may be written after the notify it serves.
 A recursive definition can cache instead of looping:
 `(def (fib ?n) memoize=(:lru 100) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))`.
 
-⚠ `(fact 500)` wraps: AirDB leaves are `Int64`/`Float64`/`ComplexF64`, so there
-are no bignums.
+⚠ `(fact 500)` wraps, because `Int64` arithmetic does. Start with a `BigInt` to
+keep the result exact: `(fact 123456789012345678901234567890)` stays a `BigInt`
+all the way down.
 
 ### 11. Structural Schema Validator ✓
 
@@ -180,9 +181,10 @@ catches everything else.
 
 ## Tier 3 — Deductive Logic and the RETE Engine (`logic-set`)
 
-Facts and rules enter a logic-set **held**, so the outputs below print their facts
-quoted (e.g. `(' parent :abe :bob)`); the examples show them unquoted for
-readability.
+Facts and rules enter a logic-set **held**, and `(facts s)` returns them as one
+held list — `(' (parent :abe :bob) (ancestor :abe :bob))` — so a fact is ordinary
+data inside the hold and the list itself does not reduce. The outputs below show
+the list's contents with the outer `'` omitted for readability.
 
 ### 12. Family Tree Transitive Closure ✓
 
@@ -291,6 +293,25 @@ of it. Bounds (columns 1..n) are the caller's to enforce.
 
 The closure is `:app → :lib1, :lib2, :lib3`, `:lib1 → :lib2, :lib3`, and
 `:lib2 → :lib3`; the base `depends` facts remain as well.
+
+**Namespace form.** Every namespace *is* a logic-set, so the same program needs no
+handle: a bare `assert` inside a `namespace` block targets that namespace, and
+the set is stored as the hidden named form `air/logic/<path>`, created lazily on
+the first write.
+
+```air
+(namespace .example-pkg)
+(assert .example-pkg (depends :app :lib1))
+(assert .example-pkg (rule (depends ?x ?y) :> (needs ?x ?y)))
+(query .example-pkg (needs ?x ?y))   # => ((x=:app y=:lib1))
+(facts .example-pkg)                 # => (' (depends :app :lib1) (needs :app :lib1))
+```
+
+`query` returns one mapping per satisfier — `naught` when there are none, and
+`(naught)` for a single satisfier that binds nothing. `defrule` is shorthand for
+`(assert … (rule …))` with raw (unreduced) arguments, and `(ingest dst src)` copies
+another set's base facts and rules. On a namespace, permissions are split:
+`readfact`/`writefact` and `readrule`/`writerule` instead of `read`/`write`.
 
 ---
 
@@ -598,7 +619,6 @@ from a string at runtime (needed for variable freshening), and `equal?` was
 renamed `eq?`.
 
 **Remaining gaps.**
-1. **Bignums** — `Int64` leaves overflow (`(fact 500)`); an AirDB `FormLeaf` change.
-2. **Search on top of constraint propagation (#15)** — expressible, not written.
-3. **Hygiene** — a bound name that also heads its own value expands without end
+1. **Search on top of constraint propagation (#15)** — expressible, not written.
+2. **Hygiene** — a bound name that also heads its own value expands without end
    (see the note under #25); data is safest with names distinct from variables.

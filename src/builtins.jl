@@ -79,7 +79,7 @@ function _depth_opt(env::Env, scope::Scope, call::FormContainer, name::AbstractS
     l = _leafof(air_reduce(env, scope, to_form(call.map[DEPTH_KEY])))
     (l isa Integer && l >= 0) ||
         throw(AirEvalError("$name: depth must be a non-negative integer"))
-    return Int(l)
+    return _as_int(l, "$name: depth")
 end
 
 # Reject options a verb does not understand, so a typo cannot pass silently.
@@ -117,5 +117,12 @@ _arg(args, i, name) = length(args) >= i ? args[i] :
 
 _num(x::Form, name) = (l = _leafof(x); l isa Number ? l :
     throw(AirEvalError("$(name) expects a number, got $(air_string(x))")))
+
+# A leaf that must fit in an `Int` — a depth, a width, a size, a precision. A
+# `BigInt` leaf can be larger than `Int64`, so the conversion is checked here and
+# raises an air error rather than a Julia `InexactError`.
+_as_int(l::Integer, name::AbstractString) =
+    (typemin(Int) <= l <= typemax(Int)) ? Int(l) :
+    throw(AirEvalError("$(name) is too large: $(l)"))
 
 _bool(b::Bool) = Form(b)

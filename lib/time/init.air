@@ -1,0 +1,38 @@
+# The `time` library: readable spellings for durations and instants.
+#
+# A time is the ordinary form `(time SECONDS)` and a duration is just a number
+# of seconds, so these are conveniences rather than a new type: `(+ (now)
+# (hours 2))` is a time two hours from now, and `(minutes 90)` is `5400`.
+#
+#   (using time (days 1))        ; 86400
+#   (.lib.time.hours 3)          ; 10800
+#   (since the-epoch)            ; seconds elapsed since an instant
+#   (ago (days 1))               ; the instant one day ago
+
+(def (seconds ?n)
+  "The duration of `n` seconds: `n` itself, since durations are numbers."
+  n)
+
+(def (minutes ?n)
+  "The duration of `n` minutes, as a number of seconds."
+  (* n 60))
+
+(def (hours ?n)
+  "The duration of `n` hours, as a number of seconds."
+  (* n 3600))
+
+(def (days ?n)
+  "The duration of `n` days, as a number of seconds."
+  (* n 86400))
+
+(def (weeks ?n)
+  "The duration of `n` weeks, as a number of seconds."
+  (* n 604800))
+
+(def (since ?t)
+  "The number of seconds elapsed between the instant `t` and now."
+  (- (now) t))
+
+(def (ago ?n)
+  "The instant `n` seconds ago; `(ago (hours 1))` is an hour before now."
+  (- (now) n))

@@ -19,8 +19,7 @@
           (assert s (rule (parent ?x ?y) :> (ancestor ?x ?y)))
           (assert s (rule (parent ?x ?z) (ancestor ?z ?y) :> (ancestor ?x ?y)))
           (facts s))
-    """) == "((' parent :abe :bob) (' parent :bob :carl) (' ancestor :abe :bob) " *
-            "(' ancestor :bob :carl) (' ancestor :abe :carl))"
+    """) == "(' (parent :abe :bob) (parent :bob :carl) (ancestor :abe :bob) (ancestor :bob :carl) (ancestor :abe :carl))"
 
     # provenance is `(because RULE PREMISES…)`
     @test ev("(let (s=(logic-set :family)) (why s (ancestor :abe :carl)))") ==
@@ -28,18 +27,14 @@
         "(' parent :abe :bob) (' ancestor :bob :carl)))"
 
     # the set lists its rules as held forms
-    @test ev("(let (s=(logic-set :family)) (rules s))") ==
-        "((' rule (parent ?x ?y) :> (ancestor ?x ?y)) " *
-        "(' rule (parent ?x ?z) (ancestor ?z ?y) :> (ancestor ?x ?y)))"
+    @test ev("(let (s=(logic-set :family)) (rules s))") == "(' (rule (parent ?x ?y) :> (ancestor ?x ?y)) (rule (parent ?x ?z) (ancestor ?z ?y) :> (ancestor ?x ?y)))"
 
     # retraction removes the base fact and everything derived only from it
-    @test ev("(let (s=(logic-set :family)) (retract s (parent :bob :carl)) (facts s))") ==
-        "((' parent :abe :bob) (' ancestor :abe :bob))"
+    @test ev("(let (s=(logic-set :family)) (retract s (parent :bob :carl)) (facts s))") == "(' (parent :abe :bob) (ancestor :abe :bob))"
 
     # the set persists: a second environment on the same database sees it
     env2 = AirLang.Env(db = db)
-    @test air_string(air_eval(env2, read_air("(facts (logic-set :family))"))) ==
-        "((' parent :abe :bob) (' ancestor :abe :bob))"
+    @test air_string(air_eval(env2, read_air("(facts (logic-set :family))"))) == "(' (parent :abe :bob) (ancestor :abe :bob))"
 
     # a derived fact is tracked: retracting the premise drops the conclusion
     @test ev("""
@@ -48,7 +43,7 @@
           (assert s (rule (p ?x) :> (q ?x)))
           (retract s (p 1))
           (facts s))
-    """) == "naught"
+    """) == "(')"
 
     # a cascading diagnosis
     @test ev("""
@@ -57,7 +52,7 @@
           (assert s (rule (cause ?c) :> (fix :check-fan)))
           (assert s (symptom :loud))
           (facts s))
-    """) == "((' symptom :loud) (' cause :overheat) (' fix :check-fan))"
+    """) == "(' (symptom :loud) (cause :overheat) (fix :check-fan))"
 
     # asserting the same fact twice makes one fact (two reason records)
     @test ev("""
@@ -65,14 +60,14 @@
           (assert s (a 1))
           (assert s (a 1))
           (facts s))
-    """) == "((' a 1))"
+    """) == "(' (a 1))"
 
     # a form containing `->` is an ordinary fact, not a rule
     @test ev("""
         (let (s=(logic-set :arrow))
           (assert s ((a ?x) -> (b ?x)))
           (facts s))
-    """) == "((' (a ?x) -> (b ?x)))"
+    """) == "(' ((a ?x) -> (b ?x)))"
 
     # an error during saturation aborts the whole operation
     @test ev("""
@@ -80,7 +75,7 @@
           (assert s (rule (go ?x) :> (raise :boom x)))
           (do (assert s (go 1)) (except (:boom ?e) :caught))
           (facts s))
-    """) == "naught"
+    """) == "(')"
 
     # ---- triggers, consequence slots, and guard flips -----------------------
 
@@ -115,11 +110,9 @@
           (assert s (counter :a 1))
           (assert s (rule (counter ?k ?v) :if (v < 2) :> (low ?v)))
           (facts s))
-    """) == "((' counter :a 1) (' low 1))"
-    @test ev("(let (s=(logic-set :gate)) (revise s (counter ?k ?v) (v=5)) (facts s))") ==
-        "((' counter :a 5))"
-    @test ev("(let (s=(logic-set :gate)) (revise s (counter ?k ?v) (v=1)) (facts s))") ==
-        "((' counter :a 1) (' low 1))"
+    """) == "(' (counter :a 1) (low 1))"
+    @test ev("(let (s=(logic-set :gate)) (revise s (counter ?k ?v) (v=5)) (facts s))") == "(' (counter :a 5))"
+    @test ev("(let (s=(logic-set :gate)) (revise s (counter ?k ?v) (v=1)) (facts s))") == "(' (counter :a 1) (low 1))"
 
     # a false gate at assertion time derives nothing
     @test ev("""
@@ -127,7 +120,7 @@
           (assert s (p 1))
           (assert s (rule (p ?x) :if false :> (q ?x)))
           (facts s))
-    """) == "((' p 1))"
+    """) == "(' (p 1))"
 
     # `:let` instructions are sequential; later ones see earlier values
     @test ev("""
@@ -135,7 +128,7 @@
           (assert s (n 3))
           (assert s (rule (n ?x) :let (y=(x * 2)) :let (z=(y + 1)) :> (out z)))
           (facts s))
-    """) == "((' n 3) (' out 7))"
+    """) == "(' (n 3) (out 7))"
 
     # `_:` names the changed wildcards (to their new values) in `:=`
     @test ev("""
@@ -154,7 +147,7 @@
           (assert s (p 1))
           (retract s (p 1))
           (facts s))
-    """) == "((' gone 1))"
+    """) == "(' (gone 1))"
 
     # ---- reasons and revisions ----------------------------------------------
 
@@ -174,13 +167,13 @@
           (assert s (a 1) reason=:r2)
           (retract s (a 1) reason=:r1)
           (facts s))
-    """) == "((' a 1))"
+    """) == "(' (a 1))"
     @test ev("""
         (let (s=(logic-set :labels3))
           (assert s (a 1) reason=:r2)
           (retract s (a 1) reason=:r2)
           (facts s))
-    """) == "naught"
+    """) == "(')"
 
     # revising one of two reasons leaves the old fact and asserts the new one,
     # so downstream sees an assertion
@@ -190,7 +183,7 @@
           (assert s (a 1) reason=:r2)
           (revise s (a ?x) (x=2) reason=:r1)
           (facts s))
-    """) == "((' a 1) (' a 2))"
+    """) == "(' (a 1) (a 2))"
     @test ev("""
         (let (c=(mut 0))
           (let (s=(logic-set :mr2))
@@ -220,11 +213,10 @@
           (assert s (a 1))
           (revise s (a ?x) (x=2))
           (facts s))
-    """) == "((' a 2))"
+    """) == "(' (a 2))"
 
     # a condition that matches nothing is a no-op
-    @test ev("(let (s=(logic-set :nomatch)) (assert s (a 1)) (revise s (b ?x) (x=2)) (facts s))") ==
-        "((' a 1))"
+    @test ev("(let (s=(logic-set :nomatch)) (assert s (a 1)) (revise s (b ?x) (x=2)) (facts s))") == "(' (a 1))"
 
     # `revise` and `revise-fact` target base facts only
     @test_throws AirEvalError air_eval(env, read_air("""
@@ -254,7 +246,7 @@
           (assert s (rule (p ?x) :+ (revise-fact (stat 5) (stat 6) reason=naught)))
           (assert s (p 1))
           (facts s))
-    """) == "((' p 1) (' stat 6))"
+    """) == "(' (p 1) (stat 6))"
 
     # ---- atomic `logic` blocks ----------------------------------------------
 
@@ -262,14 +254,14 @@
         (let (s=(logic-set :block))
           (logic s (assert (a 1)) (assert (a 2)))
           (facts s))
-    """) == "((' a 1) (' a 2))"
+    """) == "(' (a 1) (a 2))"
 
     # reads inside the block see the snapshot from entry
     @test ev("""
         (let (s=(logic-set :snap))
           (assert s (a 1))
           (logic s (assert (b 1)) (facts s)))
-    """) == "((' a 1))"
+    """) == "(' (a 1))"
 
     # two revisions in one call collapse to one revision event; in two calls
     # they do not
@@ -284,7 +276,7 @@
     """) == "1"
     @test ev("""
         (let (s=(logic-set :collapse)) (facts s))
-    """) == "((' counter :a 3))"
+    """) == "(' (counter :a 3))"
     @test ev("""
         (let (c=(mut 0))
           (let (s=(logic-set :nocollapse))
@@ -301,7 +293,7 @@
           (assert s (rule (go ?x) :> (raise :boom x)))
           (do (logic s (assert (go 1))) (except (:boom ?e) :caught))
           (facts s))
-    """) == "naught"
+    """) == "(')"
 
     # ---- accumulators --------------------------------------------------------
 
@@ -314,9 +306,7 @@
           (assert s (rule (student class=?c grade=?g) :accum (g)
                           :> (all class=?c grades=?g)))
           (facts s))
-    """) == "((' student class=:math grade=90) (' student class=:math grade=80) " *
-            "(' student class=:art grade=70) (' all class=:math grades=(90 80)) " *
-            "(' all class=:art grades=(70)))"
+    """) == "(' (student class=:math grade=90) (student class=:math grade=80) (student class=:art grade=70) (all class=:math grades=(90 80)) (all class=:art grades=(70)))"
 
     # per-variable aggregators
     @test ev("""
@@ -332,8 +322,7 @@
           (assert s (rule (v ?k ?x) :accum (x=:first) :> (afirst ?x)))
           (assert s (rule (v ?k ?x) :accum (x=:last) :> (alast ?x)))
           (facts s))
-    """) == "((' v :a 10) (' v :a 20) (' v :a 30) (' amin 10) (' amax 30) (' asum 60) " *
-            "(' amean 20.0) (' amed 20) (' afirst 10) (' alast 30))"
+    """) == "(' (v :a 10) (v :a 20) (v :a 30) (amin 10) (amax 30) (asum 60) (amean 20.0) (amed 20) (afirst 10) (alast 30))"
 
     # `:take` selects a row: (min v), (max v), :first, :last
     @test ev("""
@@ -347,8 +336,7 @@
           (assert s (rule (student class=?c grade=?g) :accum (c g :take (min g))
                           :> (least c=?c g=?g)))
           (facts s))
-    """) == "((' student class=:m grade=90) (' student class=:m grade=80) " *
-            "(' head c=:m g=90) (' best c=:m g=90) (' least c=:m g=80))"
+    """) == "(' (student class=:m grade=90) (student class=:m grade=80) (head c=:m g=90) (best c=:m g=90) (least c=:m g=80))"
 
     # `:last` is the most recently inserted fact
     @test ev("""
@@ -357,7 +345,7 @@
           (assert s (v :a 2))
           (assert s (rule (v ?k ?x) :accum (k x :take :last) :> (tailx ?x)))
           (facts s))
-    """) == "((' v :a 1) (' v :a 2) (' tailx 2))"
+    """) == "(' (v :a 1) (v :a 2) (tailx 2))"
 
     # nested specs: the outer level partitions and the final level aggregates,
     # producing parallel sequences
@@ -371,12 +359,7 @@
                           :accum (d) :accum (g=:mean)
                           :> (roll class=?c depts=?d means=?g)))
           (facts s))
-    """) == "((' student class=:m dept=:sci grade=90) " *
-            "(' student class=:m dept=:sci grade=80) " *
-            "(' student class=:m dept=:eng grade=60) " *
-            "(' student class=:a dept=:hum grade=70) " *
-            "(' roll class=:m depts=(:sci :eng) means=(85.0 60.0)) " *
-            "(' roll class=:a depts=(:hum) means=(70.0)))"
+    """) == "(' (student class=:m dept=:sci grade=90) (student class=:m dept=:sci grade=80) (student class=:m dept=:eng grade=60) (student class=:a dept=:hum grade=70) (roll class=:m depts=(:sci :eng) means=(85.0 60.0)) (roll class=:a depts=(:hum) means=(70.0)))"
 
     # insertion order is preserved and a revision keeps its position
     @test ev("""
@@ -387,9 +370,8 @@
           (assert s (rule (v ?k ?x) :accum (x=:first) :> (firstx ?x)))
           (revise-fact s (v :a 2) (v :a 2.5))
           (facts s))
-    """) == "((' v :a 1) (' v :a 2.5) (' vec (1 2.5)) (' firstx 1))"
-    @test ev("(let (s=(logic-set :order)) (assert s (v :a 9)) (facts s))") ==
-        "((' v :a 1) (' v :a 2.5) (' v :a 9) (' vec (1 2.5 9)) (' firstx 1))"
+    """) == "(' (v :a 1) (v :a 2.5) (vec (1 2.5)) (firstx 1))"
+    @test ev("(let (s=(logic-set :order)) (assert s (v :a 9)) (facts s))") == "(' (v :a 1) (v :a 2.5) (v :a 9) (vec (1 2.5 9)) (firstx 1))"
 
     # only the final level may aggregate or take
     @test_throws AirEvalError air_eval(env, read_air("""
@@ -410,11 +392,10 @@
           (assert s (rule (parent ?x ?y) (not (married ?x))
                           :> (single-parent ?x ?y)))
           (facts s))
-    """) == "((' parent :a :b) (' parent :b :c) (' single-parent :a :b) (' single-parent :b :c))"
+    """) == "(' (parent :a :b) (parent :b :c) (single-parent :a :b) (single-parent :b :c))"
 
     # adding a fact that falsifies the negation retracts what it justified
-    @test ev("(let (s=(logic-set :sp)) (assert s (married :b)) (facts s))") ==
-        "((' parent :a :b) (' parent :b :c) (' married :b) (' single-parent :a :b))"
+    @test ev("(let (s=(logic-set :sp)) (assert s (married :b)) (facts s))") == "(' (parent :a :b) (parent :b :c) (married :b) (single-parent :a :b))"
 
     # ---- `because` and `rule?` ----------------------------------------------
 

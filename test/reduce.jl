@@ -38,10 +38,11 @@
     @test ev("(1 * 0)") == "0"
     @test ev("(x + y)") == "(x + y)"
 
-    # complex numbers: a no-space literal, and the spaced infix sum
-    @test ev("4.4+2.0i") == "4.4 + 2.0i"
-    @test ev("(4.4 + 2.0i)") == "4.4 + 2.0i"
-    @test ev("(2i)") == "(0.0 + 2.0i)"
+    # complex numbers: a complex value prints as one atom, so the spelling
+    # re-reads as one value; `(2i)` is a one-element form around the value
+    @test ev("4.4+2.0i") == "4.4+2.0i"
+    @test ev("(4.4 + 2.0i)") == "4.4+2.0i"
+    @test ev("(2i)") == "(0.0+2.0i)"
 
     # a symbol rule
     air_eval(env, read_air("(def n 4)"))

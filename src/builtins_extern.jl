@@ -271,5 +271,7 @@ builtin!(Symbol("ready?"), (env, scope, args) -> begin
     x isa PromiseForm && return Form(isready(x))
     x isa DelayForm && return Form(isready(x))
     x isa ActorForm && return Form(true)
-    throw(AirEvalError("ready? needs a promise, delay, or actor"))
+    # A stream is ready when a `fetch` would return immediately.
+    x isa StreamForm && return Form(_stream_ready(env, x))
+    throw(AirEvalError("ready? needs a promise, delay, actor, or stream"))
 end)

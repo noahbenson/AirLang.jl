@@ -309,8 +309,9 @@ function _ensure_ns_metadata!(env::Env, vf::VolatileForm, path::Vector{Symbol})
     owner = _check_db_principal!(env, _ns_db(env, path), owner)
     md = _metadata_form(owner; acl = acl)
     tx() do
-        set_metadata!(vf, md)
+        _set_metadata!(vf, md)
     end
+    _flush_metadata!()      # the policy must be visible to the next check
     return vf
 end
 

@@ -142,6 +142,25 @@ function AirRegex(source::AbstractString, flags::AbstractString = "")
     return AirRegex(re, src, flg)
 end
 
+# The reader's `r"…"flags` spelling of a regex. Escaping mirrors the reader: a
+# backslash is doubled only where it would otherwise be read as an escape (before
+# another backslash, before a quote, or at the very end) and a quote is always
+# escaped, so the printed literal reads back as exactly the same source and flags.
+function _regex_literal(r::AirRegex)
+    cs = collect(r.source)
+    io = IOBuffer()
+    print(io, "r\"")
+    for (k, c) in enumerate(cs)
+        if c == '"' || (c == '\\' && (k == length(cs) || cs[k + 1] in ('\\', '"')))
+            print(io, '\\')
+        end
+        print(io, c)
+    end
+    print(io, '"')
+    print(io, r.flags)
+    return String(take!(io))
+end
+
 # ---- wrapping data as a form -------------------------------------------------
 
 # An `AirRegex` is a value, so equal regexes must be equal air values. AirDB's

@@ -289,7 +289,16 @@ end
 @testset "facts are held" begin
     env = AirLang.Env(db = MemoryDatabase())
     ev(s) = air_string(air_eval(env, read_air(s)))
-    @test ev("(let (s=(logic-set :h)) (assert s (foo :a)) (facts s))") == "((' foo :a))"
+    @test ev("(let (s=(logic-set :h)) (assert s (foo :a)) (facts s))") == "(' (foo :a))"
     @test ev("(let (s=(logic-set :h2)) (assert s (foo :a)) (assert s (bar :b)) (facts s))") ==
-        "((' foo :a) (' bar :b))"
+        "(' (foo :a) (bar :b))"
+    # One hold wraps the whole list, so the facts inside are plain: an empty set
+    # is the empty hold and equals `(hold)`.
+    @test ev("(let (s=(logic-set :h3)) (held? (facts s)))") == "true"
+    @test ev("(let (s=(logic-set :h3)) (eq? (facts s) (hold)))") == "true"
+    @test ev("(let (s=(logic-set :h4)) (assert s (foo :a)) (count (facts s)))") == "2"
+    @test ev("(let (s=(logic-set :h4)) (assert s (foo :a)) (get (facts s) 2))") == "(foo :a)"
+    # `rules` has the same shape.
+    @test ev("(let (s=(logic-set :h5)) (assert s (rule (p ?x) :> (q ?x))) " *
+             "(eq? (get (rules s) 2) (rule (p ?x) :> (q ?x))))") == "true"
 end

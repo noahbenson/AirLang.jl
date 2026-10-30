@@ -350,7 +350,9 @@ end)
 
 function _form_lt(a, b)
     la, lb = _leafof(to_form(a)), _leafof(to_form(b))
-    (la isa Number && lb isa Number) ? la < lb : string(la) < string(lb)
+    # Complex values have no order; they sort by their printed spelling, as any
+    # other unorderable pair does.
+    (la isa Real && lb isa Real) ? la < lb : string(la) < string(lb)
 end
 
 builtin!(:sort, (env, scope, args) -> begin
@@ -649,7 +651,7 @@ function _bi_where(env::Env, scope::Scope, call::FormContainer)
     end
     (l isa Integer && l >= 0) || throw(AirEvalError(
         "where: depth must be a non-negative integer or :all"))
-    depth = Int(l)
+    depth = _as_int(l, "where: depth")
     depth == 0 && return isequal(subject, obj) ?
         _ns_form(Form[_path_form(Any[0])]) : naught
     paths = Vector{Any}[]
@@ -683,6 +685,7 @@ end)
 # a one-element group), and `naught` is empty.
 builtin!(:count, (env, scope, args) -> begin
     c = _arg(args, 1, "count")
+    c isa StreamForm && return Form(_stream_count(env, c))
     c isa FormContainer && return Form(length(c.seq))
     return Form(isequal(c, naught) ? 0 : 1)
 end)

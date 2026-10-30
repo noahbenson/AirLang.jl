@@ -120,3 +120,99 @@ function _bi_tx(env::Env, scope::Scope, call::FormContainer)
     return _Final(r)
 end
 special!(:tx, _bi_tx)
+
+# `(sandbox body…)` — evaluate a block exactly as `tx` does, then discard its
+# transaction instead of committing it and yield the block's value. Nothing the
+# body wrote survives: definitions, vals, facts, rules, mutables, and named forms
+# are staged in the transaction and dropped with it, so the namespace is left as
+# it was.
+#
+# Air's `tx` joins an already-open transaction rather than nesting one, so a
+# sandbox opened inside a `tx` cannot be aborted on its own. A transaction is
+# task-local, though, so the body runs on a private task: it gets a transaction
+# of its own, which is aborted by throwing out of its body. The caller waits, so
+# the two never run concurrently.
+#
+# What escapes: side effects that are not database writes (a file write, an
+# `open-airdb`) are not undone, and the body reads committed state rather than
+# the staged writes of an enclosing transaction. There is no validation pass,
+# since the transaction never commits.
+struct _SandboxDone <: Exception
+    value::Form
+end
+
+# Aborting the transaction undoes the stores, but the process keeps three
+# non-transactional caches: the compiled rules of each namespace wrapper (read
+# without a sync, so a sandbox definition would otherwise stay live), the `val`
+# bindings, and the memo table. Snapshot them for the body and put them back
+# afterwards; every namespace wrapper is re-synced from its committed value.
+function _sandbox_snapshot(env::Env)
+    return (copy(env.nscache), copy(env.vals), copy(env.valof), copy(env.memo))
+end
+
+function _sandbox_restore!(env::Env, snap)
+    nscache, vals, valof, memo = snap
+    empty!(env.nscache)
+    merge!(env.nscache, nscache)
+    empty!(env.vals)
+    merge!(env.vals, vals)
+    empty!(env.valof)
+    merge!(env.valof, valof)
+    empty!(env.memo)
+    merge!(env.memo, memo)
+    # Rebuild each wrapper's compiled rules from the value the caller sees now,
+    # which is the committed one (or the enclosing transaction's staged one).
+    for (_, ns) in nscache
+        ns.synced = nothing
+        _ns_sync!(env, ns)
+    end
+    return nothing
+end
+
+function _bi_sandbox(env::Env, scope::Scope, call::FormContainer)
+    block = _parse_block(call, "sandbox")
+    c = _context(env)
+    ctx = TaskContext(c.user, c.ns, c.dbroot, c.env)
+    bindings = Air.vars()
+    prevlogic = env.logic_ctx
+    snap = _sandbox_snapshot(env)
+    # A `throw` finds its target on the task-local catch stack and `notify` finds
+    # its handler the same way, so the body starts with the caller's stacks: a
+    # throw in the sandbox still reaches an enclosing `catch=` block, and its
+    # handler body runs (and is rolled back) with the sandbox.
+    catches = copy(_catch_scopes())
+    handlers = copy(_handler_scopes())
+    box = Ref{Form}(naught)
+    err = Ref{Any}(nothing)
+    t = @async begin
+        _reset_block_scopes!()
+        append!(_catch_scopes(), catches)
+        append!(_handler_scopes(), handlers)
+        # Bare logic-set operations inside the sandbox target the sandbox's
+        # current namespace, not the `logic` block that encloses the call; the
+        # block's collected ops must not be joined by a rolled-back edit.
+        env.logic_ctx = nothing
+        try
+            box[] = _with_context(env, ctx, () -> Air.setvars(() -> begin
+                try
+                    tx() do
+                        prep = _prepare_block(env, scope, block, "sandbox")
+                        throw(_SandboxDone(_run_block(env, prep)))
+                    end
+                catch e
+                    e isa _SandboxDone && return e.value
+                    rethrow()
+                end
+            end, bindings))
+        catch e
+            err[] = e
+        finally
+            env.logic_ctx = prevlogic
+        end
+    end
+    wait(t)
+    _sandbox_restore!(env, snap)
+    err[] === nothing || throw(err[])
+    return _Final(box[])
+end
+special!(:sandbox, _bi_sandbox)

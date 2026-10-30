@@ -30,6 +30,60 @@ const _HOOK_FN_KEY = Symbol(":fn")
 const _HOOK_NS_KEY = Symbol(":ns")
 const _WATCH_KEY_KEY = Symbol(":key")
 
+# ---- metadata visibility -----------------------------------------------------
+#
+# AirDB keeps a form's metadata in an Air `Volatile` (`metavolatile`), so
+# `set_metadata!` is transactional: the committed value is visible to the next
+# reader in this process as soon as the transaction returns. A check that
+# follows the edit in the same air operation — the access check after `chmod!`,
+# the watch table after `watch`, the filter after `set-filter!` — sees the new
+# metadata without any extra work.
+#
+# The edit reaches the database row only when the writer actor flushes it, and
+# `load!` re-reads that row along with the payload. Loading a form whose
+# metadata was just edited would therefore overwrite the committed in-memory
+# value with the old row value during the pre-flush window. The row must also be
+# durable for other readers and for a later reload. Every metadata edit
+# therefore records its database, and the transaction that carries it flushes
+# before the air operation returns.
+
+const _METADATA_DBS = :AirLangMetadataDatabases
+
+# The databases with a metadata edit staged by the transaction in progress.
+function _metadata_dbs()::Vector{AirDB.AbstractDatabase}
+    d = task_local_storage()
+    v = get(d, _METADATA_DBS, nothing)
+    v isa Vector{AirDB.AbstractDatabase} && return v
+    v = AirDB.AbstractDatabase[]
+    d[_METADATA_DBS] = v
+    return v
+end
+
+# Set a form's metadata and remember to wait for the edit to land.
+function _set_metadata!(vf, m)
+    set_metadata!(vf, m)
+    dbs = _metadata_dbs()
+    any(db -> db === vf.db, dbs) || push!(dbs, vf.db)
+    return vf
+end
+
+# Wait until the staged metadata edits have landed. A no-op inside a
+# transaction: its writes are scheduled only when it commits.
+function _flush_metadata!()
+    currtx() === nothing || return nothing
+    dbs = _metadata_dbs()
+    isempty(dbs) && return nothing
+    try
+        for db in dbs
+            db.closed && continue   # the transaction may have closed it
+            AirDB.sync(db)
+        end
+    finally
+        empty!(dbs)
+    end
+    return nothing
+end
+
 # The task's `mutable => pre-transaction value` table for the transaction in
 # progress. Transactions are task-local, so the table is too.
 function _watch_pending()
@@ -59,25 +113,35 @@ _tx_boundary(env::Env, f::Function) = _tx_boundary(f, env)
 function _tx_boundary(f::Function, env::Env)
     currtx() === nothing || return f()
     pending = _watch_pending()
+    metadbs = _metadata_dbs()
     signal = Ref{Any}(nothing)
-    r = tx() do
-        empty!(pending)
-        signal[] = nothing
-        result = try
-            f()
-        catch e
-            e isa AirThrowSignal || rethrow()
-            signal[] = e
-            naught
+    r = try
+        tx() do
+            empty!(pending)
+            empty!(metadbs)
+            signal[] = nothing
+            result = try
+                f()
+            catch e
+                e isa AirThrowSignal || rethrow()
+                signal[] = e
+                naught
+            end
+            try
+                _fire_watches!(env, pending)
+            catch e
+                e isa AirThrowSignal || rethrow()
+                signal[] = e
+            end
+            result
         end
-        try
-            _fire_watches!(env, pending)
-        catch e
-            e isa AirThrowSignal || rethrow()
-            signal[] = e
-        end
-        result
+    catch
+        empty!(metadbs)     # an aborted attempt staged nothing
+        rethrow()
     end
+    # A metadata edit landed with the commit; wait for it so a check that
+    # follows this operation sees the new metadata.
+    _flush_metadata!()
     s = signal[]
     s === nothing || throw(s::AirThrowSignal)
     return r
@@ -298,7 +362,7 @@ function _bi_watch(env::Env, scope::Scope, call::FormContainer)
         out = Form[w for w in (ws === nothing ? Form[] : ws)
                    if !_watch_key_isequal(w, key)]
         push!(out, entry)
-        set_metadata!(vf, _meta_with_watches(vf, out))
+        _set_metadata!(vf, _meta_with_watches(vf, out))
         vf
     end
     return vf
@@ -319,7 +383,7 @@ function _bi_unwatch(env::Env, scope::Scope, call::FormContainer)
         ws === nothing && return vf
         out = key === nothing ? Form[] :
             Form[w for w in ws if !_watch_key_isequal(w, key)]
-        set_metadata!(vf, _meta_with_watches(vf, out))
+        _set_metadata!(vf, _meta_with_watches(vf, out))
         vf
     end
     return vf
@@ -356,7 +420,7 @@ function _bi_set_hook(env::Env, scope::Scope, call::FormContainer,
     _tx_boundary(env) do
         md = kind === :filter ? _metadata_like(vf; filter = tbl) :
                                 _metadata_like(vf; finalize = tbl)
-        set_metadata!(vf, md)
+        _set_metadata!(vf, md)
         _ensure_hooks!(env, vf)
         vf
     end

@@ -45,8 +45,7 @@
     # regex values: a string pattern is literal, a regex value is compiled
     @test ev("(regex? (regex \"a+\"))") == "true"
     @test ev("(regex? \"a+\")") == "false"
-    @test ev("(form->string (regex \"a+\" \"i\"))") ==
-          "\"(extern :regex (\\\"a+\\\" \\\"i\\\"))\""
+    @test ev("(form->string (regex \"a+\" \"i\"))") == "\"r\\\"a+\\\"i\""
     let r = air_eval(env, read_air("(regex \"a+\" \"i\")"))
         @test air_eval(env, read_air(air_string(r))) == r
     end

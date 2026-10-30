@@ -1,0 +1,46 @@
+version: 1
+project:
+  title: Air
+  description: A Clojure- and Mathematica-inspired scripting language for Julia
+  authors:
+    - name: Noah C. Benson
+  license: MIT
+  toc:
+    - file: index.md
+    - file: getting-started.md
+    - title: The language
+      children:
+        - file: syntax.md
+        - file: data-model.md
+        - file: numbers.md
+        - file: patterns.md
+        - file: namespaces.md
+        - file: permissions.md
+    - title: Concurrency
+      children:
+        - file: streams.md
+    - title: Files and databases
+      children:
+        - file: libraries.md
+        - file: databases.md
+    - title: Rules
+      children:
+        - file: rules.md
+        - file: production-rules.md
+    - title: Reference
+      children:
+        - file: errors.md
+        - file: externs.md
+        - file: time.md
+        - file: printing.md
+        - file: testing.md
+        - file: status.md
+    - title: Examples
+      children:
+        - file: examples.md
+        - file: problem-set.md
+site:
+  template: book-theme
+  options:
+    logo_text: Air
+    hide_footer_links: true

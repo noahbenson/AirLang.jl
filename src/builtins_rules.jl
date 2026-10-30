@@ -451,7 +451,7 @@ function _replace_fixed_point(env::Env, subject::Form, step)
     cur = subject
     for _ in 1:env.max_steps
         nxt = step(cur)
-        isequal(nxt, cur) && return cur
+        _same_value(nxt, cur) && return cur
         cur = nxt
     end
     throw(AirEvalError("repeated replacement did not reach a fixed point"))

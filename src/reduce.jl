@@ -86,7 +86,8 @@ end
 
 function _air_reduce(env::Env, scope::Scope, x::Form)
     if x isa VolatileForm || x isa FormExtern ||
-       x isa ActorForm || x isa PromiseForm || x isa DelayForm
+       x isa ActorForm || x isa PromiseForm || x isa DelayForm ||
+       x isa StreamForm
         return x        # a mutable, an extern, or a reference form is a value
     elseif x isa FormScalar
         s = value(x)
@@ -356,7 +357,7 @@ function _reduce_children(env::Env, scope::Scope, x::FormContainer)
                     _store_form(air_reduce(env, scope, to_form(v))))
     end
     new = FormContainer(FormSeq(seq), FormMap(map))
-    isequal(new, x) && return canonicalize(x)
+    _same_value(new, x) && return canonicalize(x)
     # A one-element container whose element reduced to a namespace `def` marker is
     # a (zero-argument) call: keep it so `_apply_ns_fn` sees the marker in head
     # position instead of treating the marker as an inert value.
@@ -383,7 +384,7 @@ function _apply_rule_checked(env::Env, scope::Scope, m, x::Form)
         hit, val = _memo_lookup(rule.memo, key)
         hit && return val
         body, bscope = _rule_expansion(env, scope, m, x; subst = subst)
-        isequal(body, x) && return canonicalize(x)
+        _same_value(body, x) && return canonicalize(x)
         val = air_reduce(env, bscope, body)
         _memo_store!(rule.memo, key, val)
         return val
@@ -593,7 +594,7 @@ end
 # input unchanged is left alone, so the reducer never loops on it.
 function _finish(env::Env, scope::Scope, x::Form, r::Form)
     c = canonicalize(r)
-    isequal(c, x) && return c
+    _same_value(c, x) && return c
     return _Tail(c, scope)
 end
 
@@ -619,7 +620,7 @@ function _expand_hold(env::Env, scope::Scope, x::FormContainer)
             _store_form(_expand_hold_item(env, scope, to_form(v)))
         for (k, v) in x.map]
     new = FormContainer(FormSeq(seq), FormMap(map))
-    return isequal(new, x) ? x : new
+    return _same_value(new, x) ? x : new
 end
 
 # One element of a held form: a `(preval e)` hole reduces to the value of `e`;
@@ -641,7 +642,7 @@ function _expand_hold_item(env::Env, scope::Scope, x::Form)
                 _store_form(_expand_hold_item(env, scope, to_form(v)))
             for (k, v) in x.map]
         new = FormContainer(FormSeq(seq), FormMap(map))
-        return isequal(new, x) ? x : new
+        return _same_value(new, x) ? x : new
     end
     return x
 end
@@ -709,7 +710,7 @@ function _resolve(scope, x::Form, bound::Set{Symbol})
             push!(map, k => _store_form(_resolve(scope, to_form(v), inner)))
         end
         new = FormContainer(FormSeq(seq), FormMap(map))
-        return isequal(new, x) ? x : new
+        return _same_value(new, x) ? x : new
     else
         return x
     end

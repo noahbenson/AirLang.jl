@@ -1,4 +1,4 @@
-# Air Deductive Rule Engine: Rules, Consequences, and Accumulators
+# Production rules
 
 This document specifies the RETE-based deductive rule engine (`logic-set`):
 the rule form, its instructions, the trigger model, and aggregation/grouping

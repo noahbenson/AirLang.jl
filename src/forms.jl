@@ -269,14 +269,14 @@ function _normalize_empty(x::FormContainer)
     for v in x.seq
         f = to_form(v)
         nf = _normalize_empty(f)
-        changed |= !isequal(nf, f)
+        changed |= !_same_value(nf, f)
         push!(seq, _store_form(nf))
     end
     map = Pair{Symbol,FormValue}[]
     for (k, v) in x.map
         f = to_form(v)
         nf = _normalize_empty(f)
-        changed |= !isequal(nf, f)
+        changed |= !_same_value(nf, f)
         push!(map, k => _store_form(nf))
     end
     return changed ? FormContainer(FormSeq(seq), FormMap(map)) : x
@@ -407,14 +407,103 @@ _raw_symbols!(out::Vector{Symbol}, ::FormExtern) = out   # an extern carries no 
 _raw_symbols!(out::Vector{Symbol}, ::ActorForm) = out
 _raw_symbols!(out::Vector{Symbol}, ::PromiseForm) = out
 _raw_symbols!(out::Vector{Symbol}, ::DelayForm) = out
+_raw_symbols!(out::Vector{Symbol}, ::StreamForm) = out
+
+# ---- time values -------------------------------------------------------------
+#
+# A time is the ordinary immutable form `(time SECONDS)`: exactly one sequence
+# element holding UTC epoch seconds, and no map. It is deliberately not a new
+# form type, so it persists, JSON-encodes, hashes, and compares like any other
+# form; only the reducer and the printer know it is a value rather than a call.
+
+const TIME_HEAD = :time
+
+# ISO-8601 with milliseconds, the precision `DateTime` carries. The `\T` escapes
+# the literal separator, so the format itself contains no unescaped `T`.
+const _TIME_ISO_FMT = Dates.DateFormat("yyyy-mm-dd\\THH:MM:SS.sss")
+
+"""
+    _is_time_form(x) -> Bool
+
+Whether `x` is a time value `(time SECONDS)`.
+"""
+_is_time_form(x::Form) =
+    x isa FormContainer && head_symbol(x) === TIME_HEAD &&
+    length(x.seq) == 2 && isempty(x.map) &&
+    _leafof(to_form(x.seq[2])) isa Real
+
+"""
+    _time_secs(x) -> Float64
+
+The UTC epoch seconds of a time form.
+"""
+function _time_secs(x::Form)
+    l = _leafof(to_form(x.seq[2]))
+    l isa Real || throw(AirEvalError("not a time: $(air_string(x))"))
+    return Float64(l)
+end
+
+"""
+    _mk_time(secs) -> Form
+
+The canonical time form for `secs` UTC epoch seconds.
+"""
+_mk_time(secs::Real) = _ns_form(Form[Form(TIME_HEAD), Form(Float64(secs))])
+
+# Timestamps the engine creates are millisecond-exact — Julia's `DateTime`, which
+# `time-str` formats through, has millisecond precision — so they always print as
+# ISO-8601 rather than falling back to the numeric spelling.
+_now_secs() = round(Base.time(); digits = 3)
+
+# The ISO-8601 text of `secs`, or `nothing` when the value is outside the range
+# `DateTime` can represent or has finer than millisecond precision. In that case
+# the printer keeps the numeric spelling, so a printed time always reads back as
+# exactly the same Float64.
+function _time_iso(secs::Real)::Union{Nothing,String}
+    t = Float64(secs)
+    isfinite(t) || return nothing
+    dt = try
+        Dates.unix2datetime(t)
+    catch
+        return nothing
+    end
+    Dates.datetime2unix(dt) == t || return nothing
+    return _trim_ms(Dates.format(dt, _TIME_ISO_FMT)) * "Z"
+end
+
+# The ISO-8601 text of `secs` at millisecond precision, always available: a
+# value `_time_iso` declines is rounded to the nearest millisecond.
+function _time_text(secs::Real)
+    t = Float64(secs)
+    s = _time_iso(t)
+    s !== nothing && return s
+    dt = try
+        Dates.unix2datetime(round(t; digits = 3))
+    catch
+        return string(t)
+    end
+    return _trim_ms(Dates.format(dt, _TIME_ISO_FMT)) * "Z"
+end
+
+# Drop a trailing ".000", then trailing fractional zeros: ".120" → ".12".
+function _trim_ms(s::AbstractString)
+    endswith(s, ".000") && return s[1:(end - 4)]
+    while endswith(s, "0")
+        s = s[1:(end - 1)]
+    end
+    return s
+end
 
 # ---- printing ----------------------------------------------------------------
 
 """
     air_string(x) -> String
 
-`x` printed as air source. A complex prints as an infix sum (`4.4 + 2.0i`), which
-re-reads as the expression `(+ 4.4 2.0i)` and reduces to the same value.
+`x` printed as air source. Every leaf has a spelling the reader accepts and that
+denotes the same value: a complex is one atom (`4.4+2.0i`), a rational is
+`1//3`, and a `BigFloat` is `big"1.5"` (or the annotated
+`(bigfloat "1.5" precision=512)` when its precision is not the ambient one), so
+a printed form re-reads as itself at any depth.
 """
 air_string(x::Form) = sprint(air_show, x)
 
@@ -445,8 +534,13 @@ function _pretty_show(io::IO, x::Form, col::Integer, width::Integer)::Int
     # Forms with a special spelling are never split: a splat, a scalar hold
     # (`'x`), and a `~` hole each print as a prefix plus one operand.
     ((_is_splat(x) && length(x.seq) == 2) || _is_scalar_hold(x) ||
-     (head_symbol(x) === PREVAL && length(x.seq) == 2 && isempty(x.map))) &&
+     (head_symbol(x) === PREVAL && length(x.seq) == 2 && isempty(x.map)) ||
+     _is_time_form(x)) &&
         (print(io, s); return col + textwidth(s))
+    # A declared layout (see `layouts.jl`) fixes the opening line and the
+    # continuation column; without one the generic greedy layout applies.
+    spec = _layout_for(x)
+    spec === nothing || return _pretty_show_layout(io, x, col, width, spec)
     print(io, "(")
     inner = col + 1
     cur = inner
@@ -525,6 +619,14 @@ function _air_show(io::IO, x::FormContainer)
         print(io, "~")
         return _air_show(io, to_form(x.seq[2]))
     end
+    # A time prints as its ISO-8601 text `(time "…Z")`, which the `time` builtin
+    # reads back exactly. A value `DateTime` cannot represent (or one finer than
+    # a millisecond) keeps the numeric spelling.
+    if _is_time_form(x)
+        iso = _time_iso(_time_secs(x))
+        iso === nothing && return print(io, "(time ", _time_secs(x), ")")
+        return print(io, "(time \"", iso, "\")")
+    end
     print(io, "(")
     sep = ""
     for v in x.seq
@@ -582,6 +684,9 @@ function _air_show(io::IO, x::FormExtern)
         return print(io, "#<extern ", name, ">")
     end
     data isa DeadExtern && return print(io, "#<extern ", name, " (expired)>")
+    # A regex prints as the reader's literal, `r"…"flags`, which reads back as the
+    # same value; an extern with no literal spelling keeps the `(extern …)` form.
+    data isa AirRegex && return print(io, _regex_literal(data))
     payload = try
         _extern_payload(data)
     catch
@@ -597,6 +702,9 @@ end
 # block on a promise, so printing never dereferences one.
 _air_show(io::IO, x::ActorForm) = print(io, "#<actor ", x.id, ">")
 _air_show(io::IO, x::PromiseForm) = print(io, "#<promise ", x.id, ">")
+# A stream holds a queue; printing it must neither load nor block, so it prints
+# by identity like the other reference forms.
+_air_show(io::IO, x::StreamForm) = print(io, "#<stream ", x.id, ">")
 function _air_show(io::IO, x::DelayForm)
     print(io, "#<delay :", x.type)
     # An air delay's serialization is its database cell, whose id distinguishes
@@ -609,14 +717,37 @@ _air_show_leaf(io::IO, ::Nothing) = print(io, "naught")
 _air_show_leaf(io::IO, v::Bool) = print(io, v ? "true" : "false")
 _air_show_leaf(io::IO, v::Symbol) = print(io, v)   # keeps a leading ':' or '?'
 _air_show_leaf(io::IO, v::String) = print(io, repr(v))
+# A non-finite float is the token the reader parses back as the same value.
+_air_show_leaf(io::IO, v::Float64) = print(io, isnan(v) ? "NaN" : isinf(v) ? (v < 0 ? "-Inf" : "Inf") : v)
+# Every other number prints in a spelling the reader parses back into the same
+# value: `BigInt` as its digits (an integer too large for `Int64` reads as a
+# `BigInt`), a rational as `n//d`.
 _air_show_leaf(io::IO, v::Number) = print(io, v)
-# A complex prints as an infix sum, `4.4 + 2.0i` (the `i` attached to the
-# imaginary part). The spaced form re-reads as the infix expression `(+ 4.4 2.0i)`,
-# which reduces to the same value; the no-space `4.4+2.0i` is a single literal.
+# A `BigFloat` keeps its precision: the literal parses at the ambient precision,
+# so a value at any other precision needs the explicit constructor.
+function _air_show_leaf(io::IO, v::BigFloat)
+    return precision(v) == precision(BigFloat) ? print(io, "big\"", v, "\"") :
+           print(io, "(bigfloat \"", v, "\" precision=", precision(v), ")")
+end
+# A `ComplexF64` prints as one no-space atom, `4.4+2.0i`, which the reader
+# parses as a single literal — so it round-trips at every depth. A non-finite
+# part cannot be spelled that way (Julia does not parse `NaNi`), so it uses the
+# constructor instead.
 function _air_show_leaf(io::IO, v::ComplexF64)
     re, im = real(v), imag(v)
-    return print(io, re, im < 0 ? " - " : " + ", abs(im), "i")
+    (isnan(re) || isinf(re) || isnan(im) || isinf(im)) &&
+        return print(io, "(complex ", _leaf_text(re), " ", _leaf_text(im), ")")
+    return print(io, re, im < 0 ? "-" : "+", abs(im), "i")
 end
+# A `Complex{BigFloat}` parts cannot share one atom (each is a `big"…"` literal),
+# so it prints as the constructor form.
+function _air_show_leaf(io::IO, v::Complex{BigFloat})
+    re, im = real(v), imag(v)
+    return print(io, "(complex ", _leaf_text(re), " ", _leaf_text(im), ")")
+end
+
+# The flat spelling of a leaf, for the nested position in a constructor form.
+_leaf_text(v) = (io = IOBuffer(); _air_show_leaf(io, v); String(take!(io)))
 
 # The source text of a map key: the leading ':' of a keyword is dropped, so the
 # map key `Symbol(":a")` prints as `a`.

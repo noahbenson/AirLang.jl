@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Build the Air book (Jupyter Book 2 / MyST) in book/.
+#
+#     bin/build-docs            # static site in book/_build/html
+#     bin/build-docs --serve    # live preview at http://localhost:3000
+#     bin/build-docs --strict   # fail on warnings (as CI does)
+#
+# The book is rendered by mystmd, a Node tool; Node 18+ is required. Nothing
+# here needs Julia or a database: the examples in the book are shown as code
+# with their results in comments, not executed during the build.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root/book"
+
+serve=false
+strict=false
+for arg in "$@"; do
+    case "$arg" in
+        --serve|serve|start) serve=true ;;
+        --strict)            strict=true ;;
+        -h|--help)
+            cat <<'EOF'
+usage: bin/build-docs [--serve | --strict]
+
+  (no option)  build the static site into book/_build/html
+  --serve      live preview at http://localhost:3000
+  --strict     fail on warnings (as CI does)
+EOF
+            exit 0 ;;
+        *) echo "build-docs: unknown option $arg" >&2; exit 2 ;;
+    esac
+done
+
+flags=()
+if $strict; then flags+=(--strict); fi
+
+if $serve; then
+    exec npx -y mystmd@latest start "${flags[@]}"
+else
+    npx -y mystmd@latest build --html "${flags[@]}"
+    echo "book built in $root/book/_build/html"
+fi

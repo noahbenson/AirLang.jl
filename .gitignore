@@ -36,3 +36,12 @@ JuliaLocalPreferences.toml
 
 # Local container state: a bind-mounted PostgreSQL data directory, if used
 pgdata/
+
+# The rendered Jupyter Book site
+book/_build/
+
+# Node artifacts from a local mystmd run
+node_modules/
+
+# Local environment (model/CLI settings, never committed)
+.env

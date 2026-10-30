@@ -1,4 +1,4 @@
-# Air Extern Objects & Persistence Specification
+# Extern objects
 
 This document summarizes the architectural strategy for managing ephemeral, host-level execution resources (such as promises, tasks, and sockets) as extern types within Air, and how they interact with the persistence layer (`AirDB.jl`).
 
@@ -53,9 +53,9 @@ constructor per kind.
   on, fixed at creation).
 * **Promises.** `(deliver p v)` fills a promise once; `(get p)`/`(await p)`
   read it (blocking outside a transaction, raising inside one unless it is
-  already delivered) and `(ready? p)` tests it. An undelivered promise stores a
-  row and encodes as a link; a delivered one encodes inline as its value, so it
-  keeps its value but not its identity across a round trip.
+  already delivered) and `(ready? p)` tests it. A promise stores a row and
+  always encodes as a link, whether it is pending or delivered, so a reader
+  waits on the same promise rather than on a copy of its value.
 * **Delays.** The registration registry (`register_delay`) is keyed by a type
   name, and the loader sees only the serialized form. AirLang registers `:air`
   once at startup; its serialization is a `VolatileForm` *cell*. The cell first

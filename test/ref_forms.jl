@@ -116,10 +116,12 @@
     @test ev("(ready? (promise))") == "false"
     @test ev("(let (p=(promise)) (deliver p 3) (list (ready? p) (get p) (await p)))") ==
           "(list true 3 3)"
-    # an undelivered promise serializes as a link, a delivered one as its value
+    # a promise serializes as a link whether it is pending or delivered, so a
+    # reader waits on the same promise rather than on a copy of its value
     s = ev("(let (p=(promise)) (to-json p))")
     @test startswith(s, "\"\\\"~")
-    @test ev("(let (p=(promise)) (deliver p 7) (to-json p))") == "\"7\""
+    d = ev("(let (p=(promise)) (deliver p 7) (to-json p))")
+    @test startswith(d, "\"\\\"~")
     # a promise stored in a form is not forced by reading the form
     @test ev("(promise? (get (join () x=(promise)) :x))") == "true"
 

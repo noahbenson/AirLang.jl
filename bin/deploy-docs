@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Build the Air book and publish it to GitHub Pages.
+#
+#     bin/deploy-docs                 # build and force-push to gh-pages
+#     bin/deploy-docs --no-build      # publish the existing book/_build/html
+#
+# The site is pushed to the `gh-pages` branch of the `origin` remote (override
+# with DOCS_REMOTE) and force-replaced, so the branch always holds exactly the
+# current build. Configure the repository's Pages source to be the `gh-pages`
+# branch. This is the same branch the Docs GitHub workflow publishes; the two
+# are interchangeable.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+site="$root/book/_build/html"
+remote="${DOCS_REMOTE:-origin}"
+branch="${DOCS_BRANCH:-gh-pages}"
+
+build=true
+for arg in "$@"; do
+    case "$arg" in
+        --no-build) build=false ;;
+        -h|--help)
+            cat <<'EOF'
+usage: bin/deploy-docs [--no-build]
+
+  (no option)  build the book, then publish it to gh-pages
+  --no-build   publish the existing book/_build/html
+
+environment: DOCS_REMOTE (default origin), DOCS_BRANCH (default gh-pages)
+EOF
+            exit 0 ;;
+        *) echo "deploy-docs: unknown option $arg" >&2; exit 2 ;;
+    esac
+done
+
+if $build; then
+    # GitHub project pages are served from /AirLang.jl/.
+    BASE_URL="${DOCS_BASE_URL:-/AirLang.jl}" "$root/bin/build-docs" --strict
+fi
+[ -d "$site" ] || { echo "deploy-docs: no build in $site; run bin/build-docs" >&2; exit 1; }
+
+url="$(git -C "$root" remote get-url "$remote")"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+git clone --quiet --no-checkout "$url" "$tmp/site"
+cd "$tmp/site"
+if git rev-parse --verify --quiet "origin/$branch" >/dev/null; then
+    git checkout --quiet -B "$branch" "origin/$branch"
+else
+    git checkout --quiet --orphan "$branch"
+    git rm -r --cached --quiet . 2>/dev/null || true
+fi
+find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+cp -R "$site"/. .
+git add --all
+git commit --quiet -m "Deploy the Air book"
+git push --quiet --force "$url" "HEAD:$branch"
+echo "deployed the book to $url ($branch)"

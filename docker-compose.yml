@@ -1,9 +1,10 @@
 # air and a PostgreSQL sidecar.
 #
-# The build context is the parent directory because AirLang depends on the
-# sibling Air.jl and AirDB.jl checkouts:
+# AirLang depends on the sibling Air.jl and AirDB.jl checkouts, so they are
+# passed to the build as the named contexts `air` and `airdb`:
 #
 #     docker compose up --build
+#     docker compose run --rm air          # just the air container
 #
 # The host's ./lib is mounted at /air/lib (the first AIR_LIBPATH entry), so a
 # library dropped in ./lib/<name>/init.air is available inside the container.
@@ -19,9 +20,12 @@
 services:
   air:
     build:
-      context: ..
-      dockerfile: AirLang.jl/Dockerfile
+      context: .
+      additional_contexts:
+        air: ../Air.jl
+        airdb: ../AirDB.jl
     image: airlang:latest
+    init: true
     environment:
       AIR_LIBPATH: /air/lib
       PGHOST: postgres
@@ -30,10 +34,11 @@ services:
       PGDATABASE: air
     volumes:
       - ./lib:/air/lib:ro
+      - ./:/work
     depends_on:
       postgres:
         condition: service_healthy
-    working_dir: /air
+    working_dir: /work
     stdin_open: true
     tty: true
 

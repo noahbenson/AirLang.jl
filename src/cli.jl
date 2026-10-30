@@ -6,6 +6,15 @@
 # MIT License
 # Copyright (c) 2026 Noah C. Benson
 
+# The print width for the REPL: `COLUMNS` when the terminal reports one, else 80.
+function _terminal_width()::Int
+    s = get(ENV, "COLUMNS", "")
+    isempty(s) && return 80
+    n = tryparse(Int, s)
+    (n === nothing || n < 20) && return 80
+    return n
+end
+
 """
     air_main(args::Vector{String}) -> Int
 
@@ -16,7 +25,8 @@ a process exit code.
 function air_main(args::Vector{String})
     env = default_env()
     if isempty(args)
-        air_repl(; history = get(ENV, "AIR_HISTORY", nothing))
+        air_repl(; history = get(ENV, "AIR_HISTORY", nothing),
+                 width = _terminal_width())
         return 0
     end
     i = 1

@@ -1,4 +1,4 @@
-# AirLang Implementation Stress-Test Suite
+# Problem set
 
 This document outlines a curated suite of 25 benchmarks and problems designed to stress-test an implementation of Air, covering core collections, pattern matching, the RETE deductive logic engine, STM transactions, and advanced metaprogramming.
 

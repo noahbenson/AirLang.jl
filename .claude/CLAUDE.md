@@ -26,9 +26,13 @@ contain `=`. Comments are `#` to the end of the line, or a nestable
 
 **Strings.** A string is Julia-style (`"…"`, `"""…"""`, with Julia's escapes); a
 raw string `raw"…"` (or `raw"""…"""`) suppresses escape processing, so
-`raw"\d+"` is the three characters `\d+`. `(regex "pattern" [flags])` compiles a
-pattern into an ordinary value (it prints as `(extern :regex (…))`); the string
-verbs that take a pattern accept a literal string or a regex value, and a regex
+`raw"\d+"` is the three characters `\d+`. A regex literal `r"…"` (or
+`r"""…"""`) is such a raw string compiled at read time, with Julia's flag letters
+`i`, `m`, `s`, `x`, `a` immediately after the closing quote — `r"\d+"i` is the
+same value as `(regex "\\d+" "i")`, prints as the literal, and is a value
+anywhere a form may appear (including inside a hold, and as a map value
+`x=r"…"`). `(regex "pattern" [flags])` builds the same value; the string verbs
+that take a pattern accept a literal string or a regex value, and a regex
 replacement expands `$0`, `$1`…, `$name`, and `$$`.
 
 **Operators are infix-canonical.** `(a OP b)` is the canonical form; `(OP a b …)`
@@ -56,6 +60,19 @@ an integer: `(bit-and true 1)` is `1`).
 fact pattern to require that no matching fact exists — a different meaning that
 does not carry over to the term reducer.)
 
+**Numbers are AirDB's tower.** A numeric leaf is one of `Int64`, `BigInt`,
+`Float64`, `BigFloat`, `Rational{Int64}`, `Rational{BigInt}`, `ComplexF64`, or
+`Complex{BigFloat}`. Integers beyond `Int64` read as `BigInt`; `1//3` is a
+rational literal; `big"1.5"` a `BigFloat` at the ambient precision (the printer
+adds `(bigfloat "…" precision=n)` for any other); `2i`/`4.4+2.0i` (no spaces) a
+complex; `Inf`/`-Inf`/`NaN` the non-finite floats. A complex prints as **one
+atom**, `4.4+2.0i`, so it re-reads as one value at any depth. `//` is the exact
+rational constructor and `div` is integer division; `/` is always floating
+point. Arithmetic and promotion are Julia's — `Int64` operations wrap (`(^ 2
+100)` is `0`), and exact inputs stay exact (`(+ 1//3 1//6)` is `1//2`). The
+constructors are `(rational n d)`, `(complex re im)`, and `(bigfloat "…"
+precision=n)`; see `book/numbers.md`.
+
 **Rules.** The two rule systems have separate forms. `->` belongs only to the
 replacement family: `(pattern -> replacement)` is inert data read by `replace`,
 `replace-all`, `rreplace`, and `rreplace-all`, and, in **head position**, a
@@ -76,6 +93,25 @@ base facts selected by a condition (`(revise s cond (k=v …))`), while
 `revise-fact` names the old and new facts outright. Note that in `:=` the
 symbol `_` is the revision map; outside the logic engine `_` is the pipeline
 placeholder (below).
+
+**Logic sets are namespaces.** Every namespace is implicitly a logic set stored
+as the hidden named form `air/logic/<path>` (root: `air/logic`) in the
+namespace's database, created lazily by the first write; an absent set reads as
+empty and reads never create it. `(assert .foo (p 1))` targets `.foo`, and with
+no target an operation edits the enclosing `(logic s …)` block or the current
+namespace. `logic-set` still makes a standalone named set. Namespace targets
+use the four fact/rule permissions; a standalone set maps them onto `read`/
+`write`. `(facts target)`/`(rules target)` return one held list of the facts or rules
+(`(' (p 1) (q 2))`, `(')` when empty) whose elements are the facts themselves.
+`(query [target] pattern…)` returns the distinct satisfiers of a
+rule-condition block as a plain list of `(x=…)` maps — `rule`-headed patterns
+search rules, everything else searches facts, a no-binding satisfier is
+`(naught)`, and none is `naught`. `(defrule conditions… instructions… reason=…)`
+asserts a raw `(rule …)`; `(ingest source)` copies base facts and rules into the
+current target in one transaction, rederives consequences, and checks exactly the
+permissions it uses before mutating anything. `depend` (live propagation) is a
+tombstone. Each operation outside a block is its own transaction; `(logic …)` and
+an enclosing `tx` group them.
 
 **Pipelines and threading.** `(x >> step1 step2 …)` evaluates `x`, substitutes
 the result textually for every `_` in the *raw* first step, substitutes that form
@@ -302,12 +338,19 @@ of the executing `def` (else the current user); `(as-user id body…)` evaluates
 `body` as `id`; `(create-user …)`, `(create-constituent …)`,
 `(set-admin …)`, and `(users)` manage records in `.sys.user` or `@.user`.
 Every namespace and entry volatile carries metadata `(owner=… acl=…)`, where
-the ACL maps `read`/`write`/`exec`/`assume`/`hide`/`watch`/`filter`/`finalize`
-to user ids with `_` meaning everyone. The owner has all of them except
-`assume` by default, nobody else has anything, `air` bypasses every check, and
-`hide` is a veto. `(permissions target)`, `(chmod! target read=(…) write=(…)
+the ACL maps `read`/`write`/`exec`/`readfact`/`writefact`/`readrule`/`writerule`/
+`assume`/`hide`/`watch`/`filter`/`finalize` to user ids with `_` meaning
+everyone. The four fact/rule permissions gate a namespace's implicit logic set:
+`readfact`/`readrule` for `facts`/`rules`/`why`/`query` and
+`writefact`/`writerule` for `assert`/`retract`/`revise`/`revise-fact` (a `rule`
+form uses the `…rule` pair, `why` needs both read permissions); a standalone
+logic-set handle instead maps them onto the set's `read`/`write`. The owner has
+all of them except `assume` by default, nobody else has anything, `air` bypasses
+every check, and `hide` is a veto. `(permissions target)`, `(chmod! target read=(…) write=(…)
 …)` (also `anchor=true`), and `(chown! target user)` edit the metadata;
-`chmod!`/`chown!` need `write` on the target. `watch` gates installing a watch,
+`chmod!`/`chown!` need `write` on the target. A metadata edit waits for its
+database write to land before the operation returns, so the very next check,
+watch lookup, or hook lookup sees it. `watch` gates installing a watch,
 `filter`/`finalize` gate replacing those hooks on a `mut`. A denial is the
 catchable error `(error :permission-denied perm target)`; filtered operations (`using`,
 `doc`, listings, printing) treat an unreadable entry as absent. `(assume
@@ -349,10 +392,65 @@ flushes. A send captures the sender's lexical names like a task (a
 sender's namespace layers and `val` bindings active; a name bound by `fn`'s own
 pattern shadows the captured one. `(promise)` is a single-assignment database value: `(deliver p v)`
 fills it once, `(get p)`/`(await p)` read it (blocking outside a transaction,
-raising inside one unless delivered), and `(ready? p)` tests it; an undelivered
-promise serializes as `"~uuid"`, a delivered one as its value. `task` returns
+raising inside one unless delivered), and `(ready? p)` tests it; a promise
+serializes as the link `"~uuid"` whether it is pending or delivered, so a
+reader waits on the same promise. `task` returns
 such a promise; `deliver` and `await` also accept an ephemeral promise extern. Predicates: `actor?`, `promise?`, `delay?`.
 An actor, promise, or delay from another database is `(error :un-storable …)`.
+
+**Streams.** A stream is a reusable FIFO persisted in the current namespace's
+database: `(stream maxsize=n)` creates one, `(post s v timeout=n)` appends a
+delivery, and `(fetch s meta=true timeout=n)` removes the oldest one. Each
+delivery is the envelope `(obj sender=:user time=(time …))`, stamped by `post`
+itself (`sender=`/`time=` are not options); `fetch` returns the object, or the
+whole envelope with `meta=true`, and an item that is not an envelope reads back
+unchanged either way. `timeout=` (seconds) bounds the wait in both directions
+and an expiry is `naught`, which is distinct from a closed stream. `count` (the
+queued item count), `open?`, and `stream?` inspect one; `(close! s)` stops it,
+after which a drained `fetch` and every `post` raise `(error :stream-closed)`.
+The stream's own ACL gates the directions — `read` receives (`fetch`, `count`,
+`open?`), `write` delivers (`post`, `close!`) — while the namespace entry that
+names it keeps its own read/exec permissions, so a reader needs both to reach it.
+A stream is opaque on the `get`/`value` path (it is never consumed), compares and
+hashes by identity, prints as `#<stream uuid>`, and serializes as the
+always-a-link `"&uuid"`. Operations inside a transaction join it (an aborted
+transaction drops its posts); a blocking operation there cannot see its own
+staged writes, so use `timeout=` inside one. Uncommitted and aborted streams are
+`(error :uncommitted-stream …)` / `(error :aborted-stream …)`.
+
+**Times.** A time is the ordinary immutable form `(time SECONDS)` (UTC epoch
+seconds, Float64) — not a new type — so it persists, hashes, and serializes
+structurally, and the printer spells it `(time "2026-10-28T21:15:00.123Z")` (a
+sub-millisecond or out-of-range value keeps its numeric spelling so printing is
+exact). `(now)` reads the clock, `(time x)` converts a number, an ISO-8601
+string, or a time (`±hh:mm`/`±hhmm` offsets, date-only, space separator), and
+`(time-str t format="…" offset="…")` formats one (Julia `DateFormat` tokens:
+`mm` month, `MM` minutes, `SS` seconds, `s` milliseconds — the `strftime`
+`%H:%M:%S` spelling is `HH:MM:SS`); `time?` tests one. In the operators a
+time plus or minus a number is a time either way, a time minus a time is a
+duration in seconds, and ordering compares two times; every other combination
+(`time + time`, `time * n`, unary minus, a time against a plain number) stays
+symbolic. `(between? x lo hi)`, `(before? a b)`, and `(after? a b)` accept times
+and numbers alike (a time contributes its seconds) and stay symbolic on a
+non-value. `lib/time` supplies `seconds`/`minutes`/`hours`/`days`/`weeks`,
+`since`, and `ago`.
+
+**Printing and layouts.** `air_string(x)` is the flat spelling;
+`air_pretty_string(x; width=80)` breaks it greedily to fit `width`, pinning head
+elements and indenting continuations, and is identical to the flat spelling when
+the form fits. `(form->string x pretty=true width=n)` is the air-level spelling
+of the same two printers; the REPL uses the pretty one at `COLUMNS` (default 80)
+and the permission-aware `air_string(env, x)`/`air_pretty_string(env, x)`.
+`(layout PATTERN head=N indent=M map=inline|block)` declares how forms matching
+PATTERN break: structurally matched on the shape (literals, wildcards, a final
+rest marker; no `\` conditions, no map entries), user declarations newest-first
+ahead of the defaults for `def let val if cond do tx namespace using logic rule
+assert error`, `head=` pins the first N sequence elements to the opening line,
+`indent=` is a column offset past `(` or `align` (the column of the last pinned
+element), and `map=block` gives each `key=value` its own line. A layout is a
+process-global registration, not a definition: `sandbox` and transactions do not
+undo one. `(layouts)` lists the user declarations, `(clear-layout :head|:all)`
+drops them, `(reset-layouts)` drops all.
 
 **Persistence.** A form's database is that of the namespace it is written in:
 the process store for `.`, `.main`, and system homes, an opened root's database
@@ -364,9 +462,9 @@ symbol, or string normalized to its text (so `:x` registers `x`), `air/` is
 reserved, `create=false` raises and `create=naught` yields `naught` when absent,
 and a `value=` that is a same-database volatile makes the name an alias.
 `(name-form! name volatile)` repoints a name; `(named-forms)` lists the readable
-names. Creating needs write in the current namespace; opening a named form and
-every logic-set query need read; logic-set mutation (`assert`, `retract`,
-`revise`, `logic`) needs write. `(tx body…)` evaluates a full `do` block (its
+names. Creating needs write in the current namespace; opening a named form needs read.
+A standalone logic set keeps the older mapping (query needs its `read`, mutation
+`write`); a namespace target uses the four fact/rule permissions instead. `(tx body…)` evaluates a full `do` block (its
 grammar is below) in one STM transaction and yields the block's value;
 transactions join rather than nest, so the outermost `tx` (`namespace`,
 `load-air`, a logic-set edit, and `set!` are transactional too) is the
@@ -374,7 +472,15 @@ commit/rollback boundary. An error escaping it aborts its writes even if an
 outer block catches it; an error caught by the tx's own `except` commits, as
 does a throw caught by its own `catch=`. A throw escaping to an outer `catch=`
 is deferred: watches run, the transaction commits, and only then is the signal
-rethrown (a retried attempt discards it). `(sync)` is a FIFO flush barrier — call it outside an open
+rethrown (a retried attempt discards it). `(sandbox body…)` runs the same block
+grammar in a transaction that is **discarded instead of committed**: it yields
+the body's value and drops every write, so a `def`, `val`, `mut`, fact, rule, or
+namespace created inside it is gone afterwards. Since transactions join rather
+than nest, the body runs in its own transaction on a private task; it therefore
+reads committed state rather than an enclosing transaction's staged writes, and
+non-database side effects (a file write, `open-airdb`) escape. A `throw` still
+reaches an enclosing `catch=`, and a `notify` an enclosing `handle`.
+`(sync)` is a FIFO flush barrier — call it outside an open
 transaction to cover that transaction's writes, since Air defers actor sends
 until commit — and `(status)` is `(pending=N error=…)`.
 `(form-id vf)`/`(form-at id)`/`(loaded? vf)`/`(history vf)` expose identity (an
@@ -427,9 +533,13 @@ containers match elementwise with map order irrelevant, a volatile, actor, or
 promise matches only itself, a delay matches when its type and serialization do
 (it is never forced by a comparison), and an extern follows its own `isequal`
 (an equal regex value matches) — so any immutable form is comparable even when it
-contains a mutable, whose part contributes only its identity. `==` is **content** equality, which is numeric-friendly (`(== 1
-1.0)` is true). `(hash x)` follows `eq?` (equal forms hash alike; the hash never
-descends into a mutable), which is what memoization and keyed tables rely on.
+contains a mutable, whose part contributes only its identity. Both relations
+are AirDB's: `eq?` is `isequiv`, under which `-0.0` is equivalent to `0.0` and
+`NaN` to itself, while `==` is AirDB's `==` — **content** equality,
+numeric-friendly (`(== 1 1.0)`, `(== -0.0 0.0)`, and `(== (f 1) (f 1.0))` are
+true) and, as in Julia, false for `NaN` against itself. `(hash x)` follows `eq?`
+(equal forms hash alike; the hash never descends into a mutable), which is what
+memoization and keyed tables rely on.
 
 **Errors and diagnostics.** `(error :tag …)` is an inert error **object** — the
 `error` head never reduces, so its elements stay raw at any depth. `(raise :tag
