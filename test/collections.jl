@@ -70,24 +70,33 @@
     @test ev("(with (a=(b=1)) (:a :c) 2)") == "(a=(b=1 c=2))"
     @test ev("(wout (a=(b=1 c=2)) (:a :b))") == "(a=(c=2))"
 
-    # the wildcard key `:` names every element of an ordered level; a setter's
-    # values are parallel to the elements, and a remover's remaining path is
-    # applied to each one
+    # the wildcard key `:` names every entry of a level — each sequence element
+    # and each map value; a setter's container values are parallel to the entries
+    # (in canonical key order after the elements) and a scalar is broadcast to
+    # every one, while a remover's remaining path is applied to each entry
     @test ev("(with (1 2 3) : (7 8 9))") == "(7 8 9)"
     @test ev("(with (1 2) : (7 8))") == "(7 8)"
+    @test ev("(with (1 2 3) : 9)") == "(9 9 9)"
+    @test ev("(with (a=1 b=2) : 9)") == "(a=9 b=9)"
+    @test ev("(with (b=2 a=1) : (7 8))") == "(a=7 b=8)"
+    @test ev("(with (1 2 a=3) : (7 8 9))") == "(7 8 a=9)"
+    @test ev("(with (1 2 a=3 b=4) : 9)") == "(9 9 a=9 b=9)"
     @test ev("(with ((a=1) (a=2)) (: :a) (9 9))") == "((a=9) (a=9))"
+    @test ev("(with ((a=1) (a=2)) (: :b) 9)") == "((a=1 b=9) (a=2 b=9))"
     @test ev("(with ((a=(1 2)) (a=(3 4))) (: :a 2) (9 8))") == "((a=(1 9)) (a=(3 8)))"
     @test ev("(hold-with (1 2) : (' (7 8)))") == "(' 7 8)"
     @test ev("(wout ((a=1 x=0) (a=2 x=0)) : :x)") == "((a=1) (a=2))"
     @test ev("(wout ((a=1 x=0) (a=2 x=0)) (: :x))") == "((a=1) (a=2))"
+    @test ev("(wout (a=(b=1 x=0) c=(b=2 x=0)) : :x)") == "(a=(b=1) c=(b=2))"
     @test ev("(wout (1 2 3) :)") == "naught"
+    @test ev("(wout (a=1 b=2) :)") == "naught"
+    @test ev("(wout (1 2 a=3 b=4) :)") == "naught"
     @test ev("(drop (1 2 3) :)") == "naught"
+    @test ev("(drop (a=1 b=2) :)") == "naught"
     @test ev("(hold-wout ((a=1) (a=2)) : :a)") == "(' naught naught)"
-    # an unordered level and a non-parallel value are loud
-    @test_throws AirEvalError air_eval(env, read_air("(with (a=1 b=2) : 9)"))
-    @test_throws AirEvalError air_eval(env, read_air("(wout (a=1 b=2) :)"))
-    @test_throws AirEvalError air_eval(env, read_air("(drop (a=1 b=2) :)"))
+    # a non-parallel container value is loud; a scalar is the one broadcast
     @test_throws AirEvalError air_eval(env, read_air("(with (1 2) : (7 8 9))"))
+    @test_throws AirEvalError air_eval(env, read_air("(with (a=1 b=2) : (7 8 9))"))
 
     # integer keys are uniform: 0 is the whole form, 1…n index, negative keys
     # count from the end, n + 1 appends to a setter, and anything further raises

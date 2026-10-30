@@ -340,48 +340,62 @@ function _get_one(env::Env, scope::Scope, form::Form, key::Form, default, held::
     return air_reduce(env, scope, default)
 end
 
-# The elements of an ordered level addressed by the wildcard key `:`. A
-# sequence's elements are its level, a scalar is its own sole element, and
-# `naught` is empty. A form with map entries has no order and a table has its
-# own path rules, so the wildcard refuses both.
-function _wild_elems(form::Form, who::AbstractString)
+# The entries a wildcard level names: a container's sequence elements in order,
+# then its map values in canonical key order (the order the printer and `pairs`
+# use; air does not preserve the order in which keys were written). A scalar is
+# its own sole entry and `naught` is empty. A table has its own path rules, so
+# the wildcard refuses one.
+function _wild_entries(form::Form, who::AbstractString)
     _table_of(form) === nothing || throw(AirEvalError(
         "$who: ':' has no meaning for a table here; a table path names rows " *
         "and columns, as in (with t (: :age) v)"))
     if form isa FormContainer
-        isempty(form.map) || throw(AirEvalError(
-            "$who: ':' needs an ordered level, but $(air_string(form)) has map entries"))
-        return Form[to_form(v) for v in form.seq]
+        ents = Form[to_form(v) for v in form.seq]
+        for k in sort!(collect(keys(form.map)))
+            push!(ents, to_form(form.map[k]))
+        end
+        return ents
     end
     isequal(form, naught) && return Form[]
     return Form[form]
 end
 
-# The values a wildcard-replacing setter inserts: one per element of the level,
-# in order. A scalar is a one-element value.
+# The values a wildcard setter inserts: one per entry of the level. A scalar is
+# inserted for every entry; a container supplies exactly one value per entry,
+# paired in the canonical entry order.
 function _wild_values(val::Form, n::Integer, who::AbstractString)
+    val isa FormScalar && return fill(val, n)
     c = _as_container(val)
     length(c.seq) == n || throw(AirEvalError(
-        "$who: ':' needs one value per element; $(air_string(val)) has " *
-        "$(length(c.seq)) for $(n) elements"))
+        "$who: ':' needs one value per entry; $(air_string(val)) has " *
+        "$(length(c.seq)) for $(n) entries"))
     return Form[to_form(v) for v in c.seq]
 end
 
-# Removing a wildcard level: every element goes, so the level becomes `naught`.
-function _wild_delete(c::FormContainer, who::AbstractString)
-    isempty(c.map) || throw(AirEvalError(
-        "$who: ':' needs an ordered level, but $(air_string(c)) has map entries"))
-    return naught
+# Removing a wildcard level: every entry goes, so the level becomes `naught`.
+_wild_delete(::Form, ::AbstractString) = naught
+
+# Rebuild a container with each entry's value replaced by `f`, keeping every
+# sequence position and map key in place.
+function _wild_rebuild(c::FormContainer, f::Function)
+    seq = FormValue[_store_form(f(to_form(v))) for v in c.seq]
+    map = FormMap()
+    for (k, v) in c.map
+        map = push(map, k => _store_form(f(to_form(v))))
+    end
+    return canonicalize(FormContainer(FormSeq(seq), map))
 end
 
-# `get` with a wildcard path step: `:` selects every element of an ordered level
-# and maps the rest of the path over each one; as the final key it is the level
-# itself. The result is an ordinary sequence, empty when the level is empty.
+# `get` with a wildcard path step: `:` selects every entry of the level (each
+# sequence element, then each map value in key order) and maps the rest of the
+# path over each one; as the final key it is the level itself. The result is an
+# ordinary sequence, empty when the level is empty, so map values lose their
+# keys.
 function _get_wild(env::Env, scope::Scope, form::Form, keys::AbstractVector,
                    default, held::Bool)
     key = _get_key(air_reduce(env, scope, to_form(keys[1])))
     if key === COLON
-        elems = _wild_elems(_ns_contents(env, form), "get")
+        elems = _wild_entries(_ns_contents(env, form), "get")
         if length(keys) == 1
             v = _ns_form(elems)
         else

@@ -935,6 +935,11 @@ function _delete_key(c::FormContainer, k)
     return c
 end
 
+# One entry of a wildcard setter: with no remaining path the value is inserted
+# as it stands, otherwise the rest of the path is applied through the entry.
+_wild_set_entry(entry::Form, rest::Vector{Any}, val::Form, red::Function) =
+    isempty(rest) ? val : _with_set(entry, rest, val, red)
+
 # Set the subform at `path` to `val`, creating intermediate containers.
 function _with_set(base::Form, path::Vector{Any}, val::Form,
                    red::Function = identity)
@@ -942,13 +947,25 @@ function _with_set(base::Form, path::Vector{Any}, val::Form,
     t === nothing || return _table_with_set(t, path, red(val))
     isempty(path) && return val
     if path[1] === COLON
-        elems = _wild_elems(base, "with")
-        vals = _wild_values(val, length(elems), "with")
-        length(path) == 1 && return canonicalize(FormContainer(
-            FormSeq(FormValue[_store_form(v) for v in vals]), FormMap()))
+        ents = _wild_entries(base, "with")
+        vals = _wild_values(val, length(ents), "with")
         rest = path[2:end]
-        out = FormValue[_store_form(_with_set(elems[j], rest, vals[j], red))
-                        for j in 1:length(elems)]
+        if base isa FormContainer
+            # Keep each sequence position and map key, replacing only values.
+            ns = length(base.seq)
+            seq = FormValue[_store_form(_wild_set_entry(ents[j], rest, vals[j], red))
+                            for j in 1:ns]
+            map = FormMap()
+            for (j, k) in enumerate(sort!(collect(keys(base.map))))
+                map = push(map, k => _store_form(
+                    _wild_set_entry(ents[ns + j], rest, vals[ns + j], red)))
+            end
+            return canonicalize(FormContainer(FormSeq(seq), map))
+        end
+        isempty(rest) && return canonicalize(FormContainer(
+            FormSeq(FormValue[_store_form(v) for v in vals]), FormMap()))
+        out = FormValue[_store_form(_with_set(ents[j], rest, vals[j], red))
+                        for j in 1:length(ents)]
         return canonicalize(FormContainer(FormSeq(out), FormMap()))
     end
     c = _as_container(base)
@@ -961,9 +978,11 @@ end
 function _wout_path(base::Form, path::Vector{Any})
     isempty(path) && return base
     if path[1] === COLON
-        elems = _wild_elems(base, "wout")
         length(path) == 1 && return naught
-        out = FormValue[_store_form(_wout_path(e, path[2:end])) for e in elems]
+        rest = path[2:end]
+        base isa FormContainer && return _wild_rebuild(base, e -> _wout_path(e, rest))
+        out = FormValue[_store_form(_wout_path(e, rest))
+                        for e in _wild_entries(base, "wout")]
         return canonicalize(FormContainer(FormSeq(out), FormMap()))
     end
     c = _as_container(base)

@@ -32,17 +32,22 @@ booleans, and the null value `naught` are all considered subtypes of the
   f)` does the same at a deep path, with a missing key yielding `naught` to
   `f`; and `(wout form k…)` removes the subform. Extra arguments to `f` are
   written with `part`, as in `(update-in m :a (part + 10))`.
-* **The wildcard key:** the lone `:` names **every element of an ordered
-  level** — a form with sequence elements but no map entries. In `get` it
-  selects the whole level and maps the rest of the path over each element
-  (`(get ((a=1) (a=2)) : :a)` is `(1 2)`); in `with` it replaces the elements,
-  which requires one inserted value per element (`(with ((a=1) (a=2)) (: :a) (9
-  9))` is `((a=9) (a=9))`); in `wout` and `drop` it removes every element, and
-  as an intermediate step it applies the rest of the path to each one
-  (`(wout ((a=1 x=0) (a=2 x=0)) : :x)` is `((a=1) (a=2))`). A level with map
-  entries has no order, so it raises; in a table path `:` keeps its own meaning
-  (all rows or all columns) and a lone `:` raises. When any `wout` key is `:`,
-  its key arguments form one path.
+* **The wildcard key:** the lone `:` names **every entry of a level** — each
+  sequence element in order, then each map value in canonical key order (the
+  printer's order; air does not preserve the order in which keys were written).
+  In `get` it selects the whole level and maps the rest of the path over each
+  entry, so the result is an ordinary sequence and map values lose their keys
+  (`(get ((a=1) (a=2)) : :a)` is `(1 2)`, `(get (a=1 b=2) :)` is `(1 2)`, and
+  `(get (1 2 a=3) :)` is `(1 2 3)`); in `with` a scalar is **broadcast** to
+  every entry (`(with (a=1 b=2) : 9)` is `(a=9 b=9)`) and a container supplies
+  one value per entry in that same canonical order (`(with (b=2 a=1) : (7 8))`
+  is `(a=7 b=8)`), with each sequence position and map key kept in place; in
+  `wout` and `drop` it removes every entry, and as an intermediate step it
+  applies the rest of the path to each one (`(wout ((a=1 x=0) (a=2 x=0)) : :x)`
+  is `((a=1) (a=2))`). A scalar is its own sole entry and `naught` is empty; a
+  table has its own path rules (`:` keeps its meaning of all rows or all
+  columns, and a lone `:` raises). When any `wout` key is `:`, its key
+  arguments form one path.
 * **Locating:** `(where coll obj depth=d)` finds every element at depth `d`
   equal to `obj`. With no `depth`, it searches depth `1` and returns the **bare
   keys** of the matches in encounter order: `(where (:a :b :b :c) :b)` is

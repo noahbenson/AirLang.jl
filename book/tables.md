@@ -133,8 +133,8 @@ Every update returns a new table.
 
 `:` is the wildcard for "all rows" or "all columns", so `(with t (: :age) v)`
 is `(with t :age v)` and `(with t (2 :) v)` is `(with t 2 v)`; a lone `:` names
-neither and raises (the wildcard's meaning on ordinary forms — every element of
-an ordered level — is in [the data model](data-model.md#1-forms-and-collections)).
+neither and raises (the wildcard's meaning on ordinary forms — every entry of
+the level — is in [the data model](data-model.md#1-forms-and-collections)).
 A new column's type and NA are inferred from its values,
 an existing column's metadata is enforced, and a value of the wrong type or
 length raises. A table cell is always a value, so a table reduces its update
