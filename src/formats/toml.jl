@@ -7,10 +7,12 @@
 # forms `(toml-date "…")`, `(toml-time "…")`, and `(toml-datetime "…")`, which
 # the writer reads back as TOML literals; no extern is involved.
 #
-# Julia's TOML parser does not accept an offset date-time, and it drops a `Z`
-# suffix's timezone, so the writer emits what the marker holds but the reader
-# sees the offset only when the parser keeps it. That is a limitation of the
-# standard library, not of this reader.
+# Julia's TOML parser rejects an offset date-time (`2026-10-30T12:30:00-08:00`)
+# and drops a `Z` suffix. The reader works around it: it pre-scans the source,
+# quoting each offset date-time as an opaque sentinel string, parses, and then
+# restores every sentinel to a `(toml-datetime "…")` marker carrying the literal
+# exactly as written. The scanner skips strings and comments, so only a bare
+# value is touched.
 #
 # MIT License
 # Copyright (c) 2026 Noah C. Benson
@@ -50,18 +52,153 @@ const _TOML_MARKER_RES = Dict{Symbol,Regex}(
 
 # ---- reader ------------------------------------------------------------------
 
+# A bare offset date-time: the shape the standard-library parser cannot read (or
+# whose `Z` it drops).
+const _TOML_OFFSET_DT_RE =
+    r"\d{4}-\d{2}-\d{2}[Tt ][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:[Zz]|[+-][0-9]{2}:[0-9]{2})"
+
+# Is a bare token at `i` a TOML value position (so a date-time may begin here)?
+_toml_value_start(c::Char) = c in ('=', '[', ',', '{', ' ', '\t', '\r', '\n')
+_toml_value_end(c::Char) = c in (',', ']', '}', '#', ' ', '\t', '\r', '\n')
+
+# Copy a single-line basic or literal string, returning the index after it. An
+# unterminated string is copied to the end so the parser reports it.
+function _toml_copy_quoted!(io::IO, s::String, i::Int, q::Char)
+    n = lastindex(s)
+    print(io, q)
+    j = nextind(s, i)
+    while j <= n
+        c = s[j]
+        if c == '\\' && q == '"'
+            print(io, c)
+            j = nextind(s, j)
+            j <= n || break
+            print(io, s[j])
+            j = nextind(s, j)
+        elseif c == q
+            print(io, c)
+            return nextind(s, j)
+        else
+            print(io, c)
+            j = nextind(s, j)
+        end
+    end
+    return nextind(s, n)
+end
+
+# Copy a triple-quoted (multiline) string, returning the index after it. A run
+# of three or more quotes ends the string — the last three are the delimiter and
+# any earlier ones are content.
+function _toml_copy_multiline!(io::IO, s::String, i::Int, q::Char)
+    n = lastindex(s)
+    a = nextind(s, i)
+    b = nextind(s, a)
+    print(io, SubString(s, i, b))
+    j = nextind(s, b)
+    while j <= n
+        c = s[j]
+        if c == '\\' && q == '"'
+            print(io, c)
+            j = nextind(s, j)
+            j <= n || break
+            print(io, s[j])
+            j = nextind(s, j)
+        elseif c == q
+            k = j
+            run = 0
+            while k <= n && s[k] == q
+                run += 1
+                k = nextind(s, k)
+            end
+            print(io, SubString(s, j, prevind(s, k)))
+            run >= 3 && return k
+            j = k
+        else
+            print(io, c)
+            j = nextind(s, j)
+        end
+    end
+    return nextind(s, n)
+end
+
+# Quote every bare offset date-time in the source as an opaque sentinel string,
+# leaving strings and comments alone. Returns the rewritten text and the map
+# from sentinel text to the literal it stands for.
+function _toml_protect_datetimes(text::AbstractString)
+    s = String(text)
+    prefix = "__air_toml_offset_"
+    while occursin(prefix, s)
+        prefix = "_" * prefix
+    end
+    sentinels = Dict{String,String}()
+    io = IOBuffer()
+    i = firstindex(s)
+    n = lastindex(s)
+    k = 0
+    while i <= n
+        c = s[i]
+        if c == '#'
+            j = findnext(==('\n'), s, i)
+            print(io, SubString(s, i, j === nothing ? n : prevind(s, j)))
+            i = j === nothing ? nextind(s, n) : j
+        elseif c == '"' || c == '\''
+            a = nextind(s, i)
+            if a <= n && s[a] == c && nextind(s, a) <= n && s[nextind(s, a)] == c
+                i = _toml_copy_multiline!(io, s, i, c)
+            else
+                i = _toml_copy_quoted!(io, s, i, c)
+            end
+        else
+            m = match(_TOML_OFFSET_DT_RE, SubString(s, i))
+            if m !== nothing && m.offset == 1 &&
+               (i == firstindex(s) || _toml_value_start(s[prevind(s, i)]))
+                j = nextind(s, i, length(m.match))
+                if j > n || _toml_value_end(s[j])
+                    key = prefix * string(k) * "__"
+                    k += 1
+                    sentinels[key] = String(m.match)
+                    print(io, '"', key, '"')
+                    i = j
+                    continue
+                end
+            end
+            print(io, c)
+            i = nextind(s, i)
+        end
+    end
+    return String(take!(io)), sentinels
+end
+
+# Replace every sentinel string in the parsed form with its marker form.
+function _toml_restore(x::Form, sentinels::Dict{String,String})
+    if x isa FormContainer
+        seq = FormValue[_store_form(_toml_restore(to_form(v), sentinels)) for v in x.seq]
+        map = Pair{Symbol,FormValue}[
+            key => _store_form(_toml_restore(to_form(v), sentinels)) for (key, v) in x.map]
+        return canonicalize(FormContainer(FormSeq(seq), FormMap(map)))
+    end
+    l = _leafof(x)
+    if l isa AbstractString && haskey(sentinels, l)
+        return _toml_marker_form(_TOML_DATETIME, sentinels[l])
+    end
+    return x
+end
+
 """
     _toml_decode(text) -> Form
 
 Parse a TOML document into air data.
 """
 function _toml_decode(text::AbstractString)
+    protected, sentinels = _toml_protect_datetimes(text)
     data = try
-        TOML.parse(String(text))
+        TOML.parse(protected)
     catch e
         throw(AirEvalError("invalid TOML: " * sprint(showerror, e)))
     end
-    return _data_to_form(data; who = "toml")
+    v = _data_to_form(data; who = "toml")
+    isempty(sentinels) && return v
+    return _toml_restore(v, sentinels)
 end
 
 # ---- writer ------------------------------------------------------------------

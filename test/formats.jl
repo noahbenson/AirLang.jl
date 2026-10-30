@@ -119,6 +119,30 @@
     @test enc("(d=(toml-date \"2026-10-30\"))", "toml") == "\"d = 2026-10-30\\n\""
     @test enc("(k=(toml-datetime \"2026-10-30T12:30:00\"))", "toml") ==
           "\"k = 2026-10-30T12:30:00\\n\""
+    # an offset date-time survives the standard library's parser, which rejects
+    # an offset and drops a `Z`; the marker keeps the literal exactly as written
+    @test dec("k = 2026-10-30T12:30:00-08:00\n", "toml") ==
+          "(k=(toml-datetime \"2026-10-30T12:30:00-08:00\"))"
+    @test dec("k = 2026-10-30T12:30:00Z\n", "toml") ==
+          "(k=(toml-datetime \"2026-10-30T12:30:00Z\"))"
+    @test dec("k = 2026-10-30T12:30:00.125+05:30\n", "toml") ==
+          "(k=(toml-datetime \"2026-10-30T12:30:00.125+05:30\"))"
+    @test dec("k = 2026-10-30 12:30:00z\n", "toml") ==
+          "(k=(toml-datetime \"2026-10-30 12:30:00z\"))"
+    @test dec("k = [2026-10-30T12:30:00Z, 2026-10-30T13:30:00-08:00]\n", "toml") ==
+          "(k=((toml-datetime \"2026-10-30T12:30:00Z\") " *
+          "(toml-datetime \"2026-10-30T13:30:00-08:00\")))"
+    @test dec("k = {a = 2026-10-30T12:30:00Z}\n", "toml") ==
+          "(k=(a=(toml-datetime \"2026-10-30T12:30:00Z\")))"
+    @test enc("(k=(toml-datetime \"2026-10-30T12:30:00-08:00\"))", "toml") ==
+          "\"k = 2026-10-30T12:30:00-08:00\\n\""
+    @test ev("(decode (encode (k=(toml-datetime \"2026-10-30T12:30:00Z\")) " *
+             "format=:toml) format=:toml)") ==
+          "(k=(toml-datetime \"2026-10-30T12:30:00Z\"))"
+    # a date-time in a string or a comment is data, not a value
+    @test dec("k = \"2026-10-30T12:30:00Z\"\n", "toml") == "(k=\"2026-10-30T12:30:00Z\")"
+    @test dec("# 2026-10-30T12:30:00Z\nk = 1\n", "toml") == "(k=1)"
+    @test dec("k = 1 # 2026-10-30T12:30:00Z\n", "toml") == "(k=1)"
     # a malformed marker is just data
     @test_throws AirLang.AirEvalError ev("(encode (d=(toml-date \"nope\")) format=:toml)")
     # errors: duplicate keys, bad syntax, a top-level non-object, naught values,

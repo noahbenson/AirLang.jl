@@ -188,8 +188,19 @@ The markers are ordinary air data — a two-element form headed `toml-date`,
 text is a valid literal of that kind and raises otherwise, so a marker never
 silently becomes a string. Any other form of the same shape is an ordinary map.
 
-The standard library's TOML parser rejects an offset date-time (`2026-10-30T12:30:00-08:00`);
-a trailing `Z` is accepted but its UTC offset is dropped.
+An **offset** date-time keeps its offset exactly as written, including a
+trailing `Z`:
+
+```air
+(decode "k = 2026-10-30T12:30:00-08:00\n" format=:toml)
+# => (k=(toml-datetime "2026-10-30T12:30:00-08:00"))
+(decode "k = 2026-10-30T12:30:00Z\n" format=:toml)
+# => (k=(toml-datetime "2026-10-30T12:30:00Z"))
+```
+
+The standard library's parser rejects `±hh:mm` and drops `Z`, so the reader
+protects each bare offset date-time before parsing and restores the marker
+afterward; a date-time inside a string or a comment stays string data.
 
 ## CSV and TSV
 
