@@ -252,19 +252,24 @@ _call(env::Env, scope::Scope, f::Form, args) =
 # The `hold=` option of a `def`/rule form: a set of parameter names to bind without
 # reducing. The value is `hold=x` (one name) or `hold=(x y …)` (several).
 function _held_names(call::FormContainer)
-    held = Set{Symbol}()
-    haskey(call.map, Symbol(":hold")) || return held
-    h = to_form(call.map[Symbol(":hold")])
+    return _option_names(call.map, Symbol(":hold"))
+end
+
+# The names an option's value lists: one symbol, or a sequence of symbols.
+function _option_names(map, key::Symbol)
+    out = Set{Symbol}()
+    haskey(map, key) || return out
+    h = to_form(map[key])
     if h isa FormContainer
         for v in h.seq
             s = _symbolof(to_form(v))
-            s === nothing || push!(held, s)
+            s === nothing || push!(out, s)
         end
     else
         s = _symbolof(h)
-        s === nothing || push!(held, s)
+        s === nothing || push!(out, s)
     end
-    return held
+    return out
 end
 
 # The hold bound to `_` inside a rule body: every argument, as it entered the

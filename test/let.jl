@@ -44,6 +44,29 @@
     @test ev("(let ((a=1 b=2) (c=(a + b))) hold=c (hold c))") == "(' (1 + 2))"
     @test ev("(let ((a=1 b=2) (c=(a + b))) (hold c))") == "'3"
 
+    # `bind=` installs those names as lexical bindings instead of substituting
+    # them, so a substituted value may mention a bound name and see its value.
+    @test ev("(let ((a=1) (b=(a + 1))) bind=(a b) (a + b))") == "3"
+    @test ev("(let ((a=1) (b=(a + 1))) bind=a (a + b))") == "3"
+    @test ev("(let ((x=1) (x=(x + 2))) bind=x x)") == "3"
+    @test ev("(let ((a=(1 + 1) f=(a ^ 2)) hold=f bind=a) f)") == "4"
+    @test ev("(let ((a=(1 + 1) f=(a ^ 2)) bind=a) f)") == "4"
+    # The motivating example: `const` substitutes into `a` and `b`, which are
+    # bound; the body's `f` becomes its held value and resolves against them.
+    @test ev("(let ((const=2.551 f=((a ^ 2) / ((a + b) ^ 2))) " *
+             "(a=(2 * const) b=(4 * (const ^ 2))) hold=f bind=(a b)) f)") ==
+          "0.02685688214587777"
+    # A `do` body's `:let` marker takes the options on its binder form.
+    @test ev("(do :let ((const=2.551 f=((a ^ 2) / ((a + b) ^ 2))) " *
+             "(a=(2 * const) b=(4 * (const ^ 2))) hold=f bind=(a b)) f)") ==
+          "0.02685688214587777"
+    @test ev("(do :let ((a=1) (b=(a + 1)) bind=(a b)) (+ a b))") == "3"
+    # A name cannot be both inserted as written and installed as a binding.
+    @test_throws AirEvalError air_eval(env,
+        read_air("(let (x=1) hold=x bind=x x)"))
+    # `let=` already binds every name, so it takes no hold= or bind=.
+    @test ev("(do (do let=((a=1) bind=(a)) a) (except ?e :caught))") == ":caught"
+
     # Mixed and malformed binding forms are rejected.
     @test_throws AirEvalError air_eval(env, read_air("(let (a=1 (b=2)) a)"))
     @test_throws AirEvalError air_eval(env, read_air("(let ((a=1) b=2) a)"))

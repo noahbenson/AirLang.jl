@@ -65,6 +65,10 @@ end
 # this for `hold-F` too; its default is true there and false for `F`).
 const HOLD_KEY = Symbol(":hold")
 
+# The `bind=` option of `let`: names whose values are installed as lexical
+# bindings instead of being substituted into the body.
+const BIND_KEY = Symbol(":bind")
+
 # The `depth=` option shared by the level-aware verbs: `0` is the subject
 # itself, `n > 0` every node at depth `n` (see `_map_at_depth`).
 const DEPTH_KEY = Symbol(":depth")

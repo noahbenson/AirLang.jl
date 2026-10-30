@@ -78,6 +78,11 @@ end
 # clause patterns/conditions, clause bodies, and `finally`. Groups feed one
 # another, as in `let`; a rebound name keeps its last value in a single level.
 function _let_scope(env::Env, scope::Scope, raw::Form, name::AbstractString)
+    if raw isa FormContainer && !isempty(raw.seq) &&
+       any(k -> k in _LET_OPTION_KEYS, keys(raw.map))
+        throw(AirEvalError(
+            "$name: hold= and bind= belong to let; let= binds every name"))
+    end
     groups = isequal(raw, naught) ? FormContainer[] : _let_groups(raw)
     groups === nothing && throw(AirEvalError(
         "$name: let= bindings must be one key=value mapping or a sequence of them"))

@@ -125,5 +125,24 @@ substitute into them):
 (let ((a=1 b=2) (c=(a + b))) hold=c (hold c))   # => (' (1 + 2))
 ```
 
+A `bind=(x y)` option names bindings that are **bound**, not substituted: each
+value is evaluated and installed as a lexical name instead of being written into
+the body. Bound and substituted names live side by side, so a substituted value
+may mention a bound name and resolves against it. The option goes on the `let`
+form, or on a sequence binding form's own map (where a `:let` marker must put it):
+
+```air
+(let ((const=2.551 f=((a ^ 2) / ((a + b) ^ 2)))
+      (a=(2 * const) b=(4 * (const ^ 2))) hold=f bind=(a b))
+  f)                                     # => 0.02685688214587777
+
+(do :let ((a=1) (b=(a + 1)) bind=(a b)) (+ a b))   # => 3
+```
+
+`const` substitutes into `a` and `b`; `a` and `b` are bound; `hold=f` inserts
+`f`'s expression, which then evaluates against the bound `a` and `b`. A name
+cannot be both held and bound. `let=` already binds every name and takes neither
+option.
+
 Because a value is inserted rather than looked up, a value whose head is its own
 name is harmless: `(let (db=(db 1)) db)` is `(db 1)`.

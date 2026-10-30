@@ -51,36 +51,60 @@ function _bi_let(env::Env, scope::Scope, call::FormContainer)
         throw(AirEvalError("let needs a binding form, as in (let (x=1) body)"))
     bform = to_form(call.seq[2])
     held = _held_names(call)
+    bound = _option_names(call.map, BIND_KEY)
+    if bform isa FormContainer
+        # A group-sequence binder may carry the options itself, which is how a
+        # `:let` marker (whose binder form is the only place they fit) writes
+        # them.
+        held = union(held, _option_names(bform.map, HOLD_KEY))
+        bound = union(bound, _option_names(bform.map, BIND_KEY))
+    end
     groups = isequal(bform, naught) ? FormContainer[] : _let_groups(bform)
     groups === nothing && throw(AirEvalError(
         "let bindings must be one key=value mapping or a sequence of them"))
+    for name in bound
+        name in held && throw(AirEvalError(
+            "let: $(name) cannot be both held and bound; hold= inserts a value " *
+            "as written while bind= installs it as a name"))
+    end
     subst = Dict{Symbol,Form}()
+    # A bound name is installed in this scope rather than substituted, so its
+    # value must be evaluated now; a substituted name keeps `let`'s textual
+    # semantics. Both live alongside the enclosing scope.
+    bscope = scope
     for g in groups
         # Bindings within a group are parallel: each value expression sees `subst`
-        # as it stood before the group. A rebound name therefore refers to its
-        # *previous* value inside its own new value — `(let ((x=1) (x=(x + 2))) x)`
-        # is `3` — while the new value is what later groups and the body see.
+        # and `bscope` as they stood before the group. A rebound name therefore
+        # refers to its *previous* value inside its own new value —
+        # `(let ((x=1) (x=(x + 2))) x)` is `3` — while the new value is what later
+        # groups and the body see.
         fresh = Pair{Symbol,Form}[]
         for (k, v) in g.map
             name = _bindname(k)
             _check_not_reserved(name, AirEvalError, "bound")
             raw = isempty(subst) ? to_form(v) : _subst_params(to_form(v), subst)
-            push!(fresh, name => (name in held ? raw : air_reduce(env, scope, raw)))
+            push!(fresh, name => (name in held ? raw : air_reduce(env, bscope, raw)))
         end
+        binds = Pair{Symbol,Form}[]
         for (name, val) in fresh
-            subst[name] = val
+            if name in bound
+                push!(binds, name => val)
+            else
+                subst[name] = val
+            end
         end
+        isempty(binds) || (bscope = scope_extend(bscope, binds))
     end
     n = length(call.seq)
     n >= 3 || return naught
     for i in 3:(n - 1)
         body = to_form(call.seq[i])
         isempty(subst) || (body = _subst_params(body, subst))
-        air_reduce(env, scope, body)
+        air_reduce(env, bscope, body)
     end
     body = to_form(call.seq[n])
     isempty(subst) || (body = _subst_params(body, subst))
-    return _Tail(body, scope)
+    return _Tail(body, bscope)
 end
 special!(:let, _bi_let)
 

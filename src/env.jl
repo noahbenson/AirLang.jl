@@ -116,18 +116,24 @@ The binding groups of a `let` binding form, in order. A single mapping
 (`(x=1 y=2)`) is one group; a sequence of mappings (`((a=1) (b=2))`) is one group
 per element, each of which can use the names bound by the groups before it.
 `naught` (the same value as `()`) is an empty binding set, whether it is the
-whole form or one group of the sequence. Returns `nothing` for any other shape
-(a mixed sequence/map form, or an element that is not a pure mapping), so a pass
-that merely walks code can leave the form alone while `let` itself reports the
-error.
+whole form or one group of the sequence. A group sequence's own map may hold the
+`hold=` and `bind=` options, which name bindings rather than being bindings.
+Returns `nothing` for any other shape (a sequence with any other map entry, or
+an element that is not a pure mapping), so a pass that merely walks code can
+leave the form alone while `let` itself reports the error.
 """
+const _LET_OPTION_KEYS = Set{Symbol}([Symbol(":hold"), Symbol(":bind")])
+
 function _let_groups(bform::Form)
     isequal(bform, naught) && return FormContainer[]
     bform isa FormContainer || return nothing
     if isempty(bform.seq)
         return FormContainer[bform]
     end
-    isempty(bform.map) || return nothing
+    # A group sequence may also carry the `hold=` and `bind=` options, which
+    # name bindings rather than being bindings. `:let` markers need this because
+    # the marker's binder form is the only place they can write options.
+    all(k -> k in _LET_OPTION_KEYS, keys(bform.map)) || return nothing
     groups = FormContainer[]
     for a in bform.seq
         g = to_form(a)
