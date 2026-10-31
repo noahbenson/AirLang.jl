@@ -1,0 +1,34 @@
+# air's startup file.
+#
+# `docker compose up -d` runs `air --serve startup.air` inside the air
+# container: every form here is evaluated once, then the process stays up so
+# the SSH server keeps listening. The repository's `lib/` directory is mounted
+# as air's library path, so `(using my-lib …)` loads `lib/my-lib/init.air`.
+
+# Open the PostgreSQL sidecar (the `postgres` service in docker-compose.yml) and
+# root the namespace `.db` in it. With no `create=` option, air opens the
+# existing schema and creates it only when it is missing, so the first run
+# initializes AirDB's tables and later runs reopen them quietly.
+(open-airdb .db dbname="air" user="air" password="air" host="postgres")
+
+# An example user. The key below is a **placeholder**: replace the base64 blob
+# (and the comment) with your own public key, e.g.
+#
+#     ssh-keygen -t ed25519 -C "you@example.com"
+#     cat ~/.ssh/id_ed25519.pub
+#
+# Only `:alice` is created, so only `:alice` can log in to the server below.
+# `create-user` raises when the user already exists, which is the normal case
+# on a restart, so that error is swallowed.
+(do (create-user :alice) (except ?e naught))
+(as-user :alice
+  (namespace $.config.ssh
+    (val authorized-keys
+      ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeFakeFakeFakeFakeFakeFakeFakeFakeFake alice@example.com"))))
+
+# Listen on every interface so Docker's published port reaches the server. The
+# server is owned by `:air`, which admits every user, but a login still needs a
+# key from the user's own `$.config.ssh`; port 2222 is published by compose.
+(ssh-server :sshd port=2222 bind="0.0.0.0")
+
+(println "air is serving SSH on port 2222; try: ssh -p 2222 alice@localhost")

@@ -116,10 +116,27 @@ The image is a slim Julia runtime with AirLang and its dependencies precompiled.
 The host's `lib/` is mounted at `/air/lib` and used as air's library path.
 
 ```bash
-docker compose run --rm air    # an air REPL with ./lib mounted
-docker compose up --build      # air plus PostgreSQL
-./bin/air-docker -e '(+ 1 2)'  # the same CLI, in the container
+docker compose up -d --build   # air serving SSH on :2222, plus PostgreSQL
+docker compose logs -f air     # watch the startup log
+docker compose run --rm air -e '(+ 1 2)'   # one-off command, same mounts
+./bin/air-docker               # an interactive REPL in the container
 ```
+
+`--build` is needed on the first run and after changing the image's source;
+`docker compose up -d` alone starts an image that already exists.
+
+The container runs `air --serve startup.air` from the repository root. That
+file opens the PostgreSQL sidecar as the namespace `.db`, creates an example
+user `:alice` with a **placeholder** SSH key, and starts an SSH server on port
+2222 (published by compose). Replace the placeholder key in `startup.air` with
+your own, then `docker compose restart air` and log in:
+
+```bash
+ssh -p 2222 alice@localhost
+```
+
+`--serve` runs the files and `-e` chunks, then keeps the process alive so the
+SSH server keeps listening until SIGINT/SIGTERM.
 
 The sibling checkouts are passed as named build contexts:
 
@@ -152,6 +169,7 @@ libraries](book/libraries.md).
 | `lib/` | the library search path's first entry |
 | `bin/air` | the command line |
 | `bin/air-docker` | the command line, in the container |
+| `startup.air` | the container's startup file (database, example user, SSH server) |
 | `bin/build-docs` | build the documentation locally |
 | `bin/deploy-docs` | build and publish the documentation to GitHub Pages |
 | `Dockerfile`, `docker-compose.yml` | the container image and a PostgreSQL sidecar |

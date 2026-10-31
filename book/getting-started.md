@@ -42,7 +42,12 @@ loop; `-e` evaluates one chunk of code; any other argument is a file to load:
 ./bin/air -e '(+ 1 2)'                 # => 3
 ./bin/air -e 'using AirLang; (println "hi")'
 ./bin/air program.air                  # load a file
+./bin/air --serve program.air          # load, then stay up (ssh-server, …)
 ```
+
+`--serve` keeps the process alive after the files and `-e` chunks are
+evaluated, so an `ssh-server` (or another process resource) keeps serving until
+SIGINT or SIGTERM. This is how the Docker container stays up.
 
 The `-e` chunks and files in one invocation share an environment, so definitions
 made by an earlier `-e` are visible to a later one. The REPL reads a form across
@@ -102,16 +107,41 @@ docker build -t airlang \
     --build-context airdb=../AirDB.jl .
 ```
 
-Or use the compose file, which names the same contexts and also starts a
-PostgreSQL sidecar:
+Or use the compose file, which names the same contexts, starts a PostgreSQL
+sidecar, and brings up air as an SSH server:
 
 ```bash
-docker compose run --rm air          # an air REPL with ./lib mounted
-docker compose up --build            # air plus PostgreSQL
+docker compose up -d --build         # air (SSH on :2222) plus PostgreSQL
+docker compose logs -f air           # follow the air log
+docker compose down                  # stop both; the database volume survives
+```
+
+`docker compose up -d` runs `air --serve startup.air` in the container; add
+`--build` on the first run and after changing the image's source. The
+repository's `startup.air` opens the PostgreSQL sidecar as the namespace `.db`,
+creates an example user `:alice` with a placeholder SSH key, and starts
+`(ssh-server :sshd port=2222 bind="0.0.0.0")`; compose publishes port 2222 and
+mounts `./lib` at `/air/lib`, the first `AIR_LIBPATH` entry. Edit `startup.air`
+to install your own public key (replace the base64 blob with the contents of
+`~/.ssh/id_ed25519.pub`), then `docker compose restart air`. Log in with:
+
+```bash
+ssh -p 2222 alice@localhost
+```
+
+`--serve` is the one CLI flag the container needs: it runs the files and `-e`
+chunks, then keeps the process alive so its `ssh-server` (and any other process
+resource) keeps serving until SIGINT/SIGTERM ends it.
+
+One-off commands use the same image and mounts:
+
+```bash
+docker compose run --rm air -e '(+ 1 2)'   # => 3
 ```
 
 `bin/air-docker` is a thin wrapper that runs the image with the same command
-line as `bin/air` and mounts `./lib`:
+line as `bin/air` and mounts `./lib`; it is the easy way to get an interactive
+REPL:
 
 ```bash
 ./bin/air-docker                     # REPL

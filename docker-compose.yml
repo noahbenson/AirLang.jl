@@ -1,21 +1,27 @@
 # air and a PostgreSQL sidecar.
 #
-# AirLang depends on the sibling Air.jl and AirDB.jl checkouts, so they are
-# passed to the build as the named contexts `air` and `airdb`:
+#     docker compose up -d --build   # start air (SSH on :2222) and PostgreSQL
+#     docker compose logs -f air     # follow the air log
+#     docker compose down            # stop both; the pgdata volume survives
 #
-#     docker compose up --build
-#     docker compose run --rm air          # just the air container
+# The air container runs `air --serve startup.air` from the repository root
+# (mounted at /work). `startup.air` opens the PostgreSQL sidecar as the
+# namespace `.db`, creates an example user with an SSH key, starts an SSH
+# server on port 2222, and prints a login hint; `--serve` then keeps the
+# process up. Edit `startup.air` to change the user or key, then rerun
+# `docker compose restart air`.
 #
-# The host's ./lib is mounted at /air/lib (the first AIR_LIBPATH entry), so a
-# library dropped in ./lib/<name>/init.air is available inside the container.
-# The REPL is interactive: `stdin_open`/`tty` keep it attached.
+# The host's ./lib is mounted at /air/lib, the first AIR_LIBPATH entry, so a
+# library in ./lib/<name>/init.air is available inside the container.
 #
-# Open the database from air with e.g.
+# One-off commands use the same image and mounts:
+#
+#     docker compose run --rm air -e '(+ 1 2)'
+#     ./bin/air-docker               # an interactive REPL
+#
+# Open the database by hand with
 #
 #     (open-airdb .db dbname="air" user="air" password="air" host="postgres" create=true)
-#
-# `create=true` creates AirDB's schema inside the (already existing) `air`
-# database provided by the sidecar; omit it to reopen an existing schema.
 
 services:
   air:
@@ -26,12 +32,18 @@ services:
         airdb: ../AirDB.jl
     image: airlang:latest
     init: true
+    # `air --serve` ends at once on SIGINT; Julia's SIGTERM path prints a
+    # shutdown backtrace, so `docker stop`/`down` use SIGINT.
+    stop_signal: SIGINT
+    command: ["--serve", "startup.air"]
     environment:
       AIR_LIBPATH: /air/lib
       PGHOST: postgres
       PGUSER: air
       PGPASSWORD: air
       PGDATABASE: air
+    ports:
+      - "2222:2222"
     volumes:
       - ./lib:/air/lib:ro
       - ./:/work
@@ -39,8 +51,6 @@ services:
       postgres:
         condition: service_healthy
     working_dir: /work
-    stdin_open: true
-    tty: true
 
   postgres:
     image: postgres:16
