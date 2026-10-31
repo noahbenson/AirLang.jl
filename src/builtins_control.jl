@@ -295,6 +295,13 @@ builtin!(:reduce, (env, scope, args) -> begin
         end
         return acc
     end
+    tv = _tensor_of(coll)
+    if tv !== nothing
+        for l in _tensor_leaves(tv)
+            acc = _call(env, scope, f, [acc, to_form(AirDB._formvalue(l))])
+        end
+        return acc
+    end
     if coll isa FormContainer
         for v in coll.seq
             acc = _call(env, scope, f, [acc, to_form(v)])
@@ -320,6 +327,13 @@ builtin!(:each, (env, scope, args) -> begin
     if t !== nothing
         for i in 1:t.nrows
             _call(env, scope, f, [_table_row(t, i)])
+        end
+        return naught
+    end
+    tv = _tensor_of(coll)
+    if tv !== nothing
+        for l in _tensor_leaves(tv)
+            _call(env, scope, f, [to_form(AirDB._formvalue(l))])
         end
         return naught
     end
@@ -407,6 +421,15 @@ function _for_step(env::Env, scope::Scope, binds, i::Int, body, results)
         if t !== nothing
             for j in 1:t.nrows
                 _for_step(env, scope_extend(scope, [name => _table_row(t, j)]),
+                          binds, i + 2, body, results)
+            end
+            return nothing
+        end
+        tv = _tensor_of(coll)
+        if tv !== nothing
+            for l in _tensor_leaves(tv)
+                _for_step(env, scope_extend(scope,
+                          [name => to_form(AirDB._formvalue(l))]),
                           binds, i + 2, body, results)
             end
             return nothing

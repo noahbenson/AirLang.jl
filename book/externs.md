@@ -114,6 +114,27 @@ or whose cells are equivalent.
 Like `bytes`, a table is stored faithfully in a database but does not survive
 `to-json`/`from-json` text; for interchange use CSV/TSV or a database.
 
+## 7. `tensor`: a mutable extern
+
+A [`tensor`](tensors.md) is the first **mutable** extern: an N-dimensional
+Julia array over air's numeric tower. Mutation is the reason for the
+reservation protocol. An in-place write cannot be rolled back, so it may never
+happen inside a transaction; instead AirDB's extern protocol supplies two
+operations, both surfaced in air:
+
+* `reserve_read` takes read locks, checks the extern versions, and runs the body
+  inline — safe inside a transaction, because a concurrent write forces a retry.
+  This is `(reserve-read …)` and `{t : …}`.
+* `reserve` takes write locks on a spawned task and returns an `ExternPromise`;
+  inside a transaction it is commit-gated. This is `(reserve …)` and
+  `{t :! …}`, and the promise is the air `AirReservation` (`get`/`await`/
+  `ready?`).
+
+The extern registration is immutable-flagged false and supplies no codec,
+equivalence, or constructor hooks: a tensor has no database identity, so it is
+rejected as un-storable in a database namespace and reads back as a dead extern
+through `to-json`. `tensor->form` is the portable spelling.
+
 **Status of §3.** The tombstone scheme is not what the runtime does today: an
 unnamed extern is written without an id and reads back as a `DeadExtern` that
 prints `#<extern :type (expired)>` and raises `(error :extern-expired :type)`

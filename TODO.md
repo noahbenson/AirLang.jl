@@ -23,8 +23,8 @@ YAML, TOML, and `.env`), the set verbs, the Mathematica-style list verbs
 (`bit-and`, `bit-or`, `bit-xor`, `bit-not`, `bit-shift-left`,
 `bit-shift-right`), the REPL (multi-line input, `AIR_HISTORY`,
 pretty-printing), the SSH server (`ssh-server`: key login, a remote REPL,
-SFTP), the immutable `bytes` extern,
-`(exit)`, and the CLI.
+SFTP), the immutable `bytes` extern, the mutable `tensor` extern with `[…]`
+literals and `{…}` reservations, `(exit)`, and the CLI.
 
 ---
 
@@ -770,6 +770,53 @@ class-based exception hierarchies.
 - [ ] Lazy sequences / transducers (later — air is eager).
 
 ---
+
+## 19. Arrays and numeric tensors
+
+- [x] **Array literals** — `[1 2 3]`, `[1 2; 3 4]`, and the `;;` page spelling
+  for higher rank, desugared to `(tensor-literal (' …))` over `preval` holes so
+  cells evaluate and grouping forms do not. `[]` is an empty Float64 vector.
+- [x] **The `tensor` extern** — a mutable `AirTensor` over a Julia `Array`,
+  elements restricted to air's numeric tower, with Julia promotion;
+  `tensor`, `tensor-zeros/ones/fill/eye/rand/randn`, `tensor?`,
+  `tensor-shape`, `tensor-rank`, `tensor-eltype`, `tensor-copy`, `tensor->form`,
+  `tensor-map`, `tensor-mul`, `tensor-equal?`, `tensor-close?`, and the in-place
+  `tensor-…!` verbs.
+- [x] **Access and arithmetic** — per-axis `get` (integer, negative, `:`,
+  index sequences; `0` is the tensor itself, `:` a copy), `set!`, `with`,
+  broadcasting `+ - * / ^ mod` and the math verbs, Julia's `*` semantics for
+  rank ≤ 2 (rank > 2 raises), linear column-major iteration and the numeric
+  reductions, and `LinearAlgebra` (`dot`, `norm`, `tr`, `det`, `inv`,
+  `matrix-rank`, `linsolve`, `transpose`, `adjoint`, `reshape`, `eigen`, `svd`,
+  `qr`, `cholesky`).
+- [x] **Numpy-level array surface** — axis reductions (`sum`, `product`,
+  `mean`, `median`, `variance`, `std`, `min`, `max` with Julia-style `dims=`
+  and `drop=`, plus `tensor-any`/`tensor-all`/`tensor-count`), cumulative
+  operations (`tensor-cumsum`, `tensor-cumprod`, `tensor-diff`),
+  construction (`tensor-arange`, `tensor-linspace`, `tensor-randint`),
+  comparison masks (`tensor-lt`/`-le`/`-gt`/`-ge`/`-eq`/`-ne`) and
+  `tensor-where`, manipulation (`tensor-concat`, `tensor-stack`,
+  `tensor-flip`, `tensor-roll`, `tensor-tile`, `tensor-squeeze`,
+  `tensor-expand-dims`, `tensor-diag`, `tensor-diagm`, `tensor-tril`,
+  `tensor-triu`), sorting and indices (`sort`/`reverse` tensor branches,
+  `tensor-argsort`, `tensor-argmax`, `tensor-argmin`), the in-place
+  `tensor-map!`/`tensor-clamp!`, and the extra `LinearAlgebra` wrappers
+  (`eigvals`, `svdvals`, `pinv`, `nullspace`, `matrix-cond`, `cross`, `kron`,
+  `lu`, `isposdef`, `issymmetric`, `ishermitian`).
+- [x] **Scalar math coverage** — the elementary, trigonometric, hyperbolic,
+  complex-part, and elementwise-test verbs, `clamp`, `hypot`, `rem`,
+  `copysign`, `factorial`, and `round`/`floor`/`ceil`/`truncate` with
+  `digits=`/`sigdigits=`; every one broadcasts over a tensor.
+- [x] **Reservations** — `(reserve-read resources body…)`/`{… : …}` for reads
+  (inline, transaction-safe, version-checked) and `(reserve resources body…;
+  read=…)`/`{… :! …}` for writes (spawned task, promise-like
+  `AirReservation`), with mixed modes. A write is never legal inside a
+  transaction. AirDB gained `reserve(...; read=())` and `_nested_locks_mixed`.
+- [ ] Views and slicing without a copy; `tensor-set!` views of a region.
+- [ ] A snapshot/committed-copy path so a tensor can be persisted (`tensor->form`
+  is the current spelling).
+- [ ] GPU and BLAS backends; sparse tensors.
+- [ ] Higher-rank matrix multiplication semantics (rank > 2 raises for `*`).
 
 ## Conflicts with the current implementation
 

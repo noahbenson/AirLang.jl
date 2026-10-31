@@ -51,6 +51,10 @@ function _bi_set(env::Env, scope::Scope, call::FormContainer)
     n = length(call.seq)
     n >= 3 || throw(AirEvalError("set! needs a target and a value"))
     target = air_reduce(env, scope, to_form(call.seq[2]))
+    # A tensor is written in place under a write reservation, never through the
+    # transaction machinery: the mutation could not be rolled back.
+    tv = _tensor_of(target)
+    tv === nothing || return _tensor_set(env, scope, call, tv)
     target isa VolatileForm || throw(AirEvalError("set! expects a mutable"))
     _check!(env, target, :write)
     if n == 3

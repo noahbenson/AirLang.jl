@@ -9,8 +9,10 @@
   `naught`), parenthesized forms, the `|` pattern-alternative shorthand, `#` line comments
   and nestable `#| … |#` block comments,
   `k=v` mappings and hybrid forms, the `.` accessor (`f.a.b` reads as
-  `(get f :a :b)`), and the `...` splat (`(f a... b)`) — parsed directly into
-  `AirDB.Form` values.
+  `(get f :a :b)`), the `...` splat (`(f a... b)`), bracketed tensor literals
+  (`[1 2 3]`, `[1 2; 3 4]`, and `;;` pages for a rank-3 literal), and
+  reservation sugar (`{t : body}`, `{t :! body}`, and mixed
+  `{a : b :! body}`) — parsed directly into `AirDB.Form` values.
 * The reduction engine: anchor-indexed dispatch (a global pattern is anchored by
   *any* raw symbol it contains, so `(?a + ?b)` is anchored by `+`), fixed-point
   reduction, and runtime canonicalization of the empty form (`()` → `naught`).
@@ -171,6 +173,33 @@
   maps; `table?`, `columns`, `schema`, `nrows`, and `table-index` inspect one;
   and `eq?`/`hash` compare content, metadata, and the index declaration. See
   `book/tables.md`.
+* Tensors: a mutable `AirTensor` extern over a Julia `Array` of air's numeric
+  tower, with bracketed literals, `tensor`/`tensor-zeros`/`-ones`/`-fill`/`-eye`
+  /`-rand`/`-randn`, metadata (`tensor?`, `tensor-shape`, `tensor-rank`,
+  `tensor-eltype`) that needs no reservation, per-axis `get` (integers,
+  negatives, `:` and index sequences; `0` is the tensor itself and `:` a copy),
+  `set!` and `with`, in-place verbs (`tensor-add!` and kin, plus `tensor-map!`
+  and `tensor-clamp!`), Julia-like arithmetic with broadcasting and matrix `*`,
+  linear column-major iteration and the numeric reductions, Julia-style axis
+  reductions (`dims=`/`drop=` on `sum`/`product`/`mean`/`median`/`variance`/
+  `std`/`min`/`max`, plus `tensor-any`/`-all`/`-count`), cumulative operations,
+  construction helpers (`tensor-arange`/`-linspace`/`-randint`), comparison
+  masks and `tensor-where`, manipulation (`tensor-concat`/`-stack`/`-flip`/
+  `-roll`/`-tile`/`-squeeze`/`-expand-dims`/`-diag`/`-diagm`/`-tril`/`-triu`),
+  sorting and indices (`sort`/`reverse` tensor branches, `tensor-argsort`/
+  `-argmax`/`-argmin`), and a `LinearAlgebra` surface (`dot`, `norm`, `tr`,
+  `det`, `inv`, `pinv`, `matrix-rank`, `matrix-cond`, `nullspace`, `linsolve`,
+  `eigvals`, `svdvals`, `lu`, `cross`, `kron`, `isposdef`, `issymmetric`,
+  `ishermitian`, `transpose`, `adjoint`, `reshape`, `eigen`, `svd`, `qr`,
+  `cholesky`). Because a tensor is mutable,
+  every access to an existing tensor runs in a reservation: `(reserve-read
+  resources body…)`/`{… : …}` reads inline and is transaction-safe (extern
+  versions are checked, so a concurrent write forces a retry), while `(reserve
+  resources body…; read=…)`/`{… :! …}` write-locks on a spawned task and
+  returns a promise-like `AirReservation` (`get`/`await`/`ready?`), which inside
+  a transaction is commit-gated. A write is never legal inside a transaction; a
+  tensor is not storable in a database namespace and does not survive `to-json`
+  (`tensor->form` is the persistence spelling). See `book/tensors.md`.
 * Data formats: `decode`/`encode` and `read-data`/`write-data` convert JSON,
   YAML, TOML, CSV, TSV, and `.env` to and from plain air data — an object is a
   map form, an array a sequence form, and null or an empty container is

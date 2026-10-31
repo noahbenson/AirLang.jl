@@ -71,7 +71,68 @@ rational constructor and `div` is integer division; `/` is always floating
 point. Arithmetic and promotion are Julia's — `Int64` operations wrap (`(^ 2
 100)` is `0`), and exact inputs stay exact (`(+ 1//3 1//6)` is `1//2`). The
 constructors are `(rational n d)`, `(complex re im)`, and `(bigfloat "…"
-precision=n)`; see `book/numbers.md`.
+precision=n)`. The math verbs are Julia functions of the same name and stay
+symbolic on a non-number: the elementary (`sqrt cbrt exp exp2 exp10 expm1 log
+log2 log10 log1p`), trigonometric (`sin cos tan asin acos atan sinc sinpi cospi
+deg2rad rad2deg`), hyperbolic (`sinh cosh tanh asinh acosh atanh`), complex
+(`real imag conj angle abs2 cis`), elementwise-test (`isnan isinf isfinite
+isinteger iseven isodd`, which ask about elements and, unlike the value
+predicates `nan?`/`even?`, yield a Boolean per element), and two-argument
+(`atan2 gcd lcm binomial hypot rem copysign`) groups, plus `factorial`, `div`,
+`(clamp x lo hi)`, and `round`/`floor`/`ceil`/`truncate` with `digits=`
+(`round` also `sigdigits=`); see `book/numbers.md`.
+
+**Tensors and reservations.** A `tensor` (the mutable extern `AirTensor`) is an
+N-dimensional array whose elements are exactly the numeric-tower leaves, with
+Julia promotion. Bracketed literals build one: `[1 2 3]` is a vector,
+`[1 2; 3 4]` a 2×2 matrix, and `[1 2; 3 4; 5 6 ;; 7 8; 9 10; 11 12]` a 2×3×2
+tensor (the longest `;` run is axis 1 and the deepest cells the last axis;
+`tensor->form` prints the same nesting). Cells evaluate, every level must be
+rectangular, and `[]` is an empty Float64 vector. `(tensor x)` builds from a
+nested sequence or copies a tensor; `eltype=` names a tower type. Because a
+tensor mutates, **every access to an existing tensor requires an enclosing
+reservation** — reads in read- or write-mode, writes in write-mode — while
+construction is free; a tensor this task made itself is accessible without one.
+`{r… : body…}` is `(reserve-read (r…) body…)`: read-mode, inline, returns the
+body's value, and is transaction-safe because AirDB checks the extern versions
+(a concurrent write forces a retry). `{r… :! body…}` is
+`(reserve (r…) body…)`: write-mode, runs on a spawned task, and returns an
+`AirReservation` whose `(get r)`/`(await r)` wait for the value and `(ready? r)`
+tests it; inside a transaction it is commit-gated and a pending one cannot be
+awaited. `{a : b :! body…}` and `(reserve (a b) read=(a) body…)` mix modes
+(order-insensitive). Reservations never nest, do not block, and never run in a
+`sandbox`; a write inside any transaction raises. `get` takes one key per axis
+(an integer drops the axis, `:` keeps it, a sequence of integers keeps it and
+selects several; `0` alone is the tensor itself and `:` alone a copy;
+`default=` covers out-of-range). `set!` writes a cell, a region, or the whole
+tensor (a scalar broadcasts, a value must match the region, promotion preserves
+identity), and `with` is the pure copy-and-assign. Arithmetic and the math verbs
+broadcast; `*` follows Julia for rank ≤ 2 (vector×vector is the dot product,
+rank > 2 raises — use `tensor-mul`); `//` and ordering stay symbolic; `==`,
+`eq?`, and `hash` are identity, so use `tensor-equal?`/`tensor-close?` for
+content. Iteration and the reductions are linear column-major; `sum`, `product`,
+`mean`, `median`, `variance`, `std`, `min`, and `max` also take Julia-style
+`dims=` (the reduced axes stay length-1) and `drop=true` (they are removed;
+dropping every axis, like omitting `dims=`, yields a scalar). `dims=:all` names
+every axis and a negative axis counts from the end. `sort` and `reverse` take a
+tensor branch (linear without `dims=`, shape-preserving with it). The array-only
+verbs are `tensor-arange`/`tensor-linspace`/`tensor-randint`,
+`tensor-lt`/`le`/`gt`/`ge`/`eq`/`ne` (Boolean tensors; the operators stay
+symbolic/identity) with `tensor-where`, `tensor-concat`/`tensor-stack`,
+`tensor-flip`/`tensor-roll`/`tensor-tile`, `tensor-squeeze`/`tensor-expand-dims`,
+`tensor-diag`/`tensor-diagm`/`tensor-tril`/`tensor-triu`,
+`tensor-cumsum`/`tensor-cumprod`/`tensor-diff`,
+`tensor-any`/`tensor-all`/`tensor-count` (`dims=`/`drop=`),
+`tensor-argsort`/`tensor-argmax`/`tensor-argmin` (linear indices), and the
+in-place `tensor-map!`/`tensor-clamp!`. `transpose` takes `perm=`. `dot`, `norm`,
+`tr`, `det`, `inv`, `pinv`, `matrix-rank`, `matrix-cond`, `nullspace`,
+`linsolve`, `eigvals`, `svdvals`, `lu`, `cross`, `kron`, `isposdef`,
+`issymmetric`, `ishermitian`, `transpose`, `adjoint`, `reshape`, `eigen`, `svd`,
+`qr`, and `cholesky` wrap `LinearAlgebra` (the condition number is
+`matrix-cond`, since `cond` is the conditional form). A tensor prints opaquely
+(`#<tensor 2×3 Float64>`, `#<reservation>`), is `un-storable` in a database
+namespace, and dies in `to-json`; `tensor->form` is the persistence spelling.
+See `book/tensors.md`.
 
 **Rules.** The two rule systems have separate forms. `->` belongs only to the
 replacement family: `(pattern -> replacement)` is inert data read by `replace`,

@@ -268,6 +268,10 @@ function __init__()
     # `table` is immutable, persists through its payload, and compares by content
     # (type, NA metadata, index, and cells), so `eq?`/`hash` agree on it.
     _register_table!()
+    # `tensor` is mutable and `reservation` is a promise-like handle; neither is
+    # serialized (they hold no database identity), so they get no codec or
+    # equivalence hooks.
+    _register_tensor!()
     # The loader that evaluates an air delay's captured thunk. AirDB's registry is
     # process-global and rejects a duplicate, so tolerate a re-registration.
     try

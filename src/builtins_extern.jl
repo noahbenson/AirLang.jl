@@ -174,6 +174,7 @@ builtin!(:await, (env, scope, args) -> begin
     obj = _extern_data(x)
     obj isa AirPromise && return _await_promise(obj)
     obj isa AirFuture && return _await_future(obj)
+    obj isa AirReservation && return _reservation_await(env, obj)
     throw(AirEvalError("await needs a promise"))
 end)
 
@@ -279,5 +280,7 @@ builtin!(Symbol("ready?"), (env, scope, args) -> begin
     x isa ActorForm && return Form(true)
     # A stream is ready when a `fetch` would return immediately.
     x isa StreamForm && return Form(_stream_ready(env, x))
-    throw(AirEvalError("ready? needs a promise, delay, actor, or stream"))
+    r = _reservation_of(x)
+    r === nothing || return Form(isready(r.promise))
+    throw(AirEvalError("ready? needs a promise, delay, actor, stream, or reservation"))
 end)

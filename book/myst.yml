@@ -13,6 +13,7 @@ project:
         - file: syntax.md
         - file: data-model.md
         - file: numbers.md
+        - file: tensors.md
         - file: patterns.md
         - file: namespaces.md
         - file: permissions.md

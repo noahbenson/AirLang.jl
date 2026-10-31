@@ -20,6 +20,7 @@
 
 struct _Token
     kind::Symbol   # :lparen :rparen :pipe :string :atom
+                   # :lbracket :rbracket :lbrace :rbrace :semi
     text::String   # atom text, or the decoded value of a string
     pos::Int       # 1-based source position of the first character
     stop::Int      # 1-based source position of the last character
@@ -34,7 +35,8 @@ _token_form(t::_Token) = t.value === nothing ? Form(t.text) : t.value
 
 # Delimiters end an atom. A comma is treated as a separator (whitespace), as in
 # Mathematica; the README's symbol character set does not include it.
-const _DELIMS = (' ', '\t', '\n', '\r', ',', '(', ')', '|', '#', '"')
+const _DELIMS = (' ', '\t', '\n', '\r', ',', '(', ')', '|', '#', '"',
+                 '[', ']', '{', '}', ';')
 
 function _tokenize(s::AbstractString)
     cs = collect(s)
@@ -57,6 +59,20 @@ function _tokenize(s::AbstractString)
             push!(toks, _Token(:rparen, ")", i, i)); i += 1
         elseif c == '|'
             push!(toks, _Token(:pipe, "|", i, i)); i += 1
+        elseif c == '['
+            push!(toks, _Token(:lbracket, "[", i, i)); i += 1
+        elseif c == ']'
+            push!(toks, _Token(:rbracket, "]", i, i)); i += 1
+        elseif c == '{'
+            push!(toks, _Token(:lbrace, "{", i, i)); i += 1
+        elseif c == '}'
+            push!(toks, _Token(:rbrace, "}", i, i)); i += 1
+        elseif c == ';'
+            start = i
+            while i <= n && cs[i] == ';'
+                i += 1
+            end
+            push!(toks, _Token(:semi, String(cs[start:(i - 1)]), start, i - 1))
         elseif c == '"'
             tok, i = _scan_string(cs, i)
             push!(toks, tok)
@@ -580,6 +596,10 @@ function _parse_primary(p::_Parser)::Form
     t = p.toks[p.i]
     if t.kind == :lparen
         return _parse_container(p)
+    elseif t.kind == :lbracket
+        return _parse_array(p)
+    elseif t.kind == :lbrace
+        return _parse_reservation(p)
     elseif t.kind == :atom
         p.i += 1
         if _is_quote_atom(t.text)
@@ -731,11 +751,155 @@ function _parse_container(p::_Parser)::Form
             push!(stack[end].seq, _token_form(t))
             stack[end].last_stop = t.stop
             stack[end].last_map = false
+        elseif t.kind == :lbracket
+            push!(stack[end].seq, _parse_array(p))
+            stack[end].last_stop = p.last_stop
+            stack[end].last_map = false
+        elseif t.kind == :lbrace
+            push!(stack[end].seq, _parse_reservation(p))
+            stack[end].last_stop = p.last_stop
+            stack[end].last_map = false
         else
             throw(AirParseError("unexpected '$(t.text)'", t.pos))
         end
     end
     throw(AirParseError("unterminated form", opening.pos))
+end
+
+# ---- array literals and reservations -----------------------------------------
+
+# One level of an array literal. A run of `maxk - depth` semicolons separates the
+# groups at this depth; the innermost level (`depth == maxk`) is the run of
+# whitespace-separated cells. Every cell becomes a `preval` hole so that it
+# evaluates even though the whole literal is held: `[1 2; 3 4]` builds the
+# grouping `((preval 1) (preval 2)) ((preval 3) (preval 4))`.
+function _array_level(items::Vector{Any}, maxk::Int, depth::Int)::Vector{Form}
+    if depth >= maxk
+        return Form[_mk_preval(it::Form) for it in items]
+    end
+    cut = maxk - depth
+    groups = Vector{Any}[Any[]]
+    for it in items
+        if it isa Tuple && it[2] == cut
+            push!(groups, Any[])
+        else
+            push!(groups[end], it)
+        end
+    end
+    return Form[_array_group(g, maxk, depth + 1) for g in groups]
+end
+
+_array_group(g::Vector{Any}, maxk::Int, depth::Int) =
+    Form(PVector{Any}(_array_level(g, maxk, depth)), PDict{Symbol,Any}())
+
+# `[ … ]` desugars to `(tensor-literal (' …))`: the root sequence's elements are
+# held so that the grouping forms are never reduced as calls, while the `preval`
+# cells inside them still evaluate. `tensor-literal` drops the `'` head, checks
+# the grouping is rectangular with numeric leaves, and builds the tensor.
+function _mk_array_literal(items::Vector{Any}, pos::Int)::Form
+    maxk = 0
+    for it in items
+        it isa Tuple && (maxk = max(maxk, it[2]))
+    end
+    root = _array_level(items, maxk, 0)
+    hold = Form(PVector{Any}(Any[Form(Symbol("'")), root...]), PDict{Symbol,Any}())
+    return Form(PVector{Any}(Any[Form(Symbol("tensor-literal")), hold]),
+                PDict{Symbol,Any}())
+end
+
+function _parse_array(p::_Parser)::Form
+    opening = p.toks[p.i]
+    p.i += 1
+    p.last_stop = opening.stop
+    items = Any[]
+    while true
+        p.i > length(p.toks) &&
+            throw(AirParseError("unterminated array literal", opening.pos))
+        t = p.toks[p.i]
+        if t.kind == :rbracket
+            p.i += 1
+            p.last_stop = t.stop
+            break
+        elseif t.kind == :semi
+            p.i += 1
+            push!(items, (:semi, length(t.text)))
+            p.last_stop = t.stop
+        else
+            push!(items, _parse_top(p))
+        end
+    end
+    f = _mk_array_literal(items, opening.pos)
+    _record_span!(p, f, opening.pos, p.last_stop)
+    return f
+end
+
+# `{ resource… : resource… :! … body… }` — reservation sugar. A bare `:` assigns
+# read mode to the resources since the previous marker, `:!` assigns write mode,
+# and the body is every element after the last marker. It desugars to
+# `(reserve-read (resources…) body…)` when every resource is read-only and to
+# `(reserve (resources…) read=(…) body…)` otherwise.
+_is_reservation_marker(x) = x === :read || x === :write
+
+function _mk_reservation_form(items::Vector{Any}, pos::Int)::Form
+    lastm = findlast(_is_reservation_marker, items)
+    lastm === nothing &&
+        throw(AirParseError("a reservation needs a ':' or ':!' marker", pos))
+    groups = Tuple{Vector{Form},Symbol}[]
+    pending = Form[]
+    for x in items[1:(lastm - 1)]
+        if _is_reservation_marker(x)
+            isempty(pending) &&
+                throw(AirParseError("a reservation marker needs a resource", pos))
+            push!(groups, (pending, x::Symbol))
+            pending = Form[]
+        else
+            push!(pending, x::Form)
+        end
+    end
+    isempty(pending) &&
+        throw(AirParseError("a reservation marker needs a resource", pos))
+    push!(groups, (pending, items[lastm]::Symbol))
+    body = Form[x::Form for x in items[(lastm + 1):end]]
+    allres = Form[r for (rs, _) in groups for r in rs]
+    reads = Form[r for (rs, m) in groups if m === :read for r in rs]
+    resspec = Form(PVector{Any}(allres), PDict{Symbol,Any}())
+    if any(m === :write for (_, m) in groups)
+        seq = Any[Form(Symbol("reserve")), resspec]
+        append!(seq, body)
+        pairs = Pair{Symbol,Any}[]
+        isempty(reads) ||
+            push!(pairs, Symbol(":read") =>
+                  Form(PVector{Any}(reads), PDict{Symbol,Any}()))
+        return Form(PVector{Any}(seq), PDict{Symbol,Any}(pairs...))
+    end
+    return Form(PVector{Any}(Any[Form(Symbol("reserve-read")), resspec, body...]),
+                PDict{Symbol,Any}())
+end
+
+function _parse_reservation(p::_Parser)::Form
+    opening = p.toks[p.i]
+    p.i += 1
+    p.last_stop = opening.stop
+    items = Any[]     # a Form, or the marker :read / :write
+    while true
+        p.i > length(p.toks) &&
+            throw(AirParseError("unterminated reservation", opening.pos))
+        t = p.toks[p.i]
+        if t.kind == :rbrace
+            p.i += 1
+            p.last_stop = t.stop
+            break
+        elseif t.kind == :atom && (t.text == ":" || t.text == ":!")
+            p.i += 1
+            push!(items, t.text == ":" ? :read : :write)
+            p.last_stop = t.stop
+        else
+            push!(items, _parse_top(p))
+        end
+    end
+    f = _mk_reservation_form(items, opening.pos)
+    _record_span!(p, f, opening.pos, p.last_stop)
+    return f
 end
 
 # The map key denoted by the form that precedes `=`. A symbol is a key (a bare

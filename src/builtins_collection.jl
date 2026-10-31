@@ -14,6 +14,9 @@ _elems(c::FormContainer) = c.seq
 function _elems(x::Form)
     t = _table_of(x)
     t === nothing || return Form[_table_row(t, i) for i in 1:t.nrows]
+    # A tensor iterates its linear (column-major) elements.
+    tv = _tensor_of(x)
+    tv === nothing || return Form[to_form(v) for v in _tensor_leaves(tv)]
     return Form[x]
 end
 
@@ -30,6 +33,11 @@ end
 # `f` applied to every node at `depth`; the tree is rebuilt around the results.
 function _map_at_depth(f, x::Form, depth::Integer)
     depth <= 0 && return f(x)
+    tv = _tensor_of(x)
+    if tv !== nothing
+        # A tensor's elements are its linear cells; `map` returns a sequence.
+        return _map_at_depth(f, _tensor_elems_form(tv), depth)
+    end
     if x isa FormContainer
         seq = FormValue[_store_form(_map_at_depth(f, to_form(v), depth - 1))
                         for v in x.seq]
@@ -124,6 +132,10 @@ builtin!(:first, (env, scope, args) -> begin
     c = _arg(args, 1, "first")
     t = _table_of(c)
     t === nothing || return t.nrows == 0 ? naught : _table_row(t, 1)
+    tv = _tensor_of(c)
+    tv === nothing || return _tensor_read(tv) do d
+        isempty(d) ? naught : to_form(AirDB._formvalue(vec(d)[1]))
+    end
     (c isa FormContainer && !isempty(c.seq)) || return c
     return to_form(c.seq[1])
 end)
@@ -132,6 +144,10 @@ builtin!(:last, (env, scope, args) -> begin
     c = _arg(args, 1, "last")
     t = _table_of(c)
     t === nothing || return t.nrows == 0 ? naught : _table_row(t, t.nrows)
+    tv = _tensor_of(c)
+    tv === nothing || return _tensor_read(tv) do d
+        isempty(d) ? naught : to_form(AirDB._formvalue(vec(d)[end]))
+    end
     (c isa FormContainer && !isempty(c.seq)) || return c
     return to_form(c.seq[length(c.seq)])
 end)
@@ -144,6 +160,12 @@ builtin!(:rest, (env, scope, args) -> begin
         rows = FormValue[_store_form(_table_row(t, i)) for i in 2:t.nrows]
         return canonicalize(FormContainer(FormSeq(rows), FormMap()))
     end
+    tv = _tensor_of(c)
+    if tv !== nothing
+        # The linear cells after the first, as an air sequence.
+        return canonicalize(_tseq(Form[to_form(v)
+                                      for v in Iterators.drop(_tensor_leaves(tv), 1)]))
+    end
     c isa FormContainer || return naught
     n = length(c.seq)
     return canonicalize(FormContainer(FormSeq(FormValue[c.seq[i] for i in 2:n]), c.map))
@@ -153,14 +175,26 @@ builtin!(:second, (env, scope, args) -> begin
     c = _arg(args, 1, "second")
     t = _table_of(c)
     t === nothing || return t.nrows >= 2 ? _table_row(t, 2) : naught
+    tv = _tensor_of(c)
+    tv === nothing || return _tensor_nth(tv, 2)
     (c isa FormContainer && length(c.seq) >= 2) ? to_form(c.seq[2]) : naught
 end)
 builtin!(:third, (env, scope, args) -> begin
     c = _arg(args, 1, "third")
     t = _table_of(c)
     t === nothing || return t.nrows >= 3 ? _table_row(t, 3) : naught
+    tv = _tensor_of(c)
+    tv === nothing || return _tensor_nth(tv, 3)
     (c isa FormContainer && length(c.seq) >= 3) ? to_form(c.seq[3]) : naught
 end)
+
+# The linear element at 1-based position `i`, or `naught` when out of range.
+function _tensor_nth(t, i::Int)
+    return _tensor_read(t) do d
+        ls = vec(d)
+        i <= length(ls) ? to_form(AirDB._formvalue(ls[i])) : naught
+    end
+end
 
 # `(nth coll k)` — the element at integer key `k`. `0` is the whole form and a
 # negative key counts from the end. An optional third argument is returned when
@@ -182,6 +216,20 @@ function _nth_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Bool
             rethrow()
         end
         r = i === nothing ? c : _table_row(t, i)
+        return held ? _ensure_hold(r) : r
+    end
+    tv = _tensor_of(c)
+    if tv !== nothing
+        # `nth` is linear (column-major) for a tensor.
+        ls = _tensor_leaves(tv)
+        i = try
+            _index_of(k, length(ls))
+        catch e
+            e isa AirEvalError || rethrow()
+            length(args) >= 3 && return args[3]
+            rethrow()
+        end
+        r = i === nothing ? c : to_form(AirDB._formvalue(ls[i]))
         return held ? _ensure_hold(r) : r
     end
     c isa FormContainer || (c = _as_container(c))
@@ -371,12 +419,26 @@ function _join_in_call(env::Env, scope::Scope, call::FormContainer,
 end
 _hold_pair!(Symbol("join-in"), _join_in_call)
 
-builtin!(:reverse, (env, scope, args) -> begin
-    c = _arg(args, 1, "reverse")
+function _bi_reverse(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "reverse", (DIMS_KEY,))
+    c = _reduction_arg(env, scope, call, "reverse")
+    tv = _tensor_of(c)
+    if tv !== nothing
+        axes = haskey(call.map, DIMS_KEY) ?
+            _tensor_axes_opt(env, scope, call, ndims(tv.data), "reverse") : nothing
+        return _tensor_read(tv) do d
+            r = axes === nothing ? reverse(vec(d)) :
+                reverse(d; dims = Tuple(axes))
+            _new_tensor(_canonical_data(r))
+        end
+    end
+    haskey(call.map, DIMS_KEY) && throw(AirEvalError(
+        "reverse: dims= requires a tensor"))
     c isa FormContainer || return c
     n = length(c.seq)
     return FormContainer(FormSeq(FormValue[c.seq[i] for i in n:-1:1]), c.map)
-end)
+end
+special!(:reverse, _bi_reverse)
 
 function _form_lt(a, b)
     la, lb = _leafof(to_form(a)), _leafof(to_form(b))
@@ -385,12 +447,36 @@ function _form_lt(a, b)
     (la isa Real && lb isa Real) ? la < lb : string(la) < string(lb)
 end
 
-builtin!(:sort, (env, scope, args) -> begin
-    c = _arg(args, 1, "sort")
+function _bi_sort(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "sort", (DIMS_KEY, DESC_KEY))
+    c = _reduction_arg(env, scope, call, "sort")
+    desc = _tensor_bool_opt(env, scope, call, DESC_KEY, false)
+    tv = _tensor_of(c)
+    if tv !== nothing
+        axes = haskey(call.map, DIMS_KEY) ?
+            _tensor_axes_opt(env, scope, call, ndims(tv.data), "sort") : nothing
+        if axes !== nothing && length(axes) != 1
+            throw(AirEvalError("sort: dims= names exactly one axis"))
+        end
+        return _tensor_read(tv) do d
+            r = try
+                # `sort(::Vector; dims=)` is not supported, but a rank-1 sort
+                # along its only axis is the linear sort.
+                (axes === nothing || ndims(d) == 1) ? sort(vec(d); rev = desc) :
+                    sort(d; dims = axes[1], rev = desc)
+            catch e
+                throw(AirEvalError("sort: " * sprint(showerror, e)))
+            end
+            _new_tensor(_canonical_data(r))
+        end
+    end
+    haskey(call.map, DIMS_KEY) && throw(AirEvalError(
+        "sort: dims= requires a tensor"))
     c isa FormContainer || return c
-    vals = sort(collect(c.seq); lt = _form_lt)
+    vals = sort(collect(c.seq); lt = _form_lt, rev = desc)
     return FormContainer(FormSeq(FormValue[vals...]), FormMap())
-end)
+end
+special!(:sort, _bi_sort)
 
 builtin!(Symbol("sort-by"), (env, scope, args) -> begin
     f = _arg(args, 1, "sort-by"); c = _arg(args, 2, "sort-by")
@@ -724,12 +810,23 @@ builtin!(:count, (env, scope, args) -> begin
     c = _arg(args, 1, "count")
     t = _table_of(c)
     t === nothing || return Form(t.nrows)
+    tv = _tensor_of(c)
+    tv === nothing || return Form(length(tv.data))
     c isa StreamForm && return Form(_stream_count(env, c))
     c isa FormContainer && return Form(length(c.seq))
     return Form(isequal(c, naught) ? 0 : 1)
 end)
 
 function _fold_numeric(name, c, combine, init)
+    # A tensor folds its linear cells; they are already canonical numbers.
+    tv = _tensor_of(c)
+    if tv !== nothing
+        acc = init
+        for l in _tensor_leaves(tv)
+            acc = combine(acc, l)
+        end
+        return to_form(acc)
+    end
     c isa FormContainer || return c
     acc = init
     for v in c.seq
@@ -739,46 +836,135 @@ function _fold_numeric(name, c, combine, init)
     end
     return to_form(acc)
 end
-builtin!(:sum, (env, scope, args) -> _fold_numeric(:sum, _arg(args, 1, "sum"), +, 0))
-builtin!(:product, (env, scope, args) -> _fold_numeric(:product, _arg(args, 1, "product"), *, 1))
+# The single argument of a reduction, with its `dims=`/`drop=`/`ddof=` options.
+# A tensor with `dims=` reduces along the named axes (Julia-style: the reduced
+# axes stay as length-1 axes unless `drop=true`); without it, the reduction is
+# linear over the cells (`_tensor_leaves`), exactly as before.
+function _reduction_arg(env::Env, scope::Scope, call::FormContainer,
+                        name::AbstractString)
+    args = _call_args(env, scope, call)
+    length(args) == 1 || throw(AirEvalError("$(name) expects one argument"))
+    return args[1]
+end
+
+function _no_dims_error(name::AbstractString, call::FormContainer)
+    haskey(call.map, DIMS_KEY) && throw(AirEvalError(
+        "$(name): dims= requires a tensor"))
+    haskey(call.map, DROP_KEY) && throw(AirEvalError(
+        "$(name): drop= requires dims="))
+    return nothing
+end
+
+function _bi_sum(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "sum", (DIMS_KEY, DROP_KEY))
+    c = _reduction_arg(env, scope, call, "sum")
+    tv = _tensor_of(c)
+    if tv !== nothing && haskey(call.map, DIMS_KEY)
+        axes = _tensor_axes_opt(env, scope, call, ndims(tv.data), "sum")
+        return _tensor_sum_dims(tv, axes, _tensor_drop_opt(env, scope, call))
+    end
+    _no_dims_error("sum", call)
+    return _fold_numeric(:sum, c, +, 0)
+end
+special!(:sum, _bi_sum)
+
+function _bi_product(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "product", (DIMS_KEY, DROP_KEY))
+    c = _reduction_arg(env, scope, call, "product")
+    tv = _tensor_of(c)
+    if tv !== nothing && haskey(call.map, DIMS_KEY)
+        axes = _tensor_axes_opt(env, scope, call, ndims(tv.data), "product")
+        return _tensor_product_dims(tv, axes, _tensor_drop_opt(env, scope, call))
+    end
+    _no_dims_error("product", call)
+    return _fold_numeric(:product, c, *, 1)
+end
+special!(:product, _bi_product)
 
 # The numeric leaves of a collection (a scalar is a singleton, like the set ops),
 # or `nothing` when some element is not a number.
 function _numeric_leaves(c::Form)
+    tv = _tensor_of(c)
+    tv === nothing || return _tensor_leaves(tv)
     xs = c isa FormContainer ? c.seq : FormValue[_store_form(c)]
     ls = [_leafof(to_form(v)) for v in xs]
     all(l -> l isa Number, ls) || return nothing
     return ls
 end
 
-builtin!(:mean, (env, scope, args) -> begin
-    c = _arg(args, 1, "mean")
+function _bi_mean(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "mean", (DIMS_KEY, DROP_KEY))
+    c = _reduction_arg(env, scope, call, "mean")
+    tv = _tensor_of(c)
+    if tv !== nothing && haskey(call.map, DIMS_KEY)
+        axes = _tensor_axes_opt(env, scope, call, ndims(tv.data), "mean")
+        return _tensor_mean_dims(tv, axes, _tensor_drop_opt(env, scope, call))
+    end
+    _no_dims_error("mean", call)
     ls = _numeric_leaves(c)
     ls === nothing && return _mk_prefix(:mean, [c])
     isempty(ls) && return naught
     return to_form(sum(ls) / length(ls))
-end)
+end
+special!(:mean, _bi_mean)
 
-builtin!(:median, (env, scope, args) -> begin
-    c = _arg(args, 1, "median")
+function _bi_median(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "median", (DIMS_KEY, DROP_KEY))
+    c = _reduction_arg(env, scope, call, "median")
+    tv = _tensor_of(c)
+    if tv !== nothing && haskey(call.map, DIMS_KEY)
+        axes = _tensor_axes_opt(env, scope, call, ndims(tv.data), "median")
+        return _tensor_median_dims(tv, axes, _tensor_drop_opt(env, scope, call))
+    end
+    _no_dims_error("median", call)
     ls = _numeric_leaves(c)
     ls === nothing && return _mk_prefix(:median, [c])
     isempty(ls) && return naught
     s = sort(ls); n = length(s)
     return to_form(isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2)
-end)
+end
+special!(:median, _bi_median)
 
-# `(variance coll)` — the *sample* variance (denominator `n - 1`) of the numeric
-# elements; `naught` when fewer than two are present (as for an empty `mean`).
-# Non-numeric input is left as the unreduced prefix form, like `mean`.
-builtin!(:variance, (env, scope, args) -> begin
-    c = _arg(args, 1, "variance")
+# `(variance coll ddof=1)` — the *sample* variance (denominator `n - ddof`) of
+# the numeric elements; `naught` when no cell has a positive denominator (as for
+# an empty `mean`). Non-numeric input is left as the unreduced prefix form.
+function _bi_variance(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "variance", (DIMS_KEY, DROP_KEY, DD_KEY))
+    ddof = _tensor_int_opt(env, scope, call, DD_KEY, 1, "variance")
+    ddof >= 0 || throw(AirEvalError("variance: ddof must be non-negative"))
+    c = _reduction_arg(env, scope, call, "variance")
+    tv = _tensor_of(c)
+    if tv !== nothing && haskey(call.map, DIMS_KEY)
+        axes = _tensor_axes_opt(env, scope, call, ndims(tv.data), "variance")
+        return _tensor_variance_dims(tv, axes,
+                                     _tensor_drop_opt(env, scope, call), ddof)
+    end
+    _no_dims_error("variance", call)
     ls = _numeric_leaves(c)
     ls === nothing && return _mk_prefix(:variance, [c])
-    length(ls) < 2 && return naught
-    m = sum(ls) / length(ls)
-    return to_form(sum((x - m)^2 for x in ls) / (length(ls) - 1))
-end)
+    return _variance_scalar(ls, ddof)
+end
+special!(:variance, _bi_variance)
+
+# `(std coll ddof=1)` — the square root of the sample variance.
+function _bi_std(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "std", (DIMS_KEY, DROP_KEY, DD_KEY))
+    ddof = _tensor_int_opt(env, scope, call, DD_KEY, 1, "std")
+    ddof >= 0 || throw(AirEvalError("std: ddof must be non-negative"))
+    c = _reduction_arg(env, scope, call, "std")
+    tv = _tensor_of(c)
+    if tv !== nothing && haskey(call.map, DIMS_KEY)
+        axes = _tensor_axes_opt(env, scope, call, ndims(tv.data), "std")
+        return _tensor_std_dims(tv, axes, _tensor_drop_opt(env, scope, call), ddof)
+    end
+    _no_dims_error("std", call)
+    ls = _numeric_leaves(c)
+    ls === nothing && return _mk_prefix(:std, [c])
+    v = _variance_scalar(ls, ddof)
+    isequal(v, naught) && return naught
+    return to_form(sqrt(_leafof(v)))
+end
+special!(:std, _bi_std)
 
 # ---- maps --------------------------------------------------------------------
 
@@ -873,6 +1059,8 @@ end
 function _as_container(base::Form)
     _table_of(base) === nothing || throw(AirEvalError(
         "a table is not a sequence; use get, with, push, or wout"))
+    _tensor_of(base) === nothing || throw(AirEvalError(
+        "a tensor is not a sequence; use get, with, set!, or tensor->form"))
     base isa FormContainer && return base
     isequal(base, naught) && return FormContainer(FormSeq(FormValue[]), FormMap())
     return FormContainer(FormSeq(FormValue[_store_form(base)]), FormMap())
@@ -1003,6 +1191,9 @@ function _with_call(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Boo
     strip, held = _hold_mode(call, is_hold_fn)
     result = air_reduce(env, scope, to_form(call.seq[2]))
     strip && (result = _strip_hold(result))
+    # A tensor's `with` is a pure copy-and-assign returning a fresh tensor.
+    tv = _tensor_of(result)
+    tv === nothing || return _tensor_with(env, scope, call, tv, held, strip)
     i = 3
     while i <= n
         val = to_form(call.seq[i + 1])
@@ -1175,12 +1366,32 @@ end)
 
 # ---- transposition, weaving, and products ------------------------------------
 
-# `(transpose rows)` — the columns of the rows, stopping at the shortest:
-# `(transpose ((1 2 3) (4 5 6)))` is `((1 4) (2 5) (3 6))`. A scalar row is a
-# one-element row (a scalar is a singleton), and a row's map entries are dropped,
-# as `zip` drops them.
-builtin!(:transpose, (env, scope, args) -> begin
-    c = _arg(args, 1, "transpose")
+# `(transpose rows [perm=…])` — the columns of the rows, stopping at the
+# shortest: `(transpose ((1 2 3) (4 5 6)))` is `((1 4) (2 5) (3 6))`. A scalar
+# row is a one-element row (a scalar is a singleton), and a row's map entries are
+# dropped, as `zip` drops them. A tensor transposes its axes — a vector becomes a
+# one-row matrix, and with `perm=` the axes are permuted explicitly.
+function _bi_transpose(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "transpose", (PERM_KEY,))
+    c = _reduction_arg(env, scope, call, "transpose")
+    tv = _tensor_of(c)
+    if tv !== nothing
+        return _tensor_read(tv) do d
+            r = if haskey(call.map, PERM_KEY)
+                perm = _perm_option(env, scope, call, ndims(d), "transpose")
+                permutedims(d, Tuple(perm))
+            elseif ndims(d) <= 2
+                permutedims(d)
+            else
+                # `permutedims(A)` is defined only through rank 2; reverse all
+                # axes explicitly, as a numpy `.T` does.
+                permutedims(d, ndims(d):-1:1)
+            end
+            _new_tensor(_canonical_data(r))
+        end
+    end
+    haskey(call.map, PERM_KEY) && throw(AirEvalError(
+        "transpose: perm= requires a tensor"))
     c isa FormContainer || return c
     isempty(c.seq) && return naught
     rows = FormContainer[_as_container(to_form(v)) for v in c.seq]
@@ -1192,7 +1403,8 @@ builtin!(:transpose, (env, scope, args) -> begin
         push!(cols, _store_form(col))
     end
     return canonicalize(FormContainer(FormSeq(cols), FormMap()))
-end)
+end
+special!(:transpose, _bi_transpose)
 
 # `(riffle coll sep)` — insert `sep` between the elements:
 # `(riffle (1 3 5) 0)` is `(1 0 3 0 5)`. When `sep` is a collection, its
