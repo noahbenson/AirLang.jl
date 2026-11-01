@@ -669,8 +669,21 @@ text changed. Connections are
 inert records under `.io.conn` (`(conn id= kind= user= since= attached= closed=)`,
 `read=_`, `write=owner`); `(ui-attach! [conn] widget)`, `(ui-detach! [conn])`,
 `(ui-attached)`, `(ui-connection)`, and `(ui-connections)` drive them, `ui-show`
-attaches the caller's own connection, one widget per connection, and the
-instance survives a detach. `ns-entries`/`ns-entry` list namespace entries as
+attaches the caller's own connection, and one widget renders per connection.
+A connection renders one `ui` element at a time, and the element is ordinary
+air data: the attach records the connection in the element's state
+transactionally as `controller=`, and detaching or closing clears that field
+without deleting the element. Attaching a raw `(ui …)` form makes an ephemeral
+*projection* — an unregistered instance the ticker retracts only when no
+renderer and no job remain, so a running job's result is written first — while
+`ui-open`'s named instance survives; `(ui-attached)` returns the form for a
+projection and the key for an instance. `(current-ui)` is bound to the
+instance's form around every evaluation it runs. An interactive SSH pty login
+opens a default `(ui-shell)` (browser and notebook in `$`) held on the session
+task, so it is collected when the session ends unless the user stores the form;
+`ui=false` (or `ui=naught`) in `$.config.ssh`, or in the `ssh` val of
+`$.config`, opts out, and a non-pty session never gets one. `ns-entries` and
+`ns-entry` list namespace entries as
 `(entry name=:sym kind=:def|:val|:sub|:proxy|:alias owner= doc= src=)`, omitting
 unreadable and hidden entries.
 

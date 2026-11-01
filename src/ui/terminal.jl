@@ -611,14 +611,26 @@ function _ui_term_tick!(r::_TermRenderer, inst::_UiInstance)
     return nothing
 end
 
-function _ui_term_run!(r::_TermRenderer, inst::_UiInstance)
+function _ui_term_run!(r::_TermRenderer, inst::_UiInstance;
+                       controller::Union{Nothing,Form} = nothing)
+    # Attaching the renderer comes first: the tree's ticker treats "no renderer
+    # and no work" as the end of a projection, so it must never see a window
+    # where the widget is built and nobody is watching it.
     _ui_attach!(r, inst)
     # A second attach to the same instance reuses its tree; clear the previous
     # session's dismissal so it does not leave again immediately.
     lock(inst.lock) do
         inst.closed || (inst.dismissed = false)
+        c = _ui_tree(inst)
+        if c !== nothing && controller !== nothing
+            try
+                _comp_set_controller!(c, inst, controller)
+            catch e
+                e isa AirError || rethrow()
+            end
+        end
+        r.comp = c
     end
-    r.comp = _ui_tree(inst)
     _tb_enter!(r.backend)
     _frame_reset!(r.frame)      # the alternate screen starts blank
     try
@@ -638,6 +650,16 @@ function _ui_term_run!(r::_TermRenderer, inst::_UiInstance)
                 try
                     _comp_flush!(c, inst)
                 catch
+                end
+                # The controller leaves with the renderer, before the instance
+                # is detached: the element is no longer being shown, and doing
+                # it here keeps the ticker from releasing an ephemeral
+                # projection while a stale controller is still stored in it.
+                if controller !== nothing && !inst.closed
+                    try
+                        _comp_set_controller!(c, inst, nothing)
+                    catch
+                    end
                 end
             end
         end

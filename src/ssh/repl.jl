@@ -388,12 +388,23 @@ function _ssh_repl!(env::Env, server::_SshServer, session::Ptr{Cvoid},
             out.cols[] = cols
             out.rows[] = rows
         end
-        data = try
+        # Bytes a renderer handed back come first: a login UI dismissed by Esc
+        # leaves everything typed after that key in `out.pending`, and it is
+        # ordinary input for this REPL.
+        pending = UInt8[]
+        if !isempty(out.pending)
+            append!(pending, out.pending)
+            empty!(out.pending)
+        end
+        chan_data = try
             _ssh_read_available!(chan, input)
         catch e
             e isa SshError && return nothing
             rethrow()
         end
+        data = chan_data === nothing ?
+               (isempty(pending) ? nothing : pending) :
+               (isempty(pending) ? chan_data : vcat(pending, chan_data))
         if data === nothing
             _ls_channel_is_eof(chan) && return nothing
             sleep(0.01)

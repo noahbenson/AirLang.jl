@@ -188,7 +188,14 @@ end
 
 # ---- the record form ---------------------------------------------------------
 
+# `attached=` names the widget a connection shows: `true` for an attach's
+# ephemeral projection (which has no durable name), the instance key for a
+# `ui-open` resource, and `naught` when nothing is attached. The element's own
+# state records its controller; the record only says that someone is showing it.
 function _conn_form(h::_ConnHandle)
+    inst = h.inst
+    attached = inst === nothing ? naught :
+               inst.ephemeral ? Form(true) : _ui_key_form(inst.key)
     return _ns_form(Form[Form(_CONN_HEAD)], Pair{Symbol,Form}[
         Symbol(":id") => _keyword_form(h.id),
         Symbol(":kind") => _keyword_form(h.kind),
@@ -198,7 +205,7 @@ function _conn_form(h::_ConnHandle)
         Symbol(":tty") => Form(h.tty),
         Symbol(":cols") => Form(h.cols),
         Symbol(":rows") => Form(h.rows),
-        Symbol(":attached") => h.inst === nothing ? naught : _ui_key_form(h.inst.key),
+        Symbol(":attached") => attached,
         Symbol(":closed") => h.closed ? _mk_time(h.closed_at) : naught])
 end
 
@@ -427,8 +434,11 @@ end
 
 # Attach `widget` (a `(ui …)` form or an instance key) to `h` and run its
 # renderer until the widget is dismissed, aborted (Ctrl-C), or the instance is
-# closed. A `(ui …)` form is instantiated for the attach and closed again when
-# the renderer leaves; an instance key is attached as it stands and stays open.
+# closed. A `(ui …)` form is projected for the attach: the projection lives with
+# the connection's task (and long enough for any job it started to land), and is
+# released when it is over; the element — the form and its state mutable — is
+# never closed here, so storing the form keeps the widget. An instance key is a
+# `ui-open` resource and is attached as it stands.
 function _conn_attach!(env::Env, scope::Scope, h::_ConnHandle, widget::Form)
     h.closed && throw(AirThrown(_error_object(
         Form(Symbol(":conn-closed")), _ns_path_form(h.path))))
@@ -436,27 +446,22 @@ function _conn_attach!(env::Env, scope::Scope, h::_ConnHandle, widget::Form)
     h.inst !== nothing && throw(AirThrown(_error_object(
         Form(Symbol(":ui-attached")), _ns_path_form(h.path))))
     local inst::_UiInstance
-    local temporary::Bool
     w = air_reduce(env, scope, widget)
     if w isa FormContainer && head_symbol(w) === UI_HEAD
-        key = _ui_new_key()
-        inst = _ui_instantiate(env, scope, key, w)
-        lock(_UI_INSTANCES_LOCK) do
-            _UI_INSTANCES[key] = inst
-        end
-        try
-            _ui_assert_initial!(inst)
-        catch
-            lock(_UI_INSTANCES_LOCK) do
-                get(_UI_INSTANCES, key, nothing) === inst &&
-                    delete!(_UI_INSTANCES, key)
-            end
-            rethrow()
-        end
-        temporary = true
+        # The projection is not a named resource: nothing outside this attach
+        # can look it up, so it disappears with the form unless the user stores
+        # `(current-ui)`. Facts it asserts still belong to the namespace the
+        # widget names, and are retracted when the projection is released.
+        inst = _ui_instantiate(env, scope, _ui_new_key(), w)
+        inst.ephemeral = true
+        _ui_assert_initial!(inst)
     else
         inst = _ui_lookup(env, w)
-        temporary = false
+        # Take-over by another live connection is refused: an element has one
+        # controller at a time.
+        isempty(inst.renderers) || throw(AirThrown(_error_object(
+            Form(Symbol(":ui-attached")), _ns_path_form(h.path),
+            Form("the widget is already attached to another connection"))))
     end
     h.inst = inst
     h.task = current_task()
@@ -465,7 +470,10 @@ function _conn_attach!(env::Env, scope::Scope, h::_ConnHandle, widget::Form)
                       _conn_backend(h.kind, h.out, h.tty, h.cols, h.rows) :
                       h.backend)
     try
-        _ui_term_run!(r, inst)
+        # The element records its controller transactionally, as the renderer
+        # attaches (the renderer must be attached before the ticker starts, or
+        # an ephemeral projection would read as abandoned).
+        _ui_term_run!(r, inst; controller = _ns_path_form(h.path))
     finally
         h.inst = nothing
         h.task = nothing
@@ -473,7 +481,9 @@ function _conn_attach!(env::Env, scope::Scope, h::_ConnHandle, widget::Form)
             _conn_persist!(env, h)
         catch
         end
-        temporary && _ui_close_key(env, _ui_key_form(inst.key))
+        # The renderer cleared the element's controller on its way out. Anything
+        # the projection still owns (a running job, a chat pump) keeps it alive;
+        # the ticker releases it once the last result is written.
     end
     return naught
 end
@@ -547,12 +557,15 @@ function _bi_ui_detach(env::Env, scope::Scope, call::FormContainer)
 end
 special!(Symbol("ui-detach!"), _bi_ui_detach)
 
-# `(ui-attached [conn])` — the key of the instance attached to a connection.
+# `(ui-attached [conn])` — the widget attached to a connection: its form for an
+# attach's ephemeral projection (the value to store to keep it), or the key of a
+# `ui-open` instance.
 function _bi_ui_attached(env::Env, scope::Scope, args::Vector{Form})
     h = _conn_arg_or_current(env, scope, args, "ui-attached")
     h === nothing && return naught
     inst = h.inst
-    return inst === nothing ? naught : _ui_key_form(inst.key)
+    inst === nothing && return naught
+    return inst.ephemeral ? inst.widget : _ui_key_form(inst.key)
 end
 builtin!(Symbol("ui-attached"), _bi_ui_attached)
 

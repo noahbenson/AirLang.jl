@@ -26,14 +26,34 @@ function _ssh_client_works()
 end
 
 # Run a client command with an input script and bounded wait; a hung client
-# fails its own test instead of the suite.
-function _ssh_run(cmd; input::Union{Nothing,String} = nothing, timeout::Real = 60)
+# fails its own test instead of the suite. `chunks` writes the input in pieces
+# with a pause between them, which is how a person types: two quick Esc keys in
+# one write are one Esc and an Alt-`c` for the key parser, so a sequence that
+# needs a pause says so here.
+function _ssh_run(cmd; input::Union{Nothing,String} = nothing,
+                  chunks::Union{Nothing,Vector{String}} = nothing,
+                  timeout::Real = 60)
     out = IOBuffer()
     err = IOBuffer()
-    p = input === nothing ?
-        run(pipeline(ignorestatus(cmd), stdout = out, stderr = err); wait = false) :
+    p = if chunks !== nothing
+        pin = Base.Pipe()
+        Base.link_pipe!(pin; reader_supports_async = true,
+                        writer_supports_async = true)
+        proc = run(pipeline(ignorestatus(cmd), stdin = pin, stdout = out,
+                            stderr = err); wait = false)
+        for part in chunks
+            write(pin, part)
+            flush(pin)
+            sleep(0.25)
+        end
+        close(pin)
+        proc
+    elseif input === nothing
+        run(pipeline(ignorestatus(cmd), stdout = out, stderr = err); wait = false)
+    else
         run(pipeline(ignorestatus(cmd), stdin = IOBuffer(input), stdout = out,
                      stderr = err); wait = false)
+    end
     t0 = time()
     while !Base.process_exited(p) && time() - t0 < timeout
         sleep(0.01)
@@ -103,6 +123,7 @@ _ssh_sftp_cmd(port::Integer, key::AbstractString, batchfile::AbstractString,
         bobkey, bobpub = mkkey("bob"; rsa = true)
         kidkey, kidpub = mkkey("kid")
         carlkey, carlpub = mkkey("carl")
+        danakey, danapub = mkkey("dana")
         airkey, airpub = mkkey("air")
         @test ev("(create-user :alice)") == ":alice"
         @test ev("(create-constituent :bob)") == ":air:bob"
@@ -110,10 +131,15 @@ _ssh_sftp_cmd(port::Integer, key::AbstractString, batchfile::AbstractString,
         @test ev("(set-admin :game true)") == ":game"
         @test ev("(as-user :game (create-constituent :kid))") == ":game:kid"
         @test ev("(create-user :carl)") == ":carl"
+        @test ev("(create-user :dana)") == ":dana"
 
         # The namespace-shaped config, the `ssh`-val-shaped config, and air's own.
+        # Alice opts out of the interactive login UI, so her pty sessions go
+        # straight to the line editor; Dana keeps the default UI.
         @test ev("(as-user :alice (namespace \$.config.ssh " *
-                 "(val authorized-keys (\"$alicepub\"))))") == "naught"
+                 "(val authorized-keys (\"$alicepub\")) (val ui false)))") == "naught"
+        @test ev("(as-user :dana (namespace \$.config.ssh " *
+                 "(val authorized-keys (\"$danapub\"))))") == "naught"
         @test ev("(as-user :air:bob (namespace \$.config " *
                  "(val ssh (authorized-keys=(\"$bobpub\")))))") == "naught"
         @test ev("(as-user :game:kid (namespace \$.config.ssh " *
@@ -143,13 +169,15 @@ _ssh_sftp_cmd(port::Integer, key::AbstractString, batchfile::AbstractString,
             @test rc == 0
             @test occursin("3", out)
 
-            # A pty session gets the line editor and its prompt.
+            # A pty session gets the line editor and its prompt. Alice opted
+            # out of the login UI (`ui=false`), so no alternate screen appears.
             out, err, rc = _ssh_run(_ssh_client_cmd(port, alicekey, "alice";
                                                     tty = true);
                                     input = "(+ 20 22)\n(exit)\n")
             @test rc == 0
             @test occursin("air> ", out)
             @test occursin("42", out)
+            @test !occursin("\e[?1049h", out)
 
             # Multi-line input continues under the continuation prompt.
             out, err, rc = _ssh_run(_ssh_client_cmd(port, alicekey, "alice";
@@ -208,6 +236,37 @@ _ssh_sftp_cmd(port::Integer, key::AbstractString, batchfile::AbstractString,
             @test occursin(":before", out)
             # Nothing follows the echoed exit line: no value, no error.
             @test endswith(strip(out), "(exit 42)")
+
+            # ---- the default login UI ---------------------------------------
+            # An interactive login opens a tab shell (a browser and a notebook
+            # in the user's home) before the REPL. Esc pops one layer at a time:
+            # two presses close the two tabs, and the second dismisses the shell.
+            # `(current-ui)` still names it afterwards, so storing the form keeps
+            # the widget and its state across the session.
+            out, err, rc = _ssh_run(_ssh_client_cmd(port, danakey, "dana";
+                                                    tty = true);
+                chunks = ["\033", "\033",
+                          "(val myshell (current-ui))\n(exit)\n"])
+            @test rc == 0
+            @test occursin("\e[?1049h", out)      # the shell took the screen
+            @test occursin("\e[?1049l", out)      # and gave it back
+            @test occursin("air> ", out)          # the REPL came next
+            @test occursin("(ui shell", ev(".sys.user.dana.home.myshell"))
+            # With everything typed ahead in one write, the renderer hands the
+            # rest of the batch back and the REPL reads it as input. (A NUL
+            # separates the Esc presses: two adjacent Esc bytes are one Esc
+            # followed by the start of an Alt sequence to the key parser.)
+            out, err, rc = _ssh_run(_ssh_client_cmd(port, danakey, "dana";
+                                                    tty = true);
+                input = "\033\000\033\000(val myshell2 (current-ui))\n(exit)\n")
+            @test rc == 0
+            @test occursin("(ui shell", ev(".sys.user.dana.home.myshell2"))
+            # A non-interactive login never opens one.
+            out, err, rc = _ssh_run(_ssh_client_cmd(port, danakey, "dana");
+                                    input = "(current-ui)\n(exit)\n")
+            @test rc == 0
+            @test occursin("naught", out)
+            @test !occursin("\e[?1049h", out)
 
             # ---- identity ---------------------------------------------------
             out, err, rc = _ssh_run(_ssh_client_cmd(port, alicekey, "alice");

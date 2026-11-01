@@ -97,14 +97,20 @@ SFTP), the immutable `bytes` extern,
   its cells in order, and a standalone widget reopens with the output it last
   drew. The status row right-aligns whole key hints, and the terminal writer
   diffs frames, sending only the rows that changed. See `book/ui.md`.
-- [ ] **UI sessions.** Today an attach is explicit and the instance lives until
-  `ui-close!`. The intended model: an ephemeral `(ui-attach (ui …))` is lost when
-  the connection ends and the value becomes unreachable (so its repl can be
-  collected), while a widget stored in a namespace is durable and can be
-  reattached; the default UI for an SSH login is a namespace browser and a
-  notebook opened in `$`; and a `current-ui` value is always set for anything
-  reached through the UI. Cleanup of an unreachable ephemeral UI's evaluation
-  context belongs to this work.
+- [x] **UI sessions.** A connection renders one `ui` element at a time, and the
+  element is ordinary air data: the attach records itself transactionally in the
+  element's state (`controller=`), and detaching or closing the connection
+  clears that field without deleting anything. Attaching a raw `(ui …)` form
+  creates an *ephemeral projection* — an unregistered instance that lives with
+  the attach and is retracted by the instance's ticker only when no renderer and
+  no job remain, so a running evaluation keeps it alive long enough to write its
+  result; `(ui-attached)` returns the form itself, so storing it keeps the
+  widget. `(current-ui)` is bound to the instance's form around every evaluation
+  it runs. An interactive SSH login opens the default UI — a `(ui-shell)` whose
+  tabs are a namespace browser and a notebook in `$` — held on the session
+  task's stack, so it is collected when the session ends unless the user stores
+  it; `ui=false`/`ui=naught` in `$.config.ssh` (or the `ssh` val of
+  `$.config`) opts out, and a non-pty session never gets one.
 - [ ] **HUI follow-ups.**
   - *Editing:* in-buffer search, go-to-line, bracket match/jump, and a
     comment toggle.

@@ -133,19 +133,76 @@
             w = conn(h)
             t = @async evd("(ui-attach! $w (ui-notebook))")
             @test wait_for(() -> h.inst !== nothing)
-            key = h.inst.key
+            inst = h.inst
+            # An attach's projection is not a named resource: nothing outside
+            # the attach can look the instance up.
+            @test inst.ephemeral
+            @test !haskey(B._UI_INSTANCES, inst.key)
+            # `(ui-attached)` names the element: the form to store to keep it.
             @test ev("(ui-attached $w)") == ev("(ui-attached)")
-            @test ev("(ui-attached)") == air_string(B._ui_key_form(key))
-            @test field(record(B._conn_state(env, h.path), h.id), :attached) ==
-                  air_string(B._ui_key_form(key))
+            @test occursin("(ui notebook ", ev("(ui-attached)"))
+            # The record says a projection is attached, without naming it.
+            @test field(record(B._conn_state(env, h.path), h.id), :attached) == "true"
+            # The element records its controller transactionally.
+            sk = B._map_key(:state)
+            @test haskey(inst.widget.map, sk)
+            st = to_form(inst.widget.map[sk])
+            @test st isa VolatileForm
+            controller() = B._ui_in_context(inst) do
+                B._state_field(canonicalize(st[]), :controller)
+            end
+            @test B._stored_path(controller()) == h.path
             # One root widget per connection is the rule, not a stack.
             @test occursin(":ui-attached",
                            errmsg(() -> ev("(ui-attach! $w (ui-notebook))")))
-            # Esc dismisses the notebook; the attach returns and the record clears.
+            # Esc dismisses the notebook; the attach returns, the record clears,
+            # and the controller is gone while the element itself still exists.
             push!(queue, ESC)
             @test wait_for(() -> istaskdone(t))
             @test txt(evd("(ui-attached $w)")) == "naught"
             @test field(record(B._conn_state(env, h.path), h.id), :attached) == "naught"
+            @test controller() === nothing
+            @test !haskey(B._UI_INSTANCES, inst.key)
+        end
+
+        @testset "an ephemeral attach outlives its renderer for a job" begin
+            (h, queue) = scripted(:air)
+            w = conn(h)
+            # A long enough evaluation that the renderer leaves before it lands.
+            slow = "(loop (i 0) (if (< i 20000) (recur (+ i 1)) i))"
+            t = @async evd("(ui-attach! $w (ui-code text=\"$slow\"))")
+            @test wait_for(() -> h.inst !== nothing)
+            inst = h.inst
+            st = to_form(inst.widget.map[B._map_key(:state)])
+            push!(queue, UI_CTRL_J, ESC)
+            @test wait_for(() -> istaskdone(t))
+            # The renderer is gone; the projection is not released while the job
+            # runs, and its result is written into the element's state.
+            state() = B._ui_in_context(inst) do
+                canonicalize(st[])
+            end
+            @test wait_for(() -> begin
+                v = state()
+                s = B._state_string(v, :output)
+                !isempty(s) && s == "20000"
+            end)
+            @test wait_for(() -> inst.closed)
+            # Releasing the projection left the element intact.
+            @test B._state_string(state(), :text) == slow
+        end
+
+        @testset "a widget attached elsewhere is not taken over" begin
+            (h1, q1) = scripted(:air)
+            (h2, _) = scripted(:air)
+            @test ev("(ui-open :busy (ui-notebook))") == ":busy"
+            t = @async evd("(ui-attach! $(conn(h1)) :busy)")
+            @test wait_for(() -> h1.inst !== nothing)
+            @test h2.inst === nothing
+            @test occursin(":ui-attached",
+                           errmsg(() -> ev("(ui-attach! $(conn(h2)) :busy)")))
+            push!(q1, ESC)
+            @test wait_for(() -> istaskdone(t))
+            @test ev("(ui-close! :busy)") == "naught"
         end
 
         @testset "detaching keeps the instance" begin

@@ -163,9 +163,11 @@
     @testset "the output survives a detach" begin
         w = evd("(ui-code text=\"(+ 40 2)\")")
         open_form!(:cb13, w)
+        # The renderer leaves as soon as Esc arrives; the evaluation is a job
+        # the instance's ticker finishes and applies with nobody attached.
         (res, out) = term_run(:cb13, [CTRL_J, ESC])
         @test res[1] === :ok
-        @test occursin("42", out)
+        @test occursin("running", out)
         # The stored state holds the output and the text that produced it, so a
         # rebuilt widget shows the result with a clean buffer.
         v = B.canonicalize(state_of(w)[])

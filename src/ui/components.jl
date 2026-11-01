@@ -224,21 +224,57 @@ function _comp_state(c::_Comp, inst::_UiInstance)
     end
 end
 
+# The key a widget's state uses to name the connection controlling it.
+const _COMP_CONTROLLER_KEY = Symbol(":controller")
+
+# Carry the stored controller entry over to a fresh state value, so a widget's
+# own store never forgets which connection is displaying it. A value that names
+# its own controller (the attach path writes one) is left alone.
+function _comp_keep_controller(old::Form, value::Form)
+    value isa FormContainer || return value
+    haskey(value.map, _COMP_CONTROLLER_KEY) && return value
+    cur = _state_field(old, :controller)
+    cur === nothing && return value
+    map = Pair{Symbol,FormValue}[k => v for (k, v) in value.map]
+    push!(map, _COMP_CONTROLLER_KEY => _store_form(cur))
+    return FormContainer(value.seq, FormMap(map))
+end
+
 # Write the component's state mut inside the instance's captured context, with
 # the same hooks and transaction an air-level `set!` uses.
-function _comp_set_state!(c::_Comp, inst::_UiInstance, value::Form)
+function _comp_set_state!(c::_Comp, inst::_UiInstance, value::Form;
+                          keep_controller::Bool = true)
     m = c.base.state
     m === nothing && return nothing
     _ui_in_context(inst) do
         env = inst.env
         _check!(env, m, :write)
+        v = keep_controller ? _comp_keep_controller(m[], value) : value
         _tx_boundary(env) do
             _ensure_hooks!(env, m)
             _record_write!(env, m)
-            setindex!(m, value)
-            value
+            setindex!(m, v)
+            v
         end
     end
+    return nothing
+end
+
+# Record `value` as the connection controlling the widget, or clear the entry
+# when `value` is nothing. This is the durable half of attaching: the element
+# itself says who is showing it, so a reattach can tell the difference between
+# "nobody" and another live connection.
+function _comp_set_controller!(c::_Comp, inst::_UiInstance, value)
+    m = c.base.state
+    m === nothing && return nothing
+    cur = _comp_state_value(inst, m)
+    cur isa FormContainer || (cur = _ns_empty_value())
+    map = Pair{Symbol,FormValue}[(k => v) for (k, v) in cur.map
+                                 if k !== _COMP_CONTROLLER_KEY]
+    value === nothing ||
+        push!(map, _COMP_CONTROLLER_KEY => _store_form(value::Form))
+    _comp_set_state!(c, inst, FormContainer(cur.seq, FormMap(map));
+                     keep_controller = false)
     return nothing
 end
 
@@ -301,15 +337,16 @@ function _comp_eval(c::_Comp, inst::_UiInstance, text::AbstractString)
     ns = _comp_ns(c, inst)
     ctx = _comp_context(c, inst, ns)
     try
-        _with_context(env, ctx, () -> Air.setvars(() -> begin
-            for f in forms
-                # The namespace's layers are re-read per form, so a `def`
-                # earlier in the buffer is visible to a later form.
-                scope = ns === nothing ? inst.lscope :
-                        _ns_scope(env, inst.lscope, ns)
-                push!(values, air_reduce(env, scope, f))
-            end
-        end, inst.bindings))
+        _with_context(env, ctx, () -> Air.setvars(() -> Base.ScopedValues.with(
+            () -> begin
+                for f in forms
+                    # The namespace's layers are re-read per form, so a `def`
+                    # earlier in the buffer is visible to a later form.
+                    scope = ns === nothing ? inst.lscope :
+                            _ns_scope(env, inst.lscope, ns)
+                    push!(values, air_reduce(env, scope, f))
+                end
+            end, _UI_CURRENT => inst.widget), inst.bindings))
     catch e
         e isa AirError || rethrow()
         return (:error, sprint(showerror, e))
@@ -384,6 +421,11 @@ evaluation a widget started outlives the connection that showed it. The ticker
 mutates the tree only under the instance lock, which the renderer also takes
 around its keys and its drawing; results are therefore applied exactly once and
 the display never races the store.
+
+The ticker runs only while there is a reason to: a renderer is attached or a
+job is in flight. Once both are gone it stops — and an ephemeral projection (the
+one an attach owns, never a `ui-open` resource) is released, which leaves its
+element — the form and its state mutable — exactly as it was.
 """
 function _ui_start_ticker!(inst::_UiInstance)
     t = inst.ticker
@@ -391,8 +433,8 @@ function _ui_start_ticker!(inst::_UiInstance)
     inst.ticker = Threads.@spawn begin
         _reset_block_scopes!()
         while true
-            stop = lock(inst.lock) do
-                inst.closed && return true
+            keep = lock(inst.lock) do
+                inst.closed && return false
                 try
                     tree = inst.tree
                     if tree !== nothing && _comp_tick!(tree, inst)
@@ -405,14 +447,32 @@ function _ui_start_ticker!(inst::_UiInstance)
                         (tree.base.status = "background error: " *
                                             sprint(showerror, e))
                 end
-                inst.closed
+                _ui_ticker_wanted(inst)
             end
-            stop && break
+            keep || break
             sleep(_UI_TICK_SECS)
         end
         nothing
     end
     return nothing
+end
+
+# Whether the ticker still has work: an attached renderer or a running job. When
+# it does not, an ephemeral projection is released here — on the ticker's task,
+# after the last result was written — so a job's element outlives the connection
+# until its result lands, and no longer.
+function _ui_ticker_wanted(inst::_UiInstance)
+    tree = inst.tree
+    busy = tree !== nothing && _comp_running(tree)
+    (busy || !isempty(inst.renderers)) && return true
+    if inst.ephemeral
+        try
+            _ui_release!(inst)
+        catch e
+            e isa InterruptException && rethrow()
+        end
+    end
+    return false
 end
 
 # The namespace the instance was captured in, as a path.

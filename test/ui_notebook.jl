@@ -58,6 +58,21 @@
         ev("(ui-close! :nb1)")
     end
 
+    @testset "(current-ui) inside a widget evaluation" begin
+        # Outside any UI evaluation there is no current UI.
+        @test air_string(evd("(current-ui)")) == "naught"
+        # Inside one, the evaluation sees the very form its instance was built
+        # from, so a user can store it and keep the widget.
+        w = evd("(ui-notebook text=\"(current-ui)\")")
+        open_form!(:nb0, w)
+        (res, _) = term_run(:nb0, [CTRL_J, ESC])
+        @test res[1] === :ok
+        out = outputs_of(w)[1]
+        @test startswith(out, "(ui notebook ")
+        @test occursin("state=(mut ", out)
+        ev("(ui-close! :nb0)")
+    end
+
     @testset "inserting cells" begin
         w = evd("(ui-notebook text=\"a\")")
         open_form!(:nb2, w)

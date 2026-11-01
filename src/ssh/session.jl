@@ -194,6 +194,16 @@ function _ssh_channel_kind!(session::Ptr{Cvoid}, chan::Ptr{Cvoid})
     end
 end
 
+# The UI an interactive login opens: a tab shell whose browser and notebook sit
+# in the session's current namespace (the user's home). The form is held by the
+# session's task, so it is collected when the session ends unless the user
+# stores it (its state mutable lives only through the form).
+function _ssh_login_ui(env::Env)
+    call = FormContainer(FormSeq(FormValue[_store_form(Form(Symbol("ui-shell")))]),
+                         FormMap())
+    return _bi_ui_shell(env, Scope(), call)
+end
+
 # Hand the accepted, authenticated channel to its subsystem.
 function _ssh_serve!(server::_SshServer, session::Ptr{Cvoid}, chan::Ptr{Cvoid},
                      id::Symbol)
@@ -210,6 +220,10 @@ function _ssh_serve!(server::_SshServer, session::Ptr{Cvoid}, chan::Ptr{Cvoid},
         out = _SshChannelIO(chan, false, session, tty, cols, rows)
         ctx = TaskContext(id, home, server.dbroot, naught, out)
         _with_context(env, ctx, () -> begin
+            # The default UI is the session's UI: `(current-ui)` names it from
+            # the REPL after it is dismissed, and storing that form keeps it.
+            form = tty && _ssh_login_ui_enabled(env, id) ? _ssh_login_ui(env) :
+                                                           nothing
             # Register the connection so `(ui-attach! .io.conn… widget)` has a
             # byte source to render on. Registration is best effort: a session
             # must log in even when its record cannot be written (a database
@@ -221,12 +235,25 @@ function _ssh_serve!(server::_SshServer, session::Ptr{Cvoid}, chan::Ptr{Cvoid},
                 @debug "air ssh connection registration failed" exception = (e, catch_backtrace())
                 nothing
             end
-            try
-                _ssh_repl!(env, server, session, chan, out; cols = cols,
-                           rows = rows, tty = tty)
-            finally
-                conn === nothing || _conn_close!(env, conn)
+            body = () -> begin
+                try
+                    if form !== nothing && conn !== nothing
+                        try
+                            _conn_attach!(env, Scope(), conn, form)
+                        catch e
+                            # A login must survive a UI that cannot start; the
+                            # plain line editor is always available.
+                            e isa InterruptException && rethrow()
+                            @debug "air ssh default ui failed" exception = (e, catch_backtrace())
+                        end
+                    end
+                    _ssh_repl!(env, server, session, chan, out; cols = cols,
+                               rows = rows, tty = tty)
+                finally
+                    conn === nothing || _conn_close!(env, conn)
+                end
             end
+            Base.ScopedValues.with(body, _UI_CURRENT => form)
         end)
     end
     return nothing

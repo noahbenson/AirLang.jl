@@ -304,8 +304,9 @@ the same instance.
 
 The composite constructors (`ui-code`, `ui-editor`, `ui-notebook`,
 `ui-browser`, `ui-shell`, `ui-chat`), the connection forms (`ui-attach!`,
-`ui-detach!`, `ui-attached`, `ui-connection`, `ui-connections`), and the theme
-forms (`ui-theme`, `ui-theme!`, `ui-style`) are described below.
+`ui-detach!`, `ui-attached`, `ui-connection`, `ui-connections`), the
+`(current-ui)` builtin, and the theme forms (`ui-theme`, `ui-theme!`,
+`ui-style`) are described below.
 
 `ui-open` returns the key as a keyword; with no key it generates one (`:ui1`,
 `:ui2`, …). A key already in use is an error. Instances are owned by the user
@@ -562,21 +563,36 @@ since=(time …) tty=true cols=80 rows=24 attached=naught closed=naught)` — wi
 `read` granted to everyone and `write` to the record's owner. A constituent's
 record is owned by its admin, so the constituent can read its own connection but
 not edit it. The live byte source and the attached instance are process-local
-and are never serialized; the record outlives the socket.
+and are never serialized; the record outlives the socket. Its `attached` field
+is the key of a `ui-open` instance and `true` for an attach's own projection,
+so the record says a widget is showing without naming something unregistered.
 
 | form | meaning |
 | --- | --- |
 | `(ui-attach! [conn] widget)` | attach and run until dismissed; no `conn` means this session's own |
-| `(ui-detach! [conn])` | stop the renderer; the instance and its muts survive |
-| `(ui-attached [conn])` | the key of the instance attached there, or `naught` |
+| `(ui-detach! [conn])` | stop the renderer; the element and its muts survive |
+| `(ui-attached [conn])` | the widget attached there — its form for an attach, its key for an open instance — or `naught` |
 | `(ui-connection [conn])` | one connection's record, or `naught` |
 | `(ui-connections [user])` | the caller's live connections (`air` sees every user's) |
+| `(current-ui)` | the `(ui …)` form this evaluation belongs to, or `naught` |
 
-`widget` is either a `(ui …)` form — instantiated for the attach and closed when
-it leaves — or a key naming an open instance, which stays open. One widget per
-connection is allowed; a second attach raises `(error :ui-attached path)`. Only
-the task that opened a connection may attach to it, because a byte source
-belongs to one reader; detaching is allowed from anywhere.
+A `widget` argument is either a `(ui …)` form or a key naming an open instance.
+A key's instance is a named process resource: it stays open across a detach and
+`ui-close!` releases it. A **raw form** is attached as a *projection*: the attach
+instantiates it without registering it, so nothing outside the attach can look
+it up. The **element** — the form and the `mut` holding its state — is not owned
+by the connection at all. The attach records itself in that state
+transactionally (`controller=` is the connection's namespace path), so the
+element knows which connection is showing it; detaching or closing the
+connection clears that field and changes nothing else. Because `(ui-attached)`
+returns the form itself, storing it (`val`, `set!`, a cell result) keeps the
+widget alive after the attach returns.
+
+One widget per connection is allowed; a second attach raises
+`(error :ui-attached path)`, and a `ui-open` instance already attached elsewhere
+is refused the same way. Only the task that opened a connection may attach to
+it, because a byte source belongs to one reader; detaching is allowed from
+anywhere.
 
 The instance — not the renderer — owns the widget and its background work. Its
 tree is built once, and a ticker applies finished jobs and writes the result
@@ -584,14 +600,23 @@ into the widget's durable state. So **detaching never waits for or stops an
 evaluation**: a notebook's running cell and its run-all queue, a code block's
 run, and a chat's evaluation all continue with no renderer attached, and their
 results are in the state when the widget is reattached. Detaching flushes the
-widget's on-screen state (text, output, cursor) into its `mut`; only
-`ui-close!` tears the tree down and releases connection-era resources such as
+widget's on-screen state (text, output, cursor) into its `mut`; a projection is
+retracted by the ticker only once no renderer and no job remain, so a running
+job's result is written before the projection goes away. Only `ui-close!`
+tears a named instance down and releases connection-era resources such as
 the chat pump. Ctrl-C still raises `(error :ctrl-c)` at the call site, but it
 does not abort the evaluation; that is a follow-up.
 
 `ui-show` is exactly "attach this session's connection": it looks up the current
 session's connection and attaches there, so the older spelling keeps working.
 `ui-run` is open + attach + close.
+
+`(current-ui)` is bound around every evaluation an instance runs — a notebook
+cell, a code block's run, a chat code message — and names the very form the
+instance was built from, so `(val saved (current-ui))` inside a cell keeps that
+widget. Outside any instance evaluation it is `naught`; an interactive SSH login
+binds it to the session's default UI instead (see
+[SSH](ssh.md#interactive-uis-over-ssh)).
 
 ## The theme
 

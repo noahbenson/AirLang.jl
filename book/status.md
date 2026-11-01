@@ -271,8 +271,18 @@
   detach. The instance owns its built tree and a ticker, so an evaluation or a
   notebook run-all continues with no renderer attached and its result is stored
   in the widget's state; detaching flushes the on-screen state, and only
-  `ui-close!` tears the tree down. Both the SSH channel backend and a local
-  `TTYTerminal` backend exist.
+  `ui-close!` tears a named instance down. Both the SSH channel backend and a
+  local `TTYTerminal` backend exist.
+* UI sessions: an attach of a raw `(ui …)` form is a projection with no named
+  instance, and the element itself — the form and its state `mut` — records its
+  connection as `controller=` transactionally. Detaching or closing the
+  connection clears the controller and leaves the element; the projection is
+  retracted only once no renderer and no job remain, so a job's result is
+  written first. `(ui-attached)` returns the attached form (or an open
+  instance's key), and `(current-ui)` names the form an evaluation belongs to.
+  An interactive SSH login opens a default `(ui-shell)` (browser and notebook in
+  `$`) held on the session task, which `ui=false` in `$.config.ssh` turns off;
+  a non-pty session never opens one.
 * `ns-entries` and `ns-entry` list a namespace's entries as data
   (`name=` as a keyword, `kind=`, `owner=`, `doc=`, and `src=` on request),
   omitting unreadable and hidden entries exactly as `using` and `doc` do.
