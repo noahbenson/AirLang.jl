@@ -34,7 +34,7 @@ mutable struct _Shell <: _Comp
     base::_CompBase
     tabs::Vector{_Tab}
     active::Int
-    confirm::Symbol                 # :none | :close
+    confirm::Symbol                 # :none | :close | :close_all
     width::Int
 end
 
@@ -203,17 +203,23 @@ _sh_title(c::_Shell) = (1 <= c.active <= length(c.tabs)) ? c.tabs[c.active].titl
 _comp_dirty(c::_Shell, inst::_UiInstance) = any(
     t -> t.comp !== nothing && _comp_dirty(t.comp, inst), c.tabs)
 
+# A renderer attached. A shell with no tabs is a dead end — the only way to get
+# one is a default — so a session that reattaches an instance whose tabs were
+# all closed gets a usable shell back. A headless `ui-render` never attaches a
+# renderer, so it still shows `(no tabs)` and creates nothing.
+function _comp_attach!(c::_Shell, inst::_UiInstance)
+    isempty(c.tabs) || return nothing
+    _sh_default_tabs!(c, inst)
+    _sh_build_tabs!(c, inst)
+    _sh_store!(c, inst)
+    return nothing
+end
+
 # A shell owns no background work itself; its tabs do, so it starts and polls
-# them on their behalf. A fresh shell also opens its default tabs here — starting
-# is the moment the shell becomes a live widget, and a headless `ui-render` never
-# starts one, so it shows no tabs.
+# them on their behalf. Starting is also the moment the shell becomes a live
+# widget, so the default tabs are opened here for a fresh instance.
 function _comp_start!(c::_Shell, inst::_UiInstance)
-    fresh = isempty(c.tabs)
-    if fresh
-        _sh_default_tabs!(c, inst)
-        _sh_build_tabs!(c, inst)
-        _sh_store!(c, inst)
-    end
+    _comp_attach!(c, inst)
     for t in c.tabs
         t.comp === nothing && continue
         try
@@ -285,6 +291,51 @@ function _sh_select!(c::_Shell, inst::_UiInstance, i::Int)
     return :handled
 end
 
+# Move the active tab one place left (-1) or right (+1). The active tab follows
+# its form, so the edit stays in front of the user; at either end nothing moves.
+function _sh_move!(c::_Shell, inst::_UiInstance, d::Int)
+    isempty(c.tabs) && return :handled
+    j = c.active + d
+    (1 <= j <= length(c.tabs)) || return :handled
+    t = c.tabs[c.active]
+    c.tabs[c.active], c.tabs[j] = c.tabs[j], t
+    c.active = j
+    c.base.status = string("moved \"", t.title, "\" ",
+                           d < 0 ? "left" : "right")
+    c.base.top = 1
+    _sh_store!(c, inst)
+    return :handled
+end
+
+# Every open tab still has a component to close and a form the state mut keeps;
+# closing them all is the same as closing one after another, then the shell
+# dismisses because there is nothing left to show.
+function _sh_close_all!(c::_Shell, inst::_UiInstance)
+    isempty(c.tabs) && return :dismiss
+    if _comp_dirty(c, inst)
+        c.confirm = :close_all
+        return :handled
+    end
+    return _sh_close_all_now!(c, inst)
+end
+
+function _sh_close_all_now!(c::_Shell, inst::_UiInstance)
+    for t in c.tabs
+        t.comp === nothing && continue
+        try
+            _comp_close!(t.comp, inst)
+        catch e
+            e isa AirError || rethrow()
+        end
+    end
+    empty!(c.tabs)
+    c.confirm = :none
+    c.base.status = ""
+    c.base.top = 1
+    _sh_store!(c, inst)
+    return :dismiss
+end
+
 # ---- rendering ---------------------------------------------------------------
 
 function _sh_bar(c::_Shell, width::Int)
@@ -316,6 +367,9 @@ end
 function _comp_status(c::_Shell, inst::_UiInstance)
     if c.confirm === :close
         return string("discard changes in \"", _sh_title(c), "\"?  y/n")
+    elseif c.confirm === :close_all
+        return string("discard changes in ", length(c.tabs), " tab",
+                      length(c.tabs) == 1 ? "" : "s", "?  y/n")
     end
     isempty(c.base.status) || return c.base.status
     child = _sh_comp(c)
@@ -325,10 +379,11 @@ function _comp_status(c::_Shell, inst::_UiInstance)
     return isempty(msg) ? head : head * "  ·  " * msg
 end
 
-_comp_hints(c::_Shell) = c.confirm === :close ?
+_comp_hints(c::_Shell) = c.confirm !== :none ?
     ["y: discard" => "y", "n: cancel" => "n"] :
     ["tab: next" => "tab", "alt-1..9: jump" => "alt-1..9",
-     "esc: close tab" => "esc"]
+     "esc: close tab" => "esc", "alt-←→: move tab" => "alt-←→",
+     "alt-w: close all" => "alt-w"]
 
 # A prompt inside the active tab (a search line) is the shell's prompt too, so
 # the status row shows it and the hints it offers instead of the tab's.
@@ -389,12 +444,14 @@ _sh_char(k::_UiKey, c::Char) =
     k.name === :char && !k.ctrl && !k.alt && k.char == c
 
 function _comp_key!(c::_Shell, inst::_UiInstance, k::_UiKey)
-    if c.confirm === :close
+    if c.confirm !== :none
         # Only `y` discards. Anything else — `n`, Esc, a stray key — keeps the
-        # tab and drops back to it, so the destructive answer is never guessed.
+        # tab (or tabs) and drops back to them, so the destructive answer is
+        # never guessed.
+        all = c.confirm === :close_all
         if _sh_char(k, 'y') || _sh_char(k, 'Y')
             c.confirm = :none
-            return _sh_close_active!(c, inst)
+            return all ? _sh_close_all_now!(c, inst) : _sh_close_active!(c, inst)
         end
         c.confirm = :none
         return :handled
@@ -407,9 +464,23 @@ function _comp_key!(c::_Shell, inst::_UiInstance, k::_UiKey)
         return _sh_select!(c, inst, i)
     end
 
+    # Alt-Left/Alt-Right move the active tab; the buffer widgets read plain
+    # arrows but leave the alt forms unclaimed, so they are safe shell keys. A
+    # prompt inside the tab owns its keys, though, so these defer to it the same
+    # way Esc does.
+    child = _sh_comp(c)
+    prompting = child !== nothing && _comp_prompt(child, inst) !== nothing
+    if !prompting && (k.name === :left || k.name === :right) && k.alt && !k.ctrl
+        return _sh_move!(c, inst, k.name === :right ? 1 : -1)
+    end
+
     if k.name === :char && k.alt && k.char !== nothing &&
        '1' <= k.char <= '9'
         return _sh_select!(c, inst, Int(k.char) - Int('0'))
+    end
+
+    if !prompting && k.name === :char && k.alt && k.char == 'w'
+        return _sh_close_all!(c, inst)
     end
 
     if k.name === :esc

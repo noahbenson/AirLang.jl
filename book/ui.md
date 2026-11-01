@@ -377,6 +377,8 @@ bracketed paste arrives as one paste event.
 | `PageUp`, `PageDown` | page the document, the log, or the current cell |
 | `Tab`, `Shift-Tab` | switch tabs — never indentation |
 | `Alt-1` … `Alt-9` | select a tab directly |
+| `Alt-←`, `Alt-→` | move the active tab left, right |
+| `Alt-W` | close every tab (asking once when edits would be lost) |
 | `Esc` | pop one layer: a prompt or scroll view, then the tab, then the UI |
 | `Enter` | a newline in a text buffer; activation in a browser |
 | `Ctrl-A`/`Ctrl-E`, `Ctrl-B`/`Ctrl-F`, `Alt-B`/`Alt-F` | line start/end, character and word motion |
@@ -521,6 +523,12 @@ the current namespace and a scratch notebook in it. `Tab`/`Shift-Tab` cycle and
 `Alt-1`…`Alt-9` select directly. The default tabs are opened when a renderer
 starts the shell, not when the form is built, so `(ui-render …)` of a fresh
 shell shows `(no tabs)` and creates nothing.
+
+`Alt-Left`/`Alt-Right` move the active tab one place left or right (it stops at
+the ends rather than wrapping), and `Alt-W` closes every tab: it asks once when
+any tab has unsaved edits, then dismisses the shell. Both defer to a prompt
+inside the active tab, which owns every key while it is open. The tab switches
+(`Tab`, `Shift-Tab`, `Alt-1`…`Alt-9`) stay available even then.
 
 `Esc` pops one layer: with a scroll view open it closes the view; otherwise it
 closes the active tab, first asking `y: discard` / `n: cancel` when the tab is

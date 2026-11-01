@@ -99,6 +99,11 @@ _comp_close!(c::_Comp, inst::_UiInstance) = nothing
 # instance's tree is built, never by a headless view.
 _comp_start!(c::_Comp, inst::_UiInstance) = nothing
 
+# A renderer attached to the tree. Called on every attach, including a second
+# session onto an instance that outlived the first; the widget may use it to
+# make itself usable again (a shell with no tabs opens its defaults).
+_comp_attach!(c::_Comp, inst::_UiInstance) = nothing
+
 # ---- background work ---------------------------------------------------------
 
 _comp_running(c::_Comp) = c.base.job !== nothing

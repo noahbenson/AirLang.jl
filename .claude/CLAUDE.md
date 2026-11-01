@@ -640,7 +640,8 @@ Enter, LF is Ctrl-J,
 `ESC [`-sequences are editing keys, `ESC` plus a printable is Alt-`c`, bracketed
 paste is one event), and one text buffer with layout-driven automatic
 indentation, bracket pairing, and syntax highlighting. Keys never indent: Tab /
-Shift-Tab switch tabs, Alt-1…9 select one, Ctrl-J runs/saves/sends, Ctrl-R runs
+Shift-Tab switch tabs, Alt-1…9 select one, Alt-←/→ move the active tab and Alt-W
+closes them all (asking once if any is dirty), Ctrl-J runs/saves/sends, Ctrl-R runs
 every notebook cell in order (one at a time; refused while a cell is in flight),
 Ctrl-O/Alt-O clear the active cell's/all cells' output, Ctrl-G and Alt-G insert a
 notebook cell below/above, Ctrl-V and Alt-V jump a cell or message,
@@ -685,10 +686,11 @@ renderer and no job remain, so a running job's result is written first — while
 `ui-open`'s named instance survives; `(ui-attached)` returns the form for a
 projection and the key for an instance. `(current-ui)` is bound to the
 instance's form around every evaluation it runs. An interactive SSH pty login
-opens a default `(ui-shell)` (browser and notebook in `$`) held on the session
-task, so it is collected when the session ends unless the user stores the form;
-`ui=false` (or `ui=naught`) in `$.config.ssh`, or in the `ssh` val of
-`$.config`, opts out, and a non-pty session never gets one. `ns-entries` and
+opens a default `(ui-shell)` (browser and notebook in `$`) as a named instance,
+`ssh-ui-<length>_<user>`; it outlives the socket, so a reconnect reattaches the
+same shell with its tabs and buffers, and `(ui-close! that-key)` makes the next
+login open a fresh one; `ui=false` (or `ui=naught`) in `$.config.ssh`, or in the
+`ssh` val of `$.config`, opts out, and a non-pty session never gets one. `ns-entries` and
 `ns-entry` list namespace entries as
 `(entry name=:sym kind=:def|:val|:sub|:proxy|:alias owner= doc= src=)`, omitting
 unreadable and hidden entries.

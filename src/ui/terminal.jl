@@ -622,11 +622,18 @@ function _ui_term_run!(r::_TermRenderer, inst::_UiInstance;
     lock(inst.lock) do
         inst.closed || (inst.dismissed = false)
         c = _ui_tree(inst)
-        if c !== nothing && controller !== nothing
+        if c !== nothing
             try
-                _comp_set_controller!(c, inst, controller)
+                _comp_attach!(c, inst)
             catch e
                 e isa AirError || rethrow()
+            end
+            if controller !== nothing
+                try
+                    _comp_set_controller!(c, inst, controller)
+                catch e
+                    e isa AirError || rethrow()
+                end
             end
         end
         r.comp = c
