@@ -31,40 +31,45 @@ end
 # a `depth=` operate on a level of the tree without disturbing the rest.
 
 # `f` applied to every node at `depth`; the tree is rebuilt around the results.
-function _map_at_depth(f, x::Form, depth::Integer)
+# `p` is the walk's cancellation poll, shared by every node it visits and fresh
+# for each top-level call.
+function _map_at_depth(f, x::Form, depth::Integer, p::_CancelPoll = _CancelPoll())
+    _cancel_walk!(p)
     depth <= 0 && return f(x)
     tv = _tensor_of(x)
     if tv !== nothing
         # A tensor's elements are its linear cells; `map` returns a sequence.
-        return _map_at_depth(f, _tensor_elems_form(tv), depth)
+        return _map_at_depth(f, _tensor_elems_form(tv), depth, p)
     end
     if x isa FormContainer
-        seq = FormValue[_store_form(_map_at_depth(f, to_form(v), depth - 1))
+        seq = FormValue[_store_form(_map_at_depth(f, to_form(v), depth - 1, p))
                         for v in x.seq]
         map = Pair{Symbol,FormValue}[
-            k => _store_form(_map_at_depth(f, to_form(v), depth - 1))
+            k => _store_form(_map_at_depth(f, to_form(v), depth - 1, p))
             for (k, v) in x.map]
         return FormContainer(FormSeq(seq), FormMap(map))
     elseif x isa FormScalar
-        return _map_at_depth(f, x, depth - 1)
+        return _map_at_depth(f, x, depth - 1, p)
     else
         return x
     end
 end
 
 # Every node at `depth`, in encounter order (sequence elements, then map values).
-function _collect_at_depth!(out::Vector{FormValue}, x::Form, depth::Integer)
+function _collect_at_depth!(out::Vector{FormValue}, x::Form, depth::Integer,
+                            p::_CancelPoll = _CancelPoll())
+    _cancel_walk!(p)
     if depth <= 0
         push!(out, _store_form(x))
     elseif x isa FormContainer
         for v in x.seq
-            _collect_at_depth!(out, to_form(v), depth - 1)
+            _collect_at_depth!(out, to_form(v), depth - 1, p)
         end
         for (_, v) in x.map
-            _collect_at_depth!(out, to_form(v), depth - 1)
+            _collect_at_depth!(out, to_form(v), depth - 1, p)
         end
     elseif x isa FormScalar
-        _collect_at_depth!(out, x, depth - 1)
+        _collect_at_depth!(out, x, depth - 1, p)
     end
     return out
 end
@@ -72,22 +77,24 @@ end
 # Rebuild `x` with the nodes at `depth` that satisfy `dropf` removed. A removed
 # node yields `nothing` (the sentinel), so a node that *is* `naught` is never
 # mistaken for a removal. Dropping a scalar at depth > 0 empties its singleton.
-function _drop_at_depth(dropf, x::Form, depth::Integer)
+function _drop_at_depth(dropf, x::Form, depth::Integer,
+                        p::_CancelPoll = _CancelPoll())
+    _cancel_walk!(p)
     depth <= 0 && return dropf(x) ? nothing : x
     if x isa FormContainer
         seq = FormValue[]
         for v in x.seq
-            r = _drop_at_depth(dropf, to_form(v), depth - 1)
+            r = _drop_at_depth(dropf, to_form(v), depth - 1, p)
             r === nothing || push!(seq, _store_form(r))
         end
         map = Pair{Symbol,FormValue}[]
         for (k, v) in x.map
-            r = _drop_at_depth(dropf, to_form(v), depth - 1)
+            r = _drop_at_depth(dropf, to_form(v), depth - 1, p)
             r === nothing || push!(map, k => _store_form(r))
         end
         return FormContainer(FormSeq(seq), FormMap(map))
     elseif x isa FormScalar
-        return _drop_at_depth(dropf, x, depth - 1)
+        return _drop_at_depth(dropf, x, depth - 1, p)
     else
         return x
     end
@@ -473,7 +480,11 @@ function _bi_sort(env::Env, scope::Scope, call::FormContainer)
     haskey(call.map, DIMS_KEY) && throw(AirEvalError(
         "sort: dims= requires a tensor"))
     c isa FormContainer || return c
-    vals = sort(collect(c.seq); lt = _form_lt, rev = desc)
+    # The comparator is called O(n log n) times, which is enough to notice a
+    # cancellation on a long sort without polling on every element.
+    poll = _CancelPoll()
+    vals = sort(collect(c.seq);
+                lt = (a, b) -> (_cancel_walk!(poll); _form_lt(a, b)), rev = desc)
     return FormContainer(FormSeq(FormValue[vals...]), FormMap())
 end
 special!(:sort, _bi_sort)
@@ -695,18 +706,20 @@ special!(Symbol("matches-any?"), _bi_matches_any)
 # value; a scalar's singleton step uses the index `1`, as `cases` does. An extern
 # or volatile is opaque.
 function _where_paths_at!(out::Vector{Vector{Any}}, x::Form, obj::Form,
-                          depth::Integer, path::Vector{Any})
+                          depth::Integer, path::Vector{Any},
+                          p::_CancelPoll = _CancelPoll())
+    _cancel_walk!(p)
     if depth <= 0
         isequal(x, obj) && push!(out, copy(path))
     elseif x isa FormContainer
         for (k, v) in pairs(x)
             push!(path, k)
-            _where_paths_at!(out, to_form(v), obj, depth - 1, path)
+            _where_paths_at!(out, to_form(v), obj, depth - 1, path, p)
             pop!(path)
         end
     elseif x isa FormScalar
         push!(path, 1)
-        _where_paths_at!(out, x, obj, depth - 1, path)
+        _where_paths_at!(out, x, obj, depth - 1, path, p)
         pop!(path)
     end
     return out
@@ -716,13 +729,14 @@ end
 # reported (it has no path), and the walk stops at a scalar: its singleton
 # descent would never end, so each node is reported once.
 function _where_all_paths!(out::Vector{Vector{Any}}, x::Form, obj::Form,
-                           path::Vector{Any})
+                           path::Vector{Any}, p::_CancelPoll = _CancelPoll())
     if x isa FormContainer
         for (k, v) in pairs(x)
+            _cancel_walk!(p)
             push!(path, k)
             c = to_form(v)
             isequal(c, obj) && push!(out, copy(path))
-            _where_all_paths!(out, c, obj, path)
+            _where_all_paths!(out, c, obj, path, p)
             pop!(path)
         end
     end

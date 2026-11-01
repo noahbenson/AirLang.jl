@@ -66,6 +66,7 @@ using AirDB
     end
     include("agents.jl")
     include("events.jl")
+    include("cancel.jl")
     include("concurrency.jl")
     include("permissions.jl")
     include("scope.jl")

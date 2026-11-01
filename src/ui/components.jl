@@ -46,6 +46,7 @@ gone.
 mutable struct _UiJob
     chan::Channel{Any}
     label::String                   # shown while the job runs
+    token::CancelToken              # cancels the job's evaluation
 end
 
 """
@@ -101,6 +102,20 @@ _comp_job_label(c::_Comp) =
     c.base.job === nothing ? "running…" : c.base.job.label
 
 """
+    _comp_cancel_jobs!(c) -> Int
+
+Cancel every evaluation the widget has in flight. The terminal renderer calls
+this on Ctrl-C before it raises `(error :ctrl-c)`. A container owns no work of
+its own, so it cancels its children's. Returns the number of jobs cancelled.
+"""
+function _comp_cancel_jobs!(c::_Comp)
+    j = c.base.job
+    j === nothing && return 0
+    Air.cancel!(j.token, "ctrl-c")
+    return 1
+end
+
+"""
     _comp_start_job!(c, inst, f; label = "running…") -> Bool
 
 Run `f()` on a spawned task. `f` may evaluate air but must not write the
@@ -113,13 +128,15 @@ function _comp_start_job!(c::_Comp, inst::_UiInstance, f::Function;
                           label::AbstractString = "running…")
     _comp_running(c) && return false
     chan = Channel{Any}(1)
-    c.base.job = _UiJob(chan, String(label))
+    tok = CancelToken()
+    c.base.job = _UiJob(chan, String(label), tok)
     Threads.@spawn begin
         # Block scopes do not cross a task boundary; this is the same start a
-        # `(task …)` makes.
+        # `(task …)` makes. The token is installed after the reset, since the
+        # reset clears the spawned task's storage.
         _reset_block_scopes!()
         res = try
-            (:ok, f())
+            (:ok, _with_cancel_token(f; token = tok))
         catch e
             e isa InterruptException && rethrow()
             (:error, sprint(showerror, e))

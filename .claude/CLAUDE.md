@@ -754,8 +754,9 @@ fetches `in=` with a short timeout from the widget's first build until it is
 closed (not on attach/detach). An evaluation runs as a background job — the
 frame stays live, the status row names it, and the instance's own ticker applies
 the result with no renderer attached, storing it in the widget's state;
-dismissing neither waits for nor stops the job, and Ctrl-C raises `:ctrl-c`
-without aborting it. The status row right-aligns whole key hints only (each has
+dismissing neither waits for nor stops the job, while Ctrl-C cancels the jobs
+the widget has in flight before it raises `:ctrl-c` (a cancelled run stores
+`error: cancelled: ctrl-c`). The status row right-aligns whole key hints only (each has
 a long and a short spelling; short is used only when it fits strictly more),
 and the terminal writer remembers the last frame and sends only the rows whose
 text changed. Connections are
@@ -825,7 +826,10 @@ kind, owner, `tx`, captured `ctx`, body, `at`/`interval`/`repeat`, `status`
 `checkpoints`, `result`, `error`, and the promise, and lives in the user's home.
 An error is *delivered* as an error object; cancelling settles an undelivered
 promise with `(error :event-cancelled name=…)`/`:task-cancelled`; the status
-write and delivery share a transaction. `(events)`/`(event x)`/`(cancel-event
+write and delivery share a transaction. A cancel also cancels the running
+attempt's token, so a long body stops at its next air-level cancellation point
+(the reducer polls every 64 steps, the whole-tree verbs every 1024 elements); a
+Julia call and work the body spawned on another task are not interrupted. `(events)`/`(event x)`/`(cancel-event
 x)`/`(events-resume)` and `(tasks)`/`(task-info …)`/`(cancel-task …)`/
 `(tasks-resume)` take a name or promise and an optional user; a live name cannot
 be reused, a terminal one is shadowed. `(task … durable=true name=:x)` is the
@@ -901,7 +905,10 @@ final form. A
 `raise` inside a handler records the handled error as `from=` (automatic
 context, overridable, `from=naught` suppresses); `cause=` is explicit. A
 non-air exception surfaces to an `except` as `(error :internal message)`.
-`showerror` prints the
+Air's `Cancelled` is control flow, not a diagnosable error: like an interrupt, a
+`throw`, a `recur`, and an `exit` it passes through `except`, `trace`, and `test`
+unchanged (a transaction it escapes aborts its writes), and its air spelling is
+`(error :cancelled reason=…)`. `showerror` prints the
 `direct cause:` / `during handling of:` chain. Positions are not part of a
 form: the reader records container spans, a loader installs them task-locally
 while evaluating, and an escaping error carries `frames`

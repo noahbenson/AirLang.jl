@@ -633,6 +633,9 @@ function _ui_term_run!(r::_TermRenderer, inst::_UiInstance;
     end
     _tb_enter!(r.backend)
     _frame_reset!(r.frame)      # the alternate screen starts blank
+    # The component leaves the renderer in the `finally`; the abort path below
+    # still needs it, so it is declared here rather than only assigned there.
+    c = nothing
     try
         while true
             _ui_term_tick!(r, inst)
@@ -670,6 +673,11 @@ function _ui_term_run!(r::_TermRenderer, inst::_UiInstance;
         _ui_detach!(r, inst)
     end
     if r.quit === :abort
+        # Ctrl-C aborts the work as well as the renderer: the renderer is the
+        # only place a user can signal it, and a job left running would finish
+        # unseen. Dismissal is different — Esc leaves the work in flight on
+        # purpose, so its result still lands in the widget's state.
+        c === nothing || _comp_cancel_jobs!(c)
         throw(AirThrown(_error_object(Form(Symbol(":ctrl-c")))))
     end
     return naught

@@ -407,7 +407,11 @@
   `bindings=true` snapshots the creator's `val` overrides as data, so an event
   sees the values as of creation and a captured stream still posts after a
   restart. A durable task reruns from the start and replays its
-  `(checkpoint form)` steps (at-least-once). Records are coordinated within one
+  `(checkpoint form)` steps (at-least-once). A cancel also cancels the running
+  attempt's token, so a long body stops at its next air-level cancellation
+  point: the reducer polls every 64 steps and the whole-tree verbs every 1024
+  elements, while a Julia call (including a blocking `await`/`fetch`) and work the body
+  spawned on another task are not interrupted. Records are coordinated within one
   process; `air` resumes them on startup before the REPL or serving. See
   [Events and Durable Tasks](events.md).
 * Agents and channels: a user record carries `kind=:human|:agent`, and
@@ -444,10 +448,11 @@
 * Serializable task *stacks*: a durable task reruns from the start and replays
   its `checkpoint`s, so a step between a side effect and its checkpoint can
   repeat (at-least-once), and conditional checkpoints can mis-replay. Cron
-  syntax, retry/backoff policies, preemption on cancel, a single heap-based
-  scheduler (there is one polling task per job), cross-database/cross-process
-  leases, labelled checkpoints, and purging reused names are deferred. A plain
-  (non-durable) task is still a process item: only its promise is stored.
+  syntax, retry/backoff policies, cancelling inside a long Julia call, a single
+  heap-based scheduler (there is one polling task per job),
+  cross-database/cross-process leases, labelled checkpoints, and purging reused
+  names are deferred. A plain (non-durable) task is still a process item: only
+  its promise is stored.
 * Sockets and other extern types; `pmap` and higher-level parallel helpers built
   on `task`.
 * Incremental SSH transfers and a non-interactive exec channel: an SFTP upload
@@ -461,9 +466,9 @@
   text in, one reply out.
 * The agent-user-interface (AUI) level: chat and form tools that an agent drives
   over a text protocol. Only the human-interface level is built.
-* Renderer follow-ups: a web renderer, mouse support, and preemptible
-  evaluation (a running cell is evaluated on its own task, so the frame stays
-  live, but it cannot be cancelled — the same limitation as the REPL).
+* Renderer follow-ups: a web renderer, mouse support, and cancelling work inside
+  a long Julia call (a running cell is evaluated on its own task, so the frame
+  stays live, and Ctrl-C cancels it at its next air-level cancellation point).
 
 **Spec notes**
 

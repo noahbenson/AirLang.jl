@@ -129,6 +129,17 @@ function _comp_job_label(c::_Notebook)
     return i === nothing ? "running…" : _comp_job_label(c.cells[i])
 end
 
+# Cancelling also drops the rest of a run-all queue: the document action is
+# over, and leaving the queue would start the next cell after the abort.
+function _comp_cancel_jobs!(c::_Notebook)
+    n = 0
+    for cell in c.cells
+        n += _comp_cancel_jobs!(cell)
+    end
+    empty!(c.queue)
+    return n
+end
+
 function _comp_tick!(c::_Notebook, inst::_UiInstance)
     done = false
     for cell in c.cells

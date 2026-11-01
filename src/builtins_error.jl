@@ -134,6 +134,7 @@ function _error_form(e)
     e isa AirThrowSignal && throw(e)
     e isa AirTraced && return _error_form(e.err)
     e isa AirThrown && return e.form
+    e isa Cancelled && return _cancel_error_form(e)
     e isa ExternExpiredError &&
         return _error_object(Form(Symbol(":extern-expired")),
                              Form(Symbol(":" * String(e.name))))

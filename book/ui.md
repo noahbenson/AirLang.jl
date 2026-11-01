@@ -604,8 +604,8 @@ widget's on-screen state (text, output, cursor) into its `mut`; a projection is
 retracted by the ticker only once no renderer and no job remain, so a running
 job's result is written before the projection goes away. Only `ui-close!`
 tears a named instance down and releases connection-era resources such as
-the chat pump. Ctrl-C still raises `(error :ctrl-c)` at the call site, but it
-does not abort the evaluation; that is a follow-up.
+the chat pump. Ctrl-C is the exception: it cancels the work the widget has in
+flight before it raises `(error :ctrl-c)`.
 
 `ui-show` is exactly "attach this session's connection": it looks up the current
 session's connection and attaches there, so the older spelling keeps working.
@@ -732,9 +732,11 @@ There are two ways out, deliberately different:
 
 - **Esc** dismisses gracefully: the screen is restored and `ui-show` returns
   `naught`.
-- **Ctrl-C** aborts: the screen is restored and `ui-show` raises
-  `(error :ctrl-c)`, exactly as Ctrl-C at the REPL prompt raises `:ctrl-c`, so a
-  surrounding `except` (or the REPL) handles it like any other error.
+- **Ctrl-C** aborts: the screen is restored, every evaluation the widget has in
+  flight is cancelled, and `ui-show` raises `(error :ctrl-c)`, exactly as Ctrl-C
+  at the REPL prompt raises `:ctrl-c`, so a surrounding `except` (or the REPL)
+  handles it like any other error. A cancelled run records
+  `error: cancelled: ctrl-c` in the widget.
 
 A `Done` button that calls `(ui-dismiss! :k)` is the same graceful path.
 Validation failures appear on the status line, and the display keeps the last
@@ -803,11 +805,13 @@ Afterwards the selections are ordinary facts, so a rule can use
 - **A key is what the terminal can say.** A lone Esc is separated from Alt by a
   25 ms timeout, so a very fast Alt-key is indistinguishable from Esc and the
   key; a terminal that maps Enter to LF loses Ctrl-J. xterm is the reference.
-- **Evaluation is not preemptible.** A cell's evaluation runs on a spawned task,
-  so the frame stays live while it works and the status row names the job; but
-  Ctrl-C cannot cancel the task itself (the same limitation as the REPL). The job
-  belongs to the instance, so dismissing the UI neither waits for it nor loses
-  it: it finishes in the background and its result is stored for the next
-  attach.
+- **Evaluation stops only at a cancellation point.** A cell's evaluation runs on
+  a spawned task, so the frame stays live while it works, the status row names
+  the job, and Ctrl-C cancels it: the reducer checks the token every 64 steps
+  and the whole-tree verbs every 1024 elements. A call into Julia (an extern, a
+  tensor operation, a database round trip, a blocking stream `fetch` or promise
+  `await`) still runs to completion, and work the evaluation spawned on another task is not
+  reached. Esc is different: dismissing neither waits for nor stops a job, so
+  it finishes in the background and its result is stored for the next attach.
 - **Passwords are obscured, not protected.** A `password-input` value is an
   ordinary form, readable with `ui-values` and assertable like any other.

@@ -91,10 +91,17 @@ A name must be free at creation; reusing a name whose record is still
 terminal record's name may be reused — the newer entry shadows it, and `(events)` lists only the
 newest name. An unnamed call gets a generated name (`e-…` or `t-…`).
 
-Cancelling is not preemption. A record that has not started is cancelled at
-once and its worker stops within a slice; a body that is already running may
-still commit its own side effects, and the outcome is discarded when it
-finishes. Cancelling a terminal job is an idempotent no-op.
+Cancelling settles the promise at once and stops a running body at its next
+*cancellation point*: the reducer checks the attempt's cancellation token every
+64 reduction steps, and the whole-tree verbs (`map`, `where`, `replace`, `sort`,
+…) check it every 1024 elements. It is not preemption in the stronger sense: a
+body blocked in an uninterruptible call — a Julia extern, a database round trip,
+a tensor computation, a blocking stream `fetch` or promise `await` — finishes
+that call first, and
+work the body spawned on another task with `(task …)` is not reached at all,
+because cancellation does not cross a task boundary. A write the body committed
+before the check stays committed, and the stopped attempt's outcome is
+discarded. Cancelling a terminal job is an idempotent no-op.
 
 ## Bindings
 
@@ -206,7 +213,9 @@ open transaction.
 
 * A body cannot resume mid-stack; a durable task reruns from the start and
   relies on `checkpoint`s.
-* Cancellation is not preemption.
+* Cancellation stops air evaluation at its next cancellation point (every 64
+  reduction steps, every 1024 elements of a whole-tree verb); it cannot
+  interrupt a long Julia call, and it does not cross a task boundary.
 * No cron syntax, retry policy, or backoff; a repeating job re-arms on a fixed
   delay and a failed run simply records its error.
 * Reusing a terminal name accumulates a shadowed entry; there is no purge.

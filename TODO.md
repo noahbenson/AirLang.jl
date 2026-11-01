@@ -122,9 +122,9 @@ extern with `[…]` literals and `{…}` reservations, `(exit)`, and the CLI.
     close-all.
   - *Browser:* a filter/search line.
   - *Chat:* an unread marker for messages that arrived while scrolled away.
-  - *Evaluation:* preemption. Ctrl-C raises `:ctrl-c` and the job keeps running;
-    aborting a running evaluation needs a cancellable task or a structured
-    shutdown checklist on the Air side (propose it, do not build it here).
+  - *Evaluation:* preemption — done. Ctrl-C cancels the evaluation the widget
+    has in flight (the reducer polls a cancellation token); a call into Julia
+    still runs to completion. Esc still leaves work running on purpose.
   - *Automation:* the SSH test needs the test target's OpenSSH_jll, so it runs
     under `Pkg.test` and is skipped otherwise; the local backend is unit-tested
     over pipes, and its pty path was verified once by hand with a pty driver,
@@ -181,9 +181,15 @@ extern with `[…]` literals and `{…}` reservations, `(exit)`, and the CLI.
 - [ ] **Provider quirks and cost accounting.** Some OpenAI-compatible servers
   want `max_completion_tokens` or reject a `system` message; `params=` is the
   escape hatch for now. Usage is counted, not priced.
-- [ ] **Preemptible evaluation.** `Ctrl-C` in a session evaluates
-  `(raise :ctrl-c)`, but air evaluation is not preemptible, so a byte sent while
-  a form runs is read only when that form finishes.
+- [x] **Preemptible evaluation** — an evaluation can be cancelled. The reducer
+  polls Air's cancellation token every 64 steps and the whole-tree verbs every
+  1024 elements; `Cancelled` is control flow (`except`/`trace`/`test` never
+  swallow it) and it aborts a transaction's writes. A job's running attempt is
+  cancelled by `cancel-task`/`cancel-event`, and a UI widget cancels its in-flight
+  evaluation on Ctrl-C. A long Julia call (an extern, a tensor operation, a
+  database round trip) and work spawned on another task still run to completion.
+  The SSH session's own `Ctrl-C` remains an interrupt delivered when the running
+  form finishes — a separate mechanism.
 - [x] **Data formats** — `decode`/`encode` (with `format=`) and
   `read-data`/`write-data` (with extension inference) convert JSON, YAML, TOML,
   CSV, TSV, and `.env` to and from plain air data: an object becomes a map form,
@@ -663,10 +669,11 @@ class-based exception hierarchies.
   powers `(do-at …)`/`(do-in …)`/`(tx-at …)`/`(tx-in …)` events in
   `$.config.events`. See `book/events.md`.
 - [ ] **Job scheduling refinements.** Cron syntax, retry/backoff policies,
-  cancellation that preempts a running body, a single heap-based scheduler
-  instead of one polling task per job, labelled checkpoints (`key=`), purging a
-  reused terminal name, and cross-process coordination (leases or heartbeats)
-  so two live processes over one database agree on cancels and deliveries.
+  cancellation inside a long Julia call (an extern, a tensor operation, a
+  database round trip), a single heap-based scheduler instead of one polling
+  task per job, labelled checkpoints (`key=`), purging a reused terminal name,
+  and cross-process coordination (leases or heartbeats) so two live processes
+  over one database agree on cancels and deliveries.
 
 ## 10. Julia interop (`extern`)
 

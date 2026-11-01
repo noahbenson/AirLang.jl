@@ -130,7 +130,10 @@ function _air_repl_loop(io_in::IO, io_out::IO; env::Env = default_env(),
                 catch e
                     # `(exit v)` ends the loop and returns `v` from the REPL.
                     e isa ExitSignal && return e.value
-                    e isa AirError || rethrow()
+                    # A cancelled evaluation — possible when an embedding
+                    # application cancels the REPL task — is reported and the
+                    # loop continues, as an error is.
+                    (e isa AirError || e isa Cancelled) || rethrow()
                     println(io_out, "error: ", sprint(showerror, e))
                 end
             end

@@ -66,8 +66,10 @@ function air_reduce(env::Env, scope::Scope, x::Form)
             throw(AirEvalError("reduction nested too deeply (possible infinite recursion)"))
         base = scope
         while true
-            (env.steps[] += 1) > env.max_steps &&
+            n = (env.steps[] += 1)
+            n > env.max_steps &&
                 throw(AirEvalError("reduction did not reach a fixed point"))
+            _cancel_step!(n)
             r = _air_reduce(env, scope, x)
             r isa _Tail || return r
             x = r.form
@@ -75,6 +77,9 @@ function air_reduce(env::Env, scope::Scope, x::Form)
         end
     catch e
         e isa InterruptException && rethrow()
+        # Cancellation is control flow like an interrupt: it is never annotated
+        # as an evaluation error and never becomes a form.
+        e isa Cancelled && rethrow()
         e isa AirError || rethrow()
         e2 = _annotate_error(e, scope)
         e2 === e && rethrow()

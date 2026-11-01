@@ -436,6 +436,10 @@ end
 mutable struct _JobWorker
     task::Union{Nothing,Task}
     done::Bool
+    # The token of the attempt currently running, or `nothing` between attempts.
+    # It is per attempt because a token is one-way: a repeat job's next attempt
+    # must start uncancelled.
+    token::Union{Nothing,CancelToken}
 end
 
 const _JOB_WORKERS = Dict{Base.UUID,_JobWorker}()
@@ -445,6 +449,35 @@ _job_worker_live(w::Union{Nothing,_JobWorker}) =
     w !== nothing && w.task !== nothing && !istaskdone(w.task) && !w.done
 
 _job_worker_running(id::Base.UUID) = _job_worker_live(get(_JOB_WORKERS, id, nothing))
+
+# Register (or clear) the token of the attempt a live worker is about to run, so
+# a canceller holding the record can reach it. The registry lock is the whole
+# synchronization: a token is created before the job is claimed, and cleared
+# after its outcome is finished.
+function _job_worker_token!(id::Base.UUID, tok::Union{Nothing,CancelToken})
+    lock(_JOB_WORKERS_LOCK)
+    try
+        w = get(_JOB_WORKERS, id, nothing)
+        w === nothing && return nothing
+        w.token = tok
+        return tok
+    finally
+        unlock(_JOB_WORKERS_LOCK)
+    end
+end
+
+# The token of the live worker's current attempt, or `nothing` when no attempt
+# is running (the job is waiting to fire, or its worker is gone).
+function _job_worker_token(id::Base.UUID)
+    lock(_JOB_WORKERS_LOCK)
+    try
+        w = get(_JOB_WORKERS, id, nothing)
+        (_job_worker_live(w)) || return nothing
+        return w.token
+    finally
+        unlock(_JOB_WORKERS_LOCK)
+    end
+end
 
 """
     _ensure_job_worker!(env, vf) -> nothing
@@ -466,7 +499,7 @@ function _ensure_job_worker!(env::Env, vf::VolatileForm)
     lock(_JOB_WORKERS_LOCK)
     try
         _job_worker_live(get(_JOB_WORKERS, key, nothing)) && return nothing
-        w = _JobWorker(nothing, false)
+        w = _JobWorker(nothing, false, nothing)
         _JOB_WORKERS[key] = w
         se = _session_env(env)
         t = Threads.@spawn begin
@@ -503,10 +536,20 @@ function _job_worker_loop(env::Env, vf::VolatileForm)
             sleep(min(remaining, _JOB_POLL))
             continue
         end
-        claimed = _job_claim!(env, vf)
-        claimed === nothing && return nothing
-        outcome = _job_run_attempt!(env, claimed)
-        _job_finish!(env, vf, claimed, outcome) || return nothing
+        # The attempt's token is registered before the claim, so a cancel that
+        # lands between the two is seen either by the claim (the status is
+        # `:cancelled`) or by the attempt's first cancellation check.
+        tok = CancelToken()
+        _job_worker_token!(vf.id, tok)
+        try
+            claimed = _job_claim!(env, vf)
+            claimed === nothing && return nothing
+            outcome = _with_cancel_token(() -> _job_run_attempt!(env, claimed);
+                                         token = tok)
+            _job_finish!(env, vf, claimed, outcome) || return nothing
+        finally
+            _job_worker_token!(vf.id, nothing)
+        end
     end
 end
 
@@ -665,8 +708,10 @@ end
     _job_cancel!(env, vf) -> Form
 
 Cancel a non-terminal job: settle an undelivered promise with a cancellation
-error and set the status to `:cancelled`. Cancelling a terminal job is a no-op.
-This is not preemption — a body already running may still commit its own writes.
+error, set the status to `:cancelled`, and cancel the running attempt's token.
+Cancelling a terminal job is a no-op. The attempt stops at its next air-level
+cancellation point (a reduction step or a long walk), so a body blocked in an
+uninterruptible call, or work it spawned on another task, still runs.
 """
 function _job_cancel!(env::Env, vf::VolatileForm)
     rec = _job_record_value(vf)
@@ -689,6 +734,11 @@ function _job_cancel!(env::Env, vf::VolatileForm)
         end
         _job_set(cur, pairs)
     end)
+    # The status write above is what makes a racing attempt's outcome discarded;
+    # cancelling the token is what stops a long one. A worker between attempts
+    # has no token and needs none — it re-reads the status before claiming.
+    tok = _job_worker_token(vf.id)
+    tok === nothing || Air.cancel!(tok, "cancelled")
     return _job_summary(_job_record_value(vf))
 end
 

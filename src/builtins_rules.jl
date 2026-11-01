@@ -416,16 +416,21 @@ function _bi_replace(env::Env, scope::Scope, call::FormContainer)
 end
 special!(:replace, _bi_replace)
 
-# Walk post-order (deepest first), applying the rules at every node.
-function _replace_all_walk(env::Env, scope::Scope, x::Form, rules)
+# Walk post-order (deepest first), applying the rules at every node. `p` is the
+# walk's cancellation poll, shared by every node and fresh per top-level call.
+function _replace_all_walk(env::Env, scope::Scope, x::Form, rules,
+                           p::_CancelPoll = _CancelPoll())
+    _cancel_walk!(p)
     if x isa FormContainer
         seq = FormValue[]
         for a in x.seq
-            push!(seq, _store_form(_replace_all_walk(env, scope, to_form(a), rules)))
+            push!(seq, _store_form(
+                _replace_all_walk(env, scope, to_form(a), rules, p)))
         end
         map = Pair{Symbol,FormValue}[]
         for (k, v) in x.map
-            push!(map, k => _store_form(_replace_all_walk(env, scope, to_form(v), rules)))
+            push!(map, k => _store_form(
+                _replace_all_walk(env, scope, to_form(v), rules, p)))
         end
         rebuilt = FormContainer(FormSeq(seq), FormMap(map))
         return _replace_first(env, scope, rebuilt, rules)
@@ -455,7 +460,9 @@ special!(Symbol("replace-all"), _bi_replace_all)
 # Repeat a replacement step until it reaches a fixed point.
 function _replace_fixed_point(env::Env, subject::Form, step)
     cur = subject
+    poll = _CancelPoll()
     for _ in 1:env.max_steps
+        _cancel_walk!(poll)
         nxt = step(cur)
         _same_value(nxt, cur) && return cur
         cur = nxt

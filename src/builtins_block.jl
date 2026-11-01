@@ -234,11 +234,11 @@ end
 # ---- running a block ---------------------------------------------------------
 
 # The exceptions that carry control flow rather than a diagnosable error: an
-# interrupt, a `throw`, a `recur`, and an `exit`. They pass through every block
-# unchanged.
+# interrupt, a cancellation, a `throw`, a `recur`, and an `exit`. They pass
+# through every block unchanged, so `except` cannot swallow a cancellation.
 _is_control_exception(e) =
-    e isa InterruptException || e isa AirThrowSignal || e isa _Recur ||
-    e isa ExitSignal
+    e isa InterruptException || e isa Cancelled || e isa AirThrowSignal ||
+    e isa _Recur || e isa ExitSignal
 
 # Apply the except clauses to an escaping error. The first matching clause runs
 # under the handling context; a final `reraise` continues with the next clause

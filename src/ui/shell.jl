@@ -237,6 +237,15 @@ function _comp_job_label(c::_Shell)
     return "running…"
 end
 
+function _comp_cancel_jobs!(c::_Shell)
+    n = 0
+    for t in c.tabs
+        t.comp === nothing && continue
+        n += _comp_cancel_jobs!(t.comp)
+    end
+    return n
+end
+
 function _comp_tick!(c::_Shell, inst::_UiInstance)
     done = false
     for t in c.tabs
