@@ -43,7 +43,7 @@ function _nb_new_cell(inst::_UiInstance, nspath::Vector{Symbol};
                       text::AbstractString = "", saved::AbstractString = "")
     base = _CompBase(inst.root; state = nothing, nspath = nspath)
     return _CodeBlock(base, _TextBuffer(text), String(saved), :code, nothing,
-                      _UiLine[], "", false, nothing, 80)
+                      _UiLine[], "", false, nothing, nothing, 80, nothing, "")
 end
 
 # Rebuild a cell from its stored form.
@@ -53,6 +53,7 @@ function _nb_cell_from_form(inst::_UiInstance, nspath::Vector{Symbol}, f::Form)
     out_for = _state_string(f, Symbol(":output-for"))
     failed = _state_flag(f, :error)
     cell = _nb_new_cell(inst, nspath; text = text, saved = out_for)
+    cell.elapsed = _state_number(f, :time)
     if !isempty(output) || !isempty(out_for)
         role = failed ? :error : :text
         cell.out = [_ui_styled([_UiSpan(String(l), _ui_role(role))])
@@ -103,6 +104,8 @@ function _nb_state_form(c::_Notebook)
             Symbol(":output") => Form(join((l.text for l in cell.out), "\n")),
             Symbol(":output-for") => Form(cell.out_for)]
         cell.failed && push!(map, Symbol(":error") => Form(true))
+        cell.elapsed === nothing ||
+            push!(map, Symbol(":time") => Form(cell.elapsed))
         push!(cells, _store_form(_ns_form(Form[], map)))
     end
     seq = FormContainer(FormSeq(cells), FormMap())
@@ -203,6 +206,7 @@ function _nb_clear!(c::_Notebook, inst::_UiInstance, all::Bool)
         empty!(cell.out)
         cell.out_for = ""
         cell.failed = false
+        cell.elapsed = nothing       # the duration belonged to the cleared run
         n += 1
     end
     c.base.status = n === 0 ? "no output to clear" :
@@ -247,8 +251,8 @@ function _nb_push_cell!(c::_Notebook, doc::Vector{_UiLine}, cell::_CodeBlock,
         string("… ", below, " more lines — enter to open"), _ui_role(:muted))]))
     if !isempty(cell.out)
         stale = cell.out_for != text
-        push!(doc, _ui_styled([gut, _UiSpan(repeat("─", max(c.width - 3, 8)),
-                                            _ui_role(:border))]))
+        push!(doc, _ui_styled(vcat([gut,
+            _ui_ruler(max(c.width - 3, 8), cell.elapsed; stale = stale).spans...])))
         for l in cell.out
             spans = _ui_line_spans(l)
             stale && (spans = [_UiSpan(s.text, _ui_role(:muted)) for s in spans])
@@ -287,8 +291,20 @@ function _comp_status(c::_Notebook, inst::_UiInstance)
               v[1] === :incomplete ? "unclosed" : "error"
     s = string("cell ", c.active, "/", length(c.cells), "  ·  ",
                _tb_nlines(cell.buf), " lines  ·  ", verdict)
+    # A cell can have something to say of its own (a comment toggle); it is
+    # transient, cleared by the next key the notebook forwards.
+    isempty(cell.base.status) || (s *= "  ·  " * cell.base.status)
     c.mode === :scroll && (s *= "  ·  esc: document")
     return s
+end
+
+# A prompt open in the active cell belongs to the notebook too.
+function _comp_prompt(c::_Notebook, inst::_UiInstance)
+    return _comp_prompt(c.cells[c.active], inst)
+end
+
+function _comp_prompt_hints(c::_Notebook)
+    return _comp_prompt_hints(c.cells[c.active])
 end
 
 _comp_hints(c::_Notebook) =
@@ -349,6 +365,19 @@ end
 
 function _comp_key!(c::_Notebook, inst::_UiInstance, k::_UiKey)
     cell = c.cells[c.active]
+    # A prompt inside the cell owns every key until it closes: otherwise the
+    # notebook would run, insert a cell, or clear output as the user types a
+    # search query.
+    if cell.prompt !== nothing
+        res = _comp_key!(cell, inst, k)
+        return res === :bubble ? :bubble : :handled
+    end
+    # Any key but a bare motion ends a transient message; clearing before the
+    # key is handled lets the key itself leave a new one (a comment toggle).
+    if !_nb_nav_key(k)
+        c.base.status = ""
+        cell.base.status = ""
+    end
     if k.name === :esc
         if c.mode === :scroll
             c.mode = :nav
@@ -406,7 +435,6 @@ function _comp_key!(c::_Notebook, inst::_UiInstance, k::_UiKey)
         return _nb_page!(c, 10)
     end
     res = _comp_key!(cell, inst, k)
-    _nb_nav_key(k) || (c.base.status = "")
     return res === :bubble ? :bubble : :handled
 end
 

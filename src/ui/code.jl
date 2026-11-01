@@ -306,6 +306,93 @@ function _ui_at_context(s::AbstractString, pos::Int)
     return nothing
 end
 
+# ---- bracket matching --------------------------------------------------------
+
+"""
+    _ui_bracket_match(text, idx) -> Union{Nothing,Tuple{Symbol,Int}}
+
+The bracket token at 1-based character index `idx` of `text` and the index of
+the token that matches it: `(:open, i)` for an opener (the closer is at `i`),
+`(:close, i)` for a closer (the opener is at `i`), or `nothing` when `idx` is
+not a bracket or the bracket has no partner. Only real parens count — one in a
+string or a comment is text, not structure.
+"""
+function _ui_bracket_match(text::AbstractString, idx::Int)
+    cs = collect(String(text))
+    (1 <= idx <= length(cs)) || return nothing
+    (cs[idx] == '(' || cs[idx] == ')') || return nothing
+    toks = _code_scan_cs(cs)
+    ti = findfirst(t -> (t.kind === :open || t.kind === :close) &&
+                        t.start == idx, toks)
+    ti === nothing && return nothing
+    t = toks[ti]
+    if t.kind === :open
+        for j in (ti + 1):length(toks)
+            if toks[j].kind === :close && toks[j].depth == t.depth
+                return (:open, toks[j].start)
+            end
+        end
+    else
+        for j in (ti - 1):-1:1
+            if toks[j].kind === :open && toks[j].depth == t.depth
+                return (:close, toks[j].start)
+            end
+        end
+    end
+    return nothing
+end
+
+# ---- line comments -----------------------------------------------------------
+
+# The 0-based column of the `#` that starts a line comment (the first non-blank
+# character is `#`, and it does not open a `#| … |#` block), or `nothing`.
+function _ui_line_comment_col(line::Vector{Char})
+    k = 0
+    while k < length(line) && (line[k + 1] == ' ' || line[k + 1] == '\t')
+        k += 1
+    end
+    k < length(line) || return nothing
+    line[k + 1] == '#' || return nothing
+    (k + 2 <= length(line) && line[k + 2] == '|') && return nothing
+    return k
+end
+
+# Comment or uncomment every non-blank line in `rows`, keeping the cursor and
+# selection on the character they were on. Returns `(commented, n)`: whether the
+# lines are now commented, and how many were changed.
+function _ui_toggle_comment!(b::_TextBuffer, rows::UnitRange{Int})
+    content = [r for r in rows if !_tb_line_blank(b, r)]
+    isempty(content) && return (false, 0)
+    commented = all(r -> _ui_line_comment_col(b.lines[r]) !== nothing, content)
+    _tb_snapshot!(b)
+    for r in content
+        line = b.lines[r]
+        k = _ui_line_comment_col(line)
+        if commented
+            # Drop the marker and the space a toggle normally leaves after it.
+            n = (k + 2 <= length(line) && line[k + 2] == ' ') ? 2 : 1
+            deleteat!(line, (k + 1):(k + n))
+            shift = c -> c <= k ? c : max(k, c - n)
+        else
+            k = 0
+            while k < length(line) && (line[k + 1] == ' ' || line[k + 1] == '\t')
+                k += 1
+            end
+            insert!(line, k + 1, ' ')
+            insert!(line, k + 1, '#')
+            shift = c -> c <= k ? c : c + 2
+        end
+        if r == b.row
+            b.col = shift(b.col)
+        end
+        if b.anchor !== nothing && b.anchor[1] == r
+            b.anchor = (r, shift(b.anchor[2]))
+        end
+    end
+    b.goal = -1
+    return (commented, length(content))
+end
+
 # ---- closure -----------------------------------------------------------------
 
 """

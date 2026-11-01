@@ -48,6 +48,24 @@
         @test ev("(ui-notebook collapse-lines=8)") isa String
     end
 
+    @testset "a prompt in a cell owns the notebook keys" begin
+        w = evd("(ui-notebook text=\"(def (f x))\n(def (g y))\")")
+        (c, inst) = notebook_of(w)
+        n = length(c.cells)
+        B._comp_key!(c, inst, B._ui_key(:char; char = 's', ctrl = true))
+        B._comp_key!(c, inst, B._ui_key(:char; char = 'd'))
+        @test occursin("search: d", B._comp_prompt(c, inst))
+        # The notebook's own keys do not fire while the prompt is open.
+        B._comp_key!(c, inst, B._ui_key(:char; char = 'g', ctrl = true))
+        @test length(c.cells) == n
+        B._comp_key!(c, inst, B._ui_key(:char; char = 'r', ctrl = true))
+        @test !B._comp_running(c)
+        # Esc closes the prompt, not the document.
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test c.cells[1].prompt === nothing
+        ev("(ui-close! :nbx)")
+    end
+
     @testset "running a cell" begin
         w = evd("(ui-notebook text=\"(+ 1 2)\")")
         open_form!(:nb1, w)
@@ -207,6 +225,33 @@
         wait_for(() -> (B._comp_tick!(c, inst); !B._comp_running(c)))
         B._comp_close!(c, inst)
         ev("(ui-close! :nb13)")
+    end
+
+    @testset "each cell records how long it took" begin
+        w = evd("(ui-notebook text=\"(+ 1 2)\")")
+        open_form!(:nb20, w)
+        (res, _) = term_run(:nb20, [CTRL_J, ESC])
+        @test res[1] === :ok
+        (c, inst) = notebook_of(w)
+        @test c.cells[1].elapsed !== nothing
+        # The cell's own form keeps the duration with its output, and the
+        # notebook's state carries that form, so a rebuilt document still knows.
+        v = state_value(w)
+        el = to_form(B._state_field(v, :cells).seq[1])
+        @test B._state_number(el, :time) !== nothing
+        open_form!(:nb21, w)
+        inst2 = B._ui_lookup(env, Form(Symbol(":nb21")))
+        c2 = B._comp_notebook(inst2, inst2.root)
+        @test c2.cells[1].elapsed !== nothing
+        doc = B._comp_lines(c2, inst2, 40)
+        @test any(l -> any(s -> occursin(r"µs|ms|\d s", s.text),
+                           B._ui_line_spans(l)), doc)
+        # Clearing the output clears the timing with it.
+        B._comp_key!(c, inst, B._ui_key(:char; char = 'o', ctrl = true))
+        @test c.cells[1].elapsed === nothing
+        ev("(ui-close! :nb20)")
+        ev("(ui-close! :nb21)")
+        ev("(ui-close! :nbx)")
     end
 
     @testset "a run-all stops at a cell that refuses to run" begin

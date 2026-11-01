@@ -644,12 +644,18 @@ Shift-Tab switch tabs, Alt-1…9 select one, Ctrl-J runs/saves/sends, Ctrl-R run
 every notebook cell in order (one at a time; refused while a cell is in flight),
 Ctrl-O/Alt-O clear the active cell's/all cells' output, Ctrl-G and Alt-G insert a
 notebook cell below/above, Ctrl-V and Alt-V jump a cell or message,
-PageUp/PageDown page, and Esc pops exactly one layer (a scroll view, then the
-tab — confirming when it would discard edits — then the UI). A notebook cell
+PageUp/PageDown page, Ctrl-S finds in the buffer (again for the next match;
+an incremental prompt that owns every key until Enter keeps the match or Esc
+cancels and restores the cursor), Alt-L goes to a line number, Alt-] jumps to
+the matching bracket, Alt-; comments/uncomments the current or selected lines,
+and Esc pops exactly one layer (a prompt, then a scroll view, then the tab —
+confirming when it would discard edits — then the UI). A notebook cell
 records the input text that produced its output, so an edited cell shows its
 output muted (stale) until re-run, and a code widget stores its output with its
-text so it reopens showing it; a code buffer will not run unless the reader
-reports it closed. A fresh shell opens its default tabs only when a renderer
+text so it reopens showing it; both record how long the run took (timed on the
+job's task) in the ruler above the output and in the status row, and store it
+with the output; a code buffer will not run unless the reader reports it
+closed. A fresh shell opens its default tabs only when a renderer
 starts it, so a headless render shows none. The browser's Ctrl-J opens the editor for a `def` and
 a notebook (seeded with its name) for a `val`; Alt-J opens a `val`'s definition.
 A **chat** takes a *pair* of streams the caller wires (`in=` receives, `out=`

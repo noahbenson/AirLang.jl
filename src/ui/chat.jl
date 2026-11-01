@@ -113,7 +113,7 @@ function _comp_chat(inst::_UiInstance, node::_UiNode)
     # owns no state of its own: the chat persists the draft with the log.
     input = _CodeBlock(_CompBase(node; state = nothing, nspath = nspath),
                        _TextBuffer(""), "", :code, nothing, _UiLine[], "", false,
-                       nothing, 80)
+                       nothing, nothing, 80, nothing, "")
     c = _Chat(base, input, _ChatMsg[], ReentrantLock(),
               peer === nothing ? "" : _chat_leaf_text(peer),
               inbox isa StreamForm ? inbox : nothing,
@@ -537,6 +537,12 @@ function _comp_key!(c::_Chat, inst::_UiInstance, k::_UiKey)
     elseif k.name === :pagedown && c.log_rows > 0
         _chat_scroll_page!(c, 1)
         return :handled
+    elseif k.name === :char && k.alt && k.char in ('l', ']', ';')
+        # The buffer's editor extras (go to line, bracket match, comment toggle)
+        # have nowhere to show their prompts here; the draft is a few lines.
+        return :bubble
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 's'
+        return :bubble
     end
     c.base.status = ""
     res = _comp_key!(c.input, inst, k)

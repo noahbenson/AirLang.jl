@@ -102,6 +102,22 @@
         ev("(ui-close! :shx)")
     end
 
+    @testset "esc pops a prompt inside the active tab first" begin
+        (c, inst) = shell_of(evd("(ui-shell)"))
+        B._comp_key!(c, inst, B._ui_key(:tab))       # the scratch notebook
+        nb = c.tabs[2].comp
+        B._comp_key!(c, inst, B._ui_key(:char; char = 's', ctrl = true))
+        @test nb.cells[1].prompt !== nothing
+        @test occursin("search:", B._comp_prompt(c, inst))
+        # Esc cancels the prompt; the tab stays. The next Esc closes it.
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test nb.cells[1].prompt === nothing
+        @test titles(c) == ["browser", "scratch"]
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test titles(c) == ["browser"]
+        ev("(ui-close! :shx)")
+    end
+
     @testset "closing a dirty tab asks first" begin
         w = evd("(ui-shell)")
         (c, inst) = shell_of(w)

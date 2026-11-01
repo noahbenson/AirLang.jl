@@ -377,6 +377,55 @@ function _tb_word_right!(b::_TextBuffer; select::Bool = false)
     return nothing
 end
 
+# ---- searching ---------------------------------------------------------------
+
+# Every occurrence of `q` in one line, as 0-based start columns. The match is
+# literal and case-sensitive, and never spans a line: a buffer search is a line
+# search, so a match is always something the reader could have told you about
+# within one row.
+function _tb_line_find_all(line::Vector{Char}, q::Vector{Char})
+    out = Int[]
+    m = length(q)
+    m == 0 && return out
+    for i in 0:(length(line) - m)
+        ok = true
+        for j in 1:m
+            if line[i + j] != q[j]
+                ok = false
+                break
+            end
+        end
+        ok && push!(out, i)
+    end
+    return out
+end
+
+# Every occurrence of `q` in the buffer, in document order, as `(row, col)`
+# pairs with a 0-based column.
+function _tb_matches(b::_TextBuffer, q::AbstractString)
+    out = Tuple{Int,Int}[]
+    isempty(q) && return out
+    qc = collect(q)
+    for (r, line) in enumerate(b.lines)
+        for c in _tb_line_find_all(line, qc)
+            push!(out, (r, c))
+        end
+    end
+    return out
+end
+
+# Put the cursor at `(row, col)` and, when `len > 0`, select the run of `len`
+# characters that starts there (the cursor sits after it).
+function _tb_place!(b::_TextBuffer, row::Int, col::Int, len::Int = 0)
+    b.row = clamp(row, 1, length(b.lines))
+    col = clamp(col, 0, length(b.lines[b.row]))
+    b.col = col
+    b.anchor = len > 0 ? (b.row, col) : nothing
+    b.col = min(col + len, length(b.lines[b.row]))
+    b.goal = -1
+    return nothing
+end
+
 # ---- kill and yank -----------------------------------------------------------
 
 function _tb_kill!(b::_TextBuffer, s::String)

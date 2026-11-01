@@ -330,6 +330,19 @@ _comp_hints(c::_Shell) = c.confirm === :close ?
     ["tab: next" => "tab", "alt-1..9: jump" => "alt-1..9",
      "esc: close tab" => "esc"]
 
+# A prompt inside the active tab (a search line) is the shell's prompt too, so
+# the status row shows it and the hints it offers instead of the tab's.
+function _comp_prompt(c::_Shell, inst::_UiInstance)
+    c.confirm === :none || return nothing
+    child = _sh_comp(c)
+    return child === nothing ? nothing : _comp_prompt(child, inst)
+end
+
+function _comp_prompt_hints(c::_Shell)
+    child = _sh_comp(c)
+    return child === nothing ? _comp_hints(c) : _comp_prompt_hints(child)
+end
+
 # The shell draws its own frame: the tab bar owns row 1, the active widget's
 # body fills rows 2…height-1, and the status row stays at the bottom.
 function _comp_root_draw!(c::_Shell, r, inst::_UiInstance, width::Int, height::Int)
@@ -400,7 +413,13 @@ function _comp_key!(c::_Shell, inst::_UiInstance, k::_UiKey)
     end
 
     if k.name === :esc
+        # Esc pops one layer, and a layer inside the widget — a search prompt, a
+        # notebook's scroll view — is the innermost one, so the widget answers
+        # first. Only a bubbled Esc reaches the tab.
         child = _sh_comp(c)
+        if child !== nothing && _comp_key!(child, inst, k) === :handled
+            return :handled
+        end
         if child !== nothing && _comp_dirty(child, inst)
             c.confirm = :close
             return :handled

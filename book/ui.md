@@ -377,15 +377,34 @@ bracketed paste arrives as one paste event.
 | `PageUp`, `PageDown` | page the document, the log, or the current cell |
 | `Tab`, `Shift-Tab` | switch tabs — never indentation |
 | `Alt-1` … `Alt-9` | select a tab directly |
-| `Esc` | pop one layer: a scroll view, then the tab, then the UI |
+| `Esc` | pop one layer: a prompt or scroll view, then the tab, then the UI |
 | `Enter` | a newline in a text buffer; activation in a browser |
 | `Ctrl-A`/`Ctrl-E`, `Ctrl-B`/`Ctrl-F`, `Alt-B`/`Alt-F` | line start/end, character and word motion |
 | `Ctrl-K`, `Ctrl-U`, `Ctrl-W`, `Ctrl-Y` | kill to end, to start, a word; yank |
 | `Ctrl-Z`, `Alt-Z` | undo, redo |
 | `Ctrl-L` | re-indent the buffer from its layout |
+| `Ctrl-S` | find in the buffer; again for the next match |
+| `Alt-L` | go to a line number |
+| `Alt-]` | jump to the bracket matching the one at the cursor |
+| `Alt-;` | comment or uncomment the current line, or every selected line |
 
 There is deliberately **no indent key**: Tab always switches tabs, and
 indentation is enforced automatically on every newline.
+
+A **prompt** is a transient input line in place of the status message, and it
+owns every key until it closes. `Ctrl-S` opens an incremental search seeded with
+the previous query; the match is selected as you type and the row shows `n/total`
+(or `no match`), `Ctrl-S`/`Down` and `Up` step through matches with wrapping,
+Enter keeps the cursor at the match, and Esc restores the cursor to where the
+search began. `Alt-L` collects a line number and Enter jumps there. Search is
+literal, case-sensitive, and line-local. Both prompts work inside a notebook
+cell, where they take precedence over the notebook's own `Ctrl-J`/`Ctrl-G`/…
+bindings; inside a shell, Esc reaches the prompt before it can close the tab.
+`Alt-]` selects the matching parenthesis, so pressing it again comes back, and
+a bracket inside a string or comment is text, not structure. `Alt-;` toggles a
+`#` line comment on each non-blank line the selection touches (a selection that
+ends at column 0 does not include that line), and a `#| … |#` opener is left
+alone rather than mistaken for a line comment.
 
 The status row shows the title, the namespace, the closure verdict or the
 running job, and then right-aligns **whole key hints**. Each hint has a long and
@@ -436,6 +455,11 @@ old output visible and muted rather than pretending it is current. The output
 itself lives in the widget's state alongside the buffer, so a widget that is
 closed and reopened shows its last result still under its text.
 
+Each run is timed on the job's own task, and the duration is set into the ruler
+above the output and appended to the status message (`3 results · 0.8 ms`); the
+time is stored with the output, so it survives a reopen. `_ui_duration` spells a
+duration in microseconds, milliseconds, or seconds, whichever reads best.
+
 ### `editor`
 
 The definition editor is the same buffer in `:editor` mode. `target=` names a
@@ -463,7 +487,11 @@ collapsed document. `PageUp`/`PageDown` move ten lines inside a cell.
 
 Each cell records the exact input text that produced its output. When the input
 changes, the output stays on screen rendered muted, so it is visibly stale;
-re-running replaces it, and reverting the text clears the mark.
+re-running replaces it, and reverting the text clears the mark. Each cell also
+records how long its last run took, shown in the ruler above its output (and
+dimmed with the output when stale) and in the status row while it is active; the
+time is stored with the cell, so a reopened notebook still shows it, and
+clearing the output clears the time with it.
 
 `Ctrl-R` runs the whole document: the non-empty cells are queued in order and
 run one at a time, each starting only after the previous result has landed, so

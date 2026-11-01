@@ -112,9 +112,10 @@ SFTP), the immutable `bytes` extern,
   it; `ui=false`/`ui=naught` in `$.config.ssh` (or the `ssh` val of
   `$.config`) opts out, and a non-pty session never gets one.
 - [ ] **HUI follow-ups.**
-  - *Editing:* in-buffer search, go-to-line, bracket match/jump, and a
+  - [x] *Editing:* in-buffer search, go-to-line, bracket match/jump, and a
     comment toggle.
-  - *Notebook:* per-cell timing.
+  - [x] *Notebook:* per-cell timing (measured on the job's task, shown in the
+    output ruler and the status row, and stored with the cell).
   - *Shell:* reattach automatically after an SSH reconnect, and tab reorder /
     close-all.
   - *Browser:* a filter/search line.

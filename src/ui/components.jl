@@ -46,7 +46,11 @@ gone.
 mutable struct _UiJob
     chan::Channel{Any}
     label::String                   # shown while the job runs
+    elapsed::Float64                # seconds `f` took (0 until it returns)
 end
+
+_UiJob(chan::Channel{Any}, label::AbstractString) =
+    _UiJob(chan, String(label), 0.0)
 
 """
     _CompBase
@@ -79,6 +83,10 @@ _comp_lines(c::_Comp, inst::_UiInstance, width::Int) = _UiLine[]
 _comp_cursor(c::_Comp, inst::_UiInstance) = nothing
 _comp_status(c::_Comp, inst::_UiInstance) = c.base.status
 _comp_dirty(c::_Comp, inst::_UiInstance) = false
+# A transient input line (a search or a line number) that outranks the status
+# message while it is open; a container delegates to the child that owns it.
+_comp_prompt(c::_Comp, inst::_UiInstance) = nothing
+_comp_prompt_hints(c::_Comp) = _comp_hints(c)
 _comp_key!(c::_Comp, inst::_UiInstance, k::_UiKey) = :bubble
 
 # Copy the widget's on-screen state into its durable `mut`. The renderer flushes
@@ -113,17 +121,20 @@ function _comp_start_job!(c::_Comp, inst::_UiInstance, f::Function;
                           label::AbstractString = "running…")
     _comp_running(c) && return false
     chan = Channel{Any}(1)
-    c.base.job = _UiJob(chan, String(label))
+    job = _UiJob(chan, label)
+    c.base.job = job
     Threads.@spawn begin
         # Block scopes do not cross a task boundary; this is the same start a
         # `(task …)` makes.
         _reset_block_scopes!()
+        t0 = time()
         res = try
             (:ok, f())
         catch e
             e isa InterruptException && rethrow()
             (:error, sprint(showerror, e))
         end
+        job.elapsed = time() - t0
         try
             put!(chan, res)
         catch
@@ -134,8 +145,43 @@ function _comp_start_job!(c::_Comp, inst::_UiInstance, f::Function;
 end
 
 # Apply a finished job's result. The component decides what it means; the
-# result is `(:ok, value)` or `(:error, message)`.
+# result is `(:ok, value)` or `(:error, message)`. `elapsed` is how long `f`
+# took, measured on the job's own task; a component that shows timing takes the
+# four-argument method.
 _comp_job_done!(c::_Comp, inst::_UiInstance, res) = nothing
+_comp_job_done!(c::_Comp, inst::_UiInstance, res, elapsed::Float64) =
+    _comp_job_done!(c, inst, res)
+
+# A duration as the status row spells it: microseconds below a millisecond,
+# milliseconds below a second, seconds above.
+function _ui_duration(secs::Real)
+    s = Float64(secs)
+    if s < 1e-3
+        return string(round(Int, s * 1e6), " µs")
+    elseif s < 1
+        return string(round(s * 1e3; digits = 1), " ms")
+    end
+    return string(round(s; digits = 2), " s")
+end
+
+# A status message with the duration appended when one was measured.
+_ui_join_took(msg::AbstractString, elapsed::Union{Nothing,Float64}) =
+    elapsed === nothing ? String(msg) : string(msg, "  ·  ", _ui_duration(elapsed))
+
+# The ruler above a run's output, `avail` columns wide: a plain rule, or — once
+# a duration is known — the rule with the time set into it. `stale` dims the
+# tag along with the output it labels, since both describe an earlier run.
+function _ui_ruler(avail::Int, elapsed::Union{Nothing,Float64};
+                   stale::Bool = false)
+    n = max(avail, 8)
+    elapsed === nothing && return _ui_styled([_UiSpan(repeat("─", n),
+                                                      _ui_role(:border))])
+    tag = string(" ", _ui_duration(elapsed), " ")
+    dashes = max(n - 2 - textwidth(tag), 6)
+    return _ui_styled([_UiSpan("──", _ui_role(:border)),
+                       _UiSpan(tag, _ui_role(stale ? :muted : :border)),
+                       _UiSpan(repeat("─", dashes), _ui_role(:border))])
+end
 
 """
     _comp_tick!(c, inst) -> Bool
@@ -151,7 +197,7 @@ function _comp_tick!(c::_Comp, inst::_UiInstance)
     res = take!(j.chan)
     c.base.job = nothing
     try
-        _comp_job_done!(c, inst, res)
+        _comp_job_done!(c, inst, res, j.elapsed)
     catch e
         e isa AirError || rethrow()
         c.base.status = "error: " * sprint(showerror, e)
@@ -299,6 +345,14 @@ end
 function _state_flag(v::Form, key::Symbol)
     f = _state_field(v, key)
     return f !== nothing && _leafof(f) === true
+end
+
+# A stored number, or `nothing` when the field is absent or not a number.
+function _state_number(v::Form, key::Symbol)
+    f = _state_field(v, key)
+    f === nothing && return nothing
+    l = _leafof(f)
+    return l isa Real ? Float64(l) : nothing
 end
 
 # The canonicalized value of a widget's state mut, or `nothing` when the form
@@ -519,10 +573,13 @@ function _comp_status_line(c::_Comp, inst::_UiInstance, width::Int)
     if !isempty(c.base.nspath)
         push!(parts, _ns_display(c.base.nspath))
     end
-    msg = _comp_running(c) ? _comp_job_label(c) : _comp_status(c, inst)
+    prompt = _comp_prompt(c, inst)
+    msg = prompt !== nothing ? prompt :
+          _comp_running(c) ? _comp_job_label(c) : _comp_status(c, inst)
     isempty(msg) || push!(parts, msg)
     left = join(parts, "  ·  ")
-    return _ui_fit_hints(left, _comp_hints(c), width)
+    hints = prompt !== nothing ? _comp_prompt_hints(c) : _comp_hints(c)
+    return _ui_fit_hints(left, hints, width)
 end
 
 # The key hints a component offers, each as `(long, short)`. The status row shows
