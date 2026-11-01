@@ -74,8 +74,14 @@ an immutable `bytes` value, so `scp` and `sftp` work against air paths. See
 User interfaces are abstract: a UI is a tree of inert `(ui …)` forms that air
 instantiates, validates, and renders — over SSH, as a full-screen terminal, or
 as plain text. Each element's value can be asserted as an ordinary fact, so
-rules use a form's choices without knowing a UI exists. See
-[User interfaces](book/ui.md).
+rules use a form's choices without knowing a UI exists.
+
+On top of that runtime the human-interface layer adds composite widgets — a
+code block and definition editor with layout-driven auto-indent and
+highlighting, a notebook of paired input/output cells, a namespace browser, a
+tabbed shell, and a chat over a pair of streams — all durable air values, shown
+on a *connection* (`.io.conn`) that may be an SSH session or the local
+terminal. See [User interfaces](book/ui.md).
 
 Air can also talk to a language-model server. `(create-agent :bot provider=:fireworks
 model="…" api-key="…")` creates an `:agent` account of the caller, and
@@ -116,7 +122,7 @@ The [Air book](book/index.md) is the reference. It is built with Jupyter Book 2
 | [Tensors](book/tensors.md) | mutable numeric arrays, literals, reservations, numpy-style array operations, linear algebra |
 | [Data formats](book/formats.md) | JSON, YAML, TOML, CSV, TSV, and `.env` |
 | [SSH access](book/ssh.md) | `ssh-server`, key login, the remote REPL, SFTP |
-| [User interfaces](book/ui.md) | `(ui …)` trees, widgets, assertions, the terminal renderer |
+| [User interfaces](book/ui.md) | `(ui …)` trees, widgets, assertions, composite widgets, connections, the terminal renderer |
 | [Agents](book/agents.md) | `create-agent`, sessions, channels, the `on-receive` hook, providers |
 | [Events and durable tasks](book/events.md) | `do-at`/`do-in`/`tx-at`/`tx-in`, `bindings=`, checkpoints, resume |
 | [The two rule systems](book/rules.md) | reduction rules and the deductive engine |

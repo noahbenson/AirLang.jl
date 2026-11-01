@@ -19,10 +19,20 @@
 struct _UiLine
     text::String
     node::Union{Nothing,_UiNode}
+    spans::Vector{_UiSpan}       # empty ⇒ one plain span equal to `text`
 end
 
 _ui_line(text::AbstractString, node::Union{Nothing,_UiNode} = nothing) =
-    _UiLine(String(text), node)
+    _UiLine(String(text), node, _UiSpan[])
+
+# A line built from styled runs; `text` is their concatenation.
+function _ui_styled(spans::Vector{_UiSpan}, node::Union{Nothing,_UiNode} = nothing)
+    return _UiLine(_ui_spans_text(spans), node, spans)
+end
+
+# The runs of a line, materializing the plain span for a legacy line.
+_ui_line_spans(l::_UiLine) =
+    isempty(l.spans) ? _UiSpan[_UiSpan(l.text, _UI_PLAIN)] : l.spans
 
 # ---- attachments -------------------------------------------------------------
 
@@ -121,8 +131,10 @@ end
 
 # ---- layout ------------------------------------------------------------------
 
-_ui_indent(lines::Vector{_UiLine}, n::Int) =
-    [_ui_line(repeat(" ", n) * l.text, l.node) for l in lines]
+function _ui_indent(lines::Vector{_UiLine}, n::Int)
+    n == 0 && return lines
+    return [_ui_styled(_ui_pad_spans(_ui_line_spans(l), n), l.node) for l in lines]
+end
 
 function _ui_clip(s::AbstractString, width::Int)
     width <= 0 && return String(s)
@@ -224,7 +236,11 @@ renderer; the headless renderer passes `nothing`.
 function _ui_lines(inst::_UiInstance, node::_UiNode, width::Int;
                    edit = nothing)
     k = node.kind.name
-    if k === Symbol("column")
+    if _ui_kind_component(node.kind)
+        c = _comp_build_node(inst, node)
+        c === nothing && return [_ui_line("[" * String(k) * "]")]
+        return _comp_lines(c, inst, width)
+    elseif k === Symbol("column")
         out = _UiLine[]
         for c in node.children
             append!(out, _ui_lines(inst, c, width; edit = edit))

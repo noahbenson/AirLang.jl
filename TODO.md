@@ -84,6 +84,61 @@ extern with `[…]` literals and `{…}` reservations, `(exit)`, and the CLI.
   `ui-run` drive it, `ui-render` is a deterministic text renderer, and
   `ui-show` is a full-screen terminal renderer over SSH (alternate screen,
   focus, validation line, Esc to dismiss, Ctrl-C to abort). See `book/ui.md`.
+- [x] **Human-interface (HUI) layer.** A shared interaction framework — styled
+  lines, a role-based theme, a key model that keeps CR/LF apart and resolves
+  modified CSI sequences, one editable text buffer with layout-driven automatic
+  indentation and bracket pairing, and syntax highlighting — and the composite
+  widgets built on it: `ui-code`, `ui-editor`, `ui-notebook`, `ui-browser`,
+  `ui-shell`, and `ui-chat`. Each is a durable `(ui KIND …)` form whose state is
+  a `mut`. Connections live under `.io.conn` as inert records; `ui-attach!`,
+  `ui-detach!`, `ui-attached`, `ui-connection`, and `ui-connections` drive them,
+  with an SSH channel backend and a local `TTYTerminal` backend. `ns-entries`
+  and `ns-entry` list a namespace's entries for the browser. The instance owns
+  its built tree and a ticker: an evaluation runs as a background job (the frame
+  stays live and the status row names it) and keeps running — landing its result
+  in the widget's stored state — after the renderer detaches; a notebook runs all
+  its cells in order, and a standalone widget reopens with the output it last
+  drew. The status row right-aligns whole key hints, and the terminal writer
+  diffs frames, sending only the rows that changed. See `book/ui.md`.
+- [x] **UI sessions.** A connection renders one `ui` element at a time, and the
+  element is ordinary air data: the attach records itself transactionally in the
+  element's state (`controller=`), and detaching or closing the connection
+  clears that field without deleting anything. Attaching a raw `(ui …)` form
+  creates an *ephemeral projection* — an unregistered instance that lives with
+  the attach and is retracted by the instance's ticker only when no renderer and
+  no job remain, so a running evaluation keeps it alive long enough to write its
+  result; `(ui-attached)` returns the form itself, so storing it keeps the
+  widget. `(current-ui)` is bound to the instance's form around every evaluation
+  it runs. An interactive SSH login opens the default UI — a `(ui-shell)` whose
+  tabs are a namespace browser and a notebook in `$` — held on the session
+  task's stack, so it is collected when the session ends unless the user stores
+  it; `ui=false`/`ui=naught` in `$.config.ssh` (or the `ssh` val of
+  `$.config`) opts out, and a non-pty session never gets one.
+- [ ] **HUI follow-ups.**
+  - *Editing:* in-buffer search, go-to-line, bracket match/jump, and a
+    comment toggle.
+  - *Notebook:* per-cell timing.
+  - *Shell:* reattach automatically after an SSH reconnect, and tab reorder /
+    close-all.
+  - *Browser:* a filter/search line.
+  - *Chat:* an unread marker for messages that arrived while scrolled away.
+  - *Evaluation:* preemption. Ctrl-C raises `:ctrl-c` and the job keeps running;
+    aborting a running evaluation needs a cancellable task or a structured
+    shutdown checklist on the Air side (propose it, do not build it here).
+  - *Automation:* the SSH test needs the test target's OpenSSH_jll, so it runs
+    under `Pkg.test` and is skipped otherwise; the local backend is unit-tested
+    over pipes, and its pty path was verified once by hand with a pty driver,
+    not by the suite.
+  - *Diagnosis only:* six `test/ref_forms.jl` actor tests fail against the
+    current AirDB; some are timing-sensitive and some observationally could be
+    the deferred actor-network work on the AirDB side. Diagnose and propose a
+    fix; never edit AirDB.
+- [ ] **Agent-user-interface (AUI) layer.** Chat and form tools that an agent
+  drives over a text protocol. Deliberately deferred: the human interface comes
+  first, and the two share the widget runtime underneath.
+- [ ] **More UI renderers.** A web renderer (and mouse support) would exercise
+  the abstract layer; it implements the same attach/draw/event contract as the
+  two terminal backends.
 - [x] **Agents and channels.** A user record carries `kind=:human|:agent`, and
   `(create-agent :name provider=… model=… api-key=… …)` creates an `:agent`
   constituent whose inference settings live in `$.config.agent`; `open-session`
@@ -97,9 +152,6 @@ extern with `[…]` literals and `{…}` reservations, `(exit)`, and the CLI.
   session reopens lazily after a restart. Providers: the Anthropic Messages API
   and the OpenAI chat-completions dialect, including any `:compatible` server.
   See `book/agents.md`.
-- [ ] **More UI renderers.** A local `stty`-driven terminal renderer (v1 needs a
-  pty SSH session) and a web renderer would exercise the abstract layer; both
-  implement the same attach/draw/event contract.
 - [ ] **Incremental UI updates.** `ui-update!` re-instantiates the whole tree;
   an incremental subtree update would avoid rebuilding and re-evaluating every
   parameter for a dashboard-style redraw.

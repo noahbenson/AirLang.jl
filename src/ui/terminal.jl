@@ -1,146 +1,68 @@
 ################################################################################
 # ui/terminal.jl
 #
-# The terminal renderer: a full-screen alternate-buffer view driven by a byte
-# source. It owns no state — every accepted change goes through
-# `_ui_dispatch!` — and it distinguishes two exits:
+# The full-screen terminal renderer. It owns no application state: legacy
+# widgets are read from the instance and every accepted change goes through
+# `_ui_dispatch!`; composite widgets (notebook, browser, chat, shell) own their
+# own interaction state and are driven through the same key loop.
 #
-#   Esc      dismiss gracefully: restore the screen, `ui-show` returns `naught`
-#   Ctrl-C   abort: restore the screen, `ui-show` raises `(error :ctrl-c)`
+# Two exits are distinguished:
 #
-# A lone Esc is also the prefix of every CSI/SS3 sequence, so a bare ESC is held
-# briefly (~50 ms); a continuation byte turns it into an arrow or function key.
+#   Esc      pop one layer; at the root, dismiss (`ui-show` returns `naught`)
+#   Ctrl-C   abort: restore the screen, raise `(error :ctrl-c)`
+#
+# The byte source is a `_TermBackend` (ui/term.jl): an SSH channel, the local
+# terminal, or a scripted IO in tests.
 #
 # MIT License
 # Copyright (c) 2026 Noah C. Benson
 
-# ---- the key parser ----------------------------------------------------------
+# ---- the SSH backend ---------------------------------------------------------
 
-# A Julia literal cannot spell a hyphenated symbol (`:ctrl-c` is a subtraction),
-# so the multi-word tokens get names.
-const _KT_CTRL_C = Symbol("ctrl-c")
-const _KT_SHIFT_TAB = Symbol("shift-tab")
-const _KT_PAGE_UP = Symbol("page-up")
-const _KT_PAGE_DOWN = Symbol("page-down")
-
-mutable struct _KeyParser
-    state::Symbol            # :ground, :esc, :csi, :ss3
-    seq::Vector{UInt8}
-    utf8::Vector{UInt8}
+# The session channel writer plus its non-blocking reader. Typed-ahead bytes the
+# REPL pushed into `out.pending` are drained first, then whatever the channel
+# has.
+mutable struct _SshBackend <: _TermBackend
+    out::_SshChannelIO
 end
 
-_KeyParser() = _KeyParser(:ground, UInt8[], UInt8[])
+_tb_size(b::_SshBackend) = (b.out.cols[], b.out.rows[])
+_tb_enter!(b::_SshBackend) = _tb_enter_standard!(b)
+_tb_leave!(b::_SshBackend) = _tb_leave_standard!(b)
 
-# A token is a symbol (:up, :enter, …) or `(:text, c)`.
-function _kp_feed!(kp::_KeyParser, b::UInt8)
-    if kp.state === :esc
-        kp.state = :ground
-        if b == UInt8('[')
-            kp.state = :csi
-            empty!(kp.seq)
-            return Any[]
-        elseif b == UInt8('O')
-            kp.state = :ss3
-            return Any[]
-        end
-        out = Any[:escape]
-        append!(out, _kp_feed!(kp, b))
-        return out
-    elseif kp.state === :csi
-        if 0x40 <= b <= 0x7e
-            kp.state = :ground
-            return _kp_csi(kp.seq, b)
-        end
-        push!(kp.seq, b)
-        return Any[]
-    elseif kp.state === :ss3
-        kp.state = :ground
-        return b == UInt8('A') ? Any[:up] :
-               b == UInt8('B') ? Any[:down] :
-               b == UInt8('C') ? Any[:right] :
-               b == UInt8('D') ? Any[:left] :
-               b == UInt8('H') ? Any[:home] :
-               b == UInt8('F') ? Any[:end] : Any[]
-    end
-    # Ground state.
-    if b == 0x1b
-        kp.state = :esc
-        empty!(kp.seq)
-        return Any[]
-    elseif b == 0x03
-        return Any[_KT_CTRL_C]
-    elseif b == 0x0d || b == 0x0a
-        return Any[:enter]
-    elseif b == 0x09
-        return Any[:tab]
-    elseif b == 0x7f || b == 0x08
-        return Any[:backspace]
-    elseif b < 0x20
-        return Any[]
-    elseif b < 0x80
-        return Any[(:text, Char(b))]
-    end
-    push!(kp.utf8, b)
-    need = _utf8_len(kp.utf8[1])
-    length(kp.utf8) < need && return Any[]
-    bytes = copy(kp.utf8)
-    empty!(kp.utf8)
-    c = try
-        only(collect(String(bytes)))
-    catch
-        Char(0xfffd)
-    end
-    return Any[(:text, c)]
+function _tb_resize!(b::_SshBackend)
+    size = _ssh_poll_channel!(b.out.session, b.out.cols[], b.out.rows[])
+    size === nothing && return nothing
+    size[1] > 0 && (b.out.cols[] = size[1])
+    size[2] > 0 && (b.out.rows[] = size[2])
+    return nothing
 end
 
-function _kp_csi(seq::Vector{UInt8}, final::UInt8)
-    s = String(seq)
-    # Ignore modifier parameters (`1;5A` is Shift-Up).
-    semi = findfirst(';', s)
-    semi === nothing || (s = s[1:semi-1])
-    if final == UInt8('A')
-        return Any[:up]
-    elseif final == UInt8('B')
-        return Any[:down]
-    elseif final == UInt8('C')
-        return Any[:right]
-    elseif final == UInt8('D')
-        return Any[:left]
-    elseif final == UInt8('H')
-        return Any[:home]
-    elseif final == UInt8('F')
-        return Any[:end]
-    elseif final == UInt8('Z')
-        return Any[_KT_SHIFT_TAB]
-    elseif final == UInt8('~')
-        n = tryparse(Int, s)
-        n === nothing && return Any[]
-        return n in (1, 7) ? Any[:home] :
-               n in (4, 8) ? Any[:end] :
-               n == 2 ? Any[:insert] :
-               n == 3 ? Any[:delete] :
-               n == 5 ? Any[_KT_PAGE_UP] :
-               n == 6 ? Any[_KT_PAGE_DOWN] : Any[]
+function _tb_drain!(b::_SshBackend)
+    out = UInt8[]
+    if !isempty(b.out.pending)
+        append!(out, b.out.pending)
+        empty!(b.out.pending)
     end
-    return Any[]
+    data = _ssh_read_available!(b.out.chan, b.out.inbuf)
+    data === nothing || append!(out, data)
+    return out
 end
 
-# A bare ESC with no continuation: emit the dismiss token.
-function _kp_bare_escape!(kp::_KeyParser)
-    kp.state = :ground
-    return :escape
+_tb_write(b::_SshBackend, data) = _ssh_write!(b.out, data)
+
+# Bytes the renderer did not consume go back where the REPL expects them.
+function _tb_unread!(b::_SshBackend, data)
+    isempty(data) && return nothing
+    prepend!(b.out.pending, data)
+    return nothing
 end
 
 # ---- the renderer ------------------------------------------------------------
 
 mutable struct _TermRenderer <: _UiRenderer
-    io::IO
-    readbyte::Function
-    resize::Function
-    cols::Ref{Int}
-    rows::Ref{Int}
-    kp::_KeyParser
-    esc_at::Float64
+    backend::_TermBackend
+    kp::_UiKeyParser
     focus::Union{Nothing,String}
     editing::Bool
     editing_path::Union{Nothing,String}
@@ -150,21 +72,27 @@ mutable struct _TermRenderer <: _UiRenderer
     quit::Symbol             # :none, :dismiss, :abort
     need_redraw::Bool
     sel::Dict{String,Int}    # per-element option cursor for multi-select
+    comp::Any                # a composite root widget, or `nothing`
+    frame::_FrameCache       # what is on screen, so a redraw sends only changes
 end
 
+function _TermRenderer(backend::_TermBackend)
+    return _TermRenderer(backend, _UiKeyParser(), nothing, false, nothing, "", 0,
+                         "", :none, true, Dict{String,Int}(), nothing,
+                         _FrameCache(backend))
+end
+
+# The scripted-IO constructor the tests use.
 function _TermRenderer(io::IO; cols::Ref{Int} = Ref(80), rows::Ref{Int} = Ref(24),
                        readbyte::Function = () -> nothing,
                        resize::Function = () -> nothing)
-    return _TermRenderer(io, readbyte, resize, cols, rows, _KeyParser(), 0.0,
-                         nothing, false, nothing, "", 0, "", :none, true,
-                         Dict{String,Int}())
+    return _TermRenderer(_StreamBackend(io; cols = cols, rows = rows,
+                                        readbyte = readbyte, resize = resize))
 end
 
 # ---- focus -------------------------------------------------------------------
 
-function _ui_term_focus_list(inst::_UiInstance)
-    return _ui_focus_order(inst)
-end
+_ui_term_focus_list(inst::_UiInstance) = _ui_focus_order(inst)
 
 function _ui_term_focused(r::_TermRenderer, inst::_UiInstance)
     f = _ui_term_focus_list(inst)
@@ -210,9 +138,7 @@ function _ui_term_num_form(k::_UiKind, v)
     return Form(Float64(v))
 end
 
-function _ui_term_options(node::_UiNode)
-    return _ui_options(node.params)
-end
+_ui_term_options(node::_UiNode) = _ui_options(node.params)
 
 function _ui_term_option_index(opts, value)
     for (i, (_, v)) in enumerate(opts)
@@ -221,7 +147,8 @@ function _ui_term_option_index(opts, value)
     return 0
 end
 
-function _ui_term_apply!(r::_TermRenderer, inst::_UiInstance, node::_UiNode, v::Form)
+function _ui_term_apply!(r::_TermRenderer, inst::_UiInstance, node::_UiNode,
+                         v::Form)
     res = _ui_dispatch!(inst, (:set, _ui_sel(node), v))
     if res isa Tuple && res[1] === :invalid
         r.status = res[2]
@@ -232,7 +159,7 @@ function _ui_term_apply!(r::_TermRenderer, inst::_UiInstance, node::_UiNode, v::
     return nothing
 end
 
-# ---- editing -----------------------------------------------------------------
+# ---- single-line editing -----------------------------------------------------
 
 function _ui_term_text_value(node::_UiNode)
     k = node.kind.name
@@ -286,6 +213,16 @@ function _ui_term_insert!(r::_TermRenderer, c::Char)
     return nothing
 end
 
+# Paste into a single-line field: newlines are dropped, not inserted.
+function _ui_term_insert!(r::_TermRenderer, text::AbstractString)
+    for c in text
+        if c != '\n' && c != '\r'
+            _ui_term_insert!(r, c)
+        end
+    end
+    return nothing
+end
+
 function _ui_term_parse_value(node::_UiNode, s::AbstractString)
     k = node.kind.name
     t = strip(s)
@@ -326,24 +263,25 @@ function _ui_term_commit!(r::_TermRenderer, inst::_UiInstance, node::_UiNode)
     return true
 end
 
-# ---- key handling ------------------------------------------------------------
+# ---- keys --------------------------------------------------------------------
 
-function _ui_term_edit_key!(r::_TermRenderer, inst::_UiInstance, node::_UiNode, tok)
-    if tok === :enter
+function _ui_term_edit_key!(r::_TermRenderer, inst::_UiInstance, node::_UiNode,
+                            k::_UiKey)
+    if k.name === :enter
         _ui_term_commit!(r, inst, node)
         return nothing
-    elseif tok === :tab
+    elseif k.name === :tab && !k.shift
         _ui_term_commit!(r, inst, node)
         _ui_term_move_focus!(r, inst, 1)
         return nothing
-    elseif tok === _KT_SHIFT_TAB
+    elseif k.name === :tab || k.name === :backtab
         _ui_term_commit!(r, inst, node)
         _ui_term_move_focus!(r, inst, -1)
         return nothing
-    elseif tok === :escape
+    elseif k.name === :esc
         _ui_term_cancel_edit!(r)
         return nothing
-    elseif tok === :backspace
+    elseif k.name === :backspace
         if r.cursor > 0
             s = collect(r.buf)
             deleteat!(s, r.cursor)
@@ -352,7 +290,7 @@ function _ui_term_edit_key!(r::_TermRenderer, inst::_UiInstance, node::_UiNode, 
             r.need_redraw = true
         end
         return nothing
-    elseif tok === :delete
+    elseif k.name === :delete
         if r.cursor < length(r.buf)
             s = collect(r.buf)
             deleteat!(s, r.cursor + 1)
@@ -360,20 +298,53 @@ function _ui_term_edit_key!(r::_TermRenderer, inst::_UiInstance, node::_UiNode, 
             r.need_redraw = true
         end
         return nothing
-    elseif tok === :left
+    elseif k.name === :left
         r.cursor = max(0, r.cursor - 1); r.need_redraw = true
         return nothing
-    elseif tok === :right
+    elseif k.name === :right
         r.cursor = min(length(r.buf), r.cursor + 1); r.need_redraw = true
         return nothing
-    elseif tok === :home
+    elseif k.name === :home
         r.cursor = 0; r.need_redraw = true
         return nothing
-    elseif tok === :end
+    elseif k.name === :end
         r.cursor = length(r.buf); r.need_redraw = true
         return nothing
-    elseif tok isa Tuple && tok[1] === :text && isprint(tok[2])
-        _ui_term_insert!(r, tok[2])
+    elseif k.name === :char && k.ctrl && k.char == 'a'
+        r.cursor = 0; r.need_redraw = true
+        return nothing
+    elseif k.name === :char && k.ctrl && k.char == 'e'
+        r.cursor = length(r.buf); r.need_redraw = true
+        return nothing
+    elseif k.name === :char && k.ctrl && k.char == 'k'
+        r.buf = String(collect(r.buf)[1:min(r.cursor, length(r.buf))])
+        r.need_redraw = true
+        return nothing
+    elseif k.name === :char && k.ctrl && k.char == 'u'
+        cs = collect(r.buf)
+        r.buf = String(cs[min(r.cursor + 1, length(cs) + 1):end])
+        r.cursor = 0
+        r.need_redraw = true
+        return nothing
+    elseif k.name === :char && k.ctrl && k.char == 'w'
+        cs = collect(r.buf)
+        i = r.cursor
+        while i >= 1 && cs[i] == ' '
+            i -= 1
+        end
+        while i >= 1 && cs[i] != ' '
+            i -= 1
+        end
+        r.buf = String(vcat(cs[1:i], cs[(r.cursor + 1):end]))
+        r.cursor = i
+        r.need_redraw = true
+        return nothing
+    elseif k.name === :char && k.char !== nothing && isprint(k.char) &&
+           !k.ctrl && !k.alt
+        _ui_term_insert!(r, k.char)
+        return nothing
+    elseif k.name === :paste
+        _ui_term_insert!(r, k.text)
         return nothing
     end
     return nothing
@@ -488,42 +459,57 @@ function _ui_term_adjust!(r::_TermRenderer, inst::_UiInstance, node::_UiNode,
     return nothing
 end
 
-function _ui_term_key!(r::_TermRenderer, inst::_UiInstance, tok)
-    tok === _KT_CTRL_C && (r.quit = :abort; return nothing)
+# Ctrl-C anywhere aborts the renderer.
+_ui_term_ctrl_c(k::_UiKey) =
+    k.name === :char && k.ctrl && !k.alt && k.char == 'c'
+
+function _ui_term_key!(r::_TermRenderer, inst::_UiInstance, k::_UiKey)
+    _ui_term_ctrl_c(k) && (r.quit = :abort; return nothing)
+    # A composite root (the shell) handles its own keys after the global two.
+    if r.comp !== nothing
+        _comp_root_key!(r.comp, r, inst, k)
+        r.need_redraw = true
+        return nothing
+    end
     node = _ui_term_focused(r, inst)
     if r.editing
         node === nothing && return nothing
-        _ui_term_edit_key!(r, inst, node, tok)
+        _ui_term_edit_key!(r, inst, node, k)
         return nothing
     end
     node === nothing && return nothing
-    if tok === :escape
+    if k.name === :esc
         r.quit = :dismiss
-        return nothing
-    elseif tok === :tab
+    elseif k.name === :tab && !k.shift
         _ui_term_move_focus!(r, inst, 1)
-    elseif tok === _KT_SHIFT_TAB
+    elseif k.name === :tab || k.name === :backtab
         _ui_term_move_focus!(r, inst, -1)
-    elseif tok === :up
+    elseif k.name === :up
         _ui_term_move_focus!(r, inst, -1)
-    elseif tok === :down
+    elseif k.name === :down
         _ui_term_move_focus!(r, inst, 1)
-    elseif tok === :enter
+    elseif k.name === :enter
         _ui_term_activate!(r, inst, node)
-    elseif tok === :left || tok === :right || tok === :home || tok === :end
-        _ui_term_adjust!(r, inst, node, tok)
-    elseif tok isa Tuple && tok[1] === :text && tok[2] == ' '
-        k = node.kind.name
-        if k === Symbol("checkbox") || k === Symbol("toggle") || k === Symbol("button")
+    elseif k.name === :left || k.name === :right || k.name === :home ||
+           k.name === :end
+        _ui_term_adjust!(r, inst, node, k.name)
+    elseif k.name === :char && k.ctrl && k.char == 'j'
+        # Ctrl-J is the notebook's run key; the legacy widgets treat it as Enter
+        # so a client that sends LF for Enter still works.
+        _ui_term_activate!(r, inst, node)
+    elseif k.name === :char && k.char == ' '
+        kk = node.kind.name
+        if kk === Symbol("checkbox") || kk === Symbol("toggle") ||
+           kk === Symbol("button")
             _ui_term_activate!(r, inst, node)
         elseif _ui_term_editable(node)
             _ui_term_begin_edit!(r, node)
             _ui_term_insert!(r, ' ')
         end
-    elseif tok isa Tuple && tok[1] === :text && isprint(tok[2]) &&
-           _ui_term_editable(node)
+    elseif k.name === :char && k.char !== nothing && isprint(k.char) &&
+           !k.ctrl && !k.alt && _ui_term_editable(node)
         _ui_term_begin_edit!(r, node)
-        _ui_term_insert!(r, tok[2])
+        _ui_term_insert!(r, k.char)
     end
     return nothing
 end
@@ -538,8 +524,14 @@ function _ui_term_edit_col(node::_UiNode, buf::AbstractString, cursor::Int)
 end
 
 function _ui_term_draw!(r::_TermRenderer, inst::_UiInstance)
-    width = max(r.cols[], 20)
-    height = max(r.rows[], 3)
+    width = max(_tb_size(r.backend)[1], 20)
+    height = max(_tb_size(r.backend)[2], 3)
+    _frame_begin!(r.frame, width, height)
+    if r.comp !== nothing
+        _comp_draw_themed!(r.comp, r, inst, width, height)
+        r.need_redraw = false
+        return nothing
+    end
     node = _ui_term_focused(r, inst)
     focuspath = node === nothing ? nothing : node.path
     edit = nothing
@@ -550,47 +542,29 @@ function _ui_term_draw!(r::_TermRenderer, inst::_UiInstance)
 
     # Scroll so the focused element is visible (the last row is the status bar).
     body = height - 1
+    focusrow = node === nothing ? 0 :
+               something(findfirst(l -> l.node !== nothing &&
+                                        l.node.path === focuspath, lines), 0)
     start = 1
     if length(lines) > body
-        foc = node === nothing ? 1 :
-              something(findfirst(l -> l.node !== nothing && l.node.path === focuspath,
-                                  lines), 1)
-        start = clamp(foc - body ÷ 2, 1, max(1, length(lines) - body + 1))
+        f = focusrow == 0 ? 1 : focusrow
+        start = clamp(f - body ÷ 2, 1, max(1, length(lines) - body + 1))
     end
-    stop = min(length(lines), start + body - 1)
-
-    io = IOBuffer()
-    print(io, "\e[H")
-    row = 0
-    focusrow = 0
-    for i in start:stop
-        l = lines[i]
-        text = _ui_clip(l.text, width - 1)
-        if l.node !== nothing && l.node.path === focuspath
-            print(io, "\e[K\e[7m", text, "\e[0m")
-            focusrow == 0 && (focusrow = row + 1)
-        else
-            print(io, "\e[K", text)
-        end
-        print(io, "\r\n")
-        row += 1
-    end
-    while row < body
-        print(io, "\e[K\r\n")
-        row += 1
-    end
+    _term_emit_body!(r.frame, lines, width, body, start;
+                     reversepath = focuspath)
     status = isempty(r.status) ?
              "tab: next   enter: activate/edit   esc: done   ctrl-c: abort" :
              r.status
-    print(io, "\e[K", _ui_clip(status, width - 1))
+    _term_emit_row!(r.frame, height,
+                    _ui_line(_ui_clip(status, width)), width,
+                    _ui_role(:status))
     if edit !== nothing
         col = _ui_term_edit_col(node, r.buf, r.cursor)
-        print(io, "\e[", max(focusrow, 1), ";", col, "H\e[?25h")
+        row = focusrow == 0 ? 1 : clamp(focusrow - start + 1, 1, body)
+        _term_move!(r.backend, row, col)
     else
-        print(io, "\e[?25l")
+        _term_move!(r.backend, height, 1; visible = false)
     end
-    print(r.io, String(take!(io)))
-    flush(r.io)
     r.need_redraw = false
     return nothing
 end
@@ -599,58 +573,98 @@ end
 
 function _ui_term_tick!(r::_TermRenderer, inst::_UiInstance)
     try
-        r.resize()
+        _tb_resize!(r.backend)
     catch
     end
-    while r.quit === :none && !inst.dismissed && !inst.closed
-        was = r.kp.state
-        b = try
-            r.readbyte()
-        catch e
-            e isa SshError || rethrow()
-            r.quit = :dismiss
-            break
-        end
-        b === nothing && break
-        toks = _kp_feed!(r.kp, b)
-        if r.kp.state === :esc && was !== :esc
-            r.esc_at = time()
-        elseif r.kp.state !== :esc
-            r.esc_at = 0.0
-        end
-        for t in toks
-            _ui_term_key!(r, inst, t)
-        end
+    bytes = try
+        _tb_drain!(r.backend)
+    catch e
+        e isa SshError || rethrow()
+        r.quit = :dismiss
+        UInt8[]
     end
-    if r.kp.state === :esc && r.esc_at > 0.0 && (time() - r.esc_at) >= 0.05
-        _kp_bare_escape!(r.kp)
-        r.esc_at = 0.0
-        _ui_term_key!(r, inst, :escape)
-    end
-    if inst.dirty || r.need_redraw
-        lock(inst.lock) do
+    # The instance's ticker applies finished background work on its own task; it
+    # takes the same lock, so the keys that mutate the tree and the draw that
+    # reads it never race a result being applied.
+    lock(inst.lock) do
+        # Feed one byte at a time and stop as soon as the renderer decides to
+        # quit: whatever follows (a whole line the user typed ahead) belongs to
+        # the REPL, so hand the unconsumed tail back to the backend.
+        done = () -> r.quit !== :none || inst.dismissed || inst.closed
+        i = 1
+        while i <= length(bytes) && !done()
+            keys = _ui_kp_feed!(r.kp, bytes[i])
+            i += 1
+            for k in keys
+                done() && break
+                _ui_term_key!(r, inst, k)
+            end
+        end
+        i <= length(bytes) && _tb_unread!(r.backend, @view bytes[i:end])
+        t = done() ? nothing : _ui_kp_timeout!(r.kp)
+        t === nothing || _ui_term_key!(r, inst, t)
+        if inst.dirty || r.need_redraw
             _ui_term_draw!(r, inst)
+            inst.dirty = false
         end
-        inst.dirty = false
     end
     return nothing
 end
 
-function _ui_term_run!(r::_TermRenderer, inst::_UiInstance)
+function _ui_term_run!(r::_TermRenderer, inst::_UiInstance;
+                       controller::Union{Nothing,Form} = nothing)
+    # Attaching the renderer comes first: the tree's ticker treats "no renderer
+    # and no work" as the end of a projection, so it must never see a window
+    # where the widget is built and nobody is watching it.
     _ui_attach!(r, inst)
-    print(r.io, "\e[?1049h")
-    print(r.io, "\e[?25l")
-    flush(r.io)
+    # A second attach to the same instance reuses its tree; clear the previous
+    # session's dismissal so it does not leave again immediately.
+    lock(inst.lock) do
+        inst.closed || (inst.dismissed = false)
+        c = _ui_tree(inst)
+        if c !== nothing && controller !== nothing
+            try
+                _comp_set_controller!(c, inst, controller)
+            catch e
+                e isa AirError || rethrow()
+            end
+        end
+        r.comp = c
+    end
+    _tb_enter!(r.backend)
+    _frame_reset!(r.frame)      # the alternate screen starts blank
     try
-        while !inst.dismissed && !inst.closed && r.quit === :none
+        while true
             _ui_term_tick!(r, inst)
+            (inst.dismissed || inst.closed || r.quit !== :none) && break
             sleep(0.01)
         end
     finally
+        # Leaving stops drawing, nothing more. The tree, its interaction state,
+        # and any running evaluation stay with the instance; the ticker applies
+        # a result and writes it to the widget's state even with nobody watching.
+        c = r.comp
+        r.comp = nothing
+        if c !== nothing
+            lock(inst.lock) do
+                try
+                    _comp_flush!(c, inst)
+                catch
+                end
+                # The controller leaves with the renderer, before the instance
+                # is detached: the element is no longer being shown, and doing
+                # it here keeps the ticker from releasing an ephemeral
+                # projection while a stale controller is still stored in it.
+                if controller !== nothing && !inst.closed
+                    try
+                        _comp_set_controller!(c, inst, nothing)
+                    catch
+                    end
+                end
+            end
+        end
         try
-            print(r.io, "\e[?25h")
-            print(r.io, "\e[?1049l")
-            flush(r.io)
+            _tb_leave!(r.backend)
         catch
         end
         _ui_detach!(r, inst)
@@ -663,25 +677,6 @@ end
 
 # ---- ui-show -----------------------------------------------------------------
 
-# Bytes the renderer consumes: any typed-ahead bytes the REPL pushed back, then
-# whatever the channel has. `nothing` when the channel is quiet.
-function _ssh_ui_readbyte!(out::_SshChannelIO)
-    if isempty(out.pending)
-        data = _ssh_read_available!(out.chan, out.inbuf)
-        data === nothing && return nothing
-        append!(out.pending, data)
-    end
-    return popfirst!(out.pending)
-end
-
-function _ssh_ui_resize!(out::_SshChannelIO)
-    size = _ssh_poll_channel!(out.session, out.cols[], out.rows[])
-    size === nothing && return nothing
-    size[1] > 0 && (out.cols[] = size[1])
-    size[2] > 0 && (out.rows[] = size[2])
-    return nothing
-end
-
 """
     (ui-show key)
 
@@ -693,13 +688,16 @@ function _bi_ui_show(env::Env, scope::Scope, call::FormContainer)
     _check_options(call, "ui-show", ())
     length(call.seq) == 2 || throw(AirEvalError("ui-show takes a UI instance key"))
     inst = _ui_lookup(env, air_reduce(env, scope, to_form(call.seq[2])))
+    # A registered connection knows which byte source this session is on; when
+    # there is none (a channel the connection registry never saw), fall back to
+    # the session's own channel.
+    h = _conn_current(env)
+    h === nothing || return _conn_attach!(env, scope, h, _ui_key_form(inst.key))
     out = _context(env).out
     (out isa _SshChannelIO && out.tty) || throw(AirThrown(_error_object(
         Form(Symbol(":no-renderer")),
         Form("ui-show requires an interactive terminal session"))))
-    r = _TermRenderer(out; cols = out.cols, rows = out.rows,
-                      readbyte = () -> _ssh_ui_readbyte!(out),
-                      resize = () -> _ssh_ui_resize!(out))
+    r = _TermRenderer(_SshBackend(out))
     return _ui_term_run!(r, inst)
 end
 special!(Symbol("ui-show"), _bi_ui_show)

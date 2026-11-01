@@ -88,6 +88,34 @@ travel with spawned tasks, so a `task` sees the same roots (see
 [Tasks](#tasks)).
 
 (using-use-and-import)=
+## Listing entries
+
+`ns-entries` lists a namespace's entries as data, filtered by permission:
+
+```air
+(ns-entries .util)
+# => ((entry name=:twice kind=:def owner=:air)
+#     (entry name=:answer kind=:val owner=:air)
+#     (entry name=:algebra kind=:sub owner=:air))
+(ns-entries .util src=true)   ; each entry also carries src="…" when it has one
+(ns-entry .util :twice)       ; one entry, or naught when it is absent
+```
+
+The optional target is a namespace path (the current namespace by default) and
+`src=true` adds the definition's stored source text. `name` is a **keyword**,
+not a bare symbol, so listing an entry named after a definition returns the name
+rather than reducing to that definition's value. `kind` is `:def`, `:val`,
+`:sub` (a subnamespace), `:proxy` (a lazily resolved import), or `:alias`;
+`doc=` is present when the definition has a docstring, and `owner=` names the
+entry's owner.
+
+Entries the caller may not read are **absent**, exactly as in `using` and `doc`
+listings — never blanked or greyed, so an unreadable entry and a `hide`d one look
+identical to a name that does not exist. A subnamespace is listed only when its
+own namespace is readable.
+
+The namespace browser in [User interfaces](ui.md) is a view over `ns-entries`.
+
 ## `using`, `use`, and `import`
 
 `(using spec… body…)` activates one namespace, or a list of them, for `body`:

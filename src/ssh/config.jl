@@ -209,6 +209,29 @@ end
 Read `id`'s SSH settings from their home: the `\$.config.ssh` namespace first,
 then the `ssh` val of `\$.config`. The namespace wins where both are present.
 """
+# Whether an interactive login opens the default UI (a shell with a browser and
+# a notebook in the home namespace). `ui=false` — or `ui=naught` — in the user's
+# `$.config.ssh` namespace, or in the `ssh` val of `$.config`, turns it off; an
+# absent setting leaves it on, and a non-interactive (no pty) session never gets
+# one either way.
+function _ssh_login_ui_enabled(env::Env, id::Symbol)
+    home = _user_home_path(env, id)
+    home === nothing && return false
+    ns_path = vcat(home, Symbol[Symbol("config"), Symbol("ssh")])
+    if _ns_lookup(env, ns_path) !== nothing
+        v = _ssh_ns_val(env, ns_path, Symbol("ui"))
+        v === nothing || return _ssh_ui_flag_on(v)
+    end
+    val = _ssh_ns_val(env, vcat(home, Symbol[Symbol("config")]), Symbol("ssh"))
+    if val isa FormContainer
+        v = _ssh_map_get(val, Symbol("ui"))
+        v === nothing || return _ssh_ui_flag_on(v)
+    end
+    return true
+end
+
+_ssh_ui_flag_on(v::Form) = !(isequal(v, naught) || _leafof(v) === false)
+
 function _ssh_user_config(env::Env, id::Symbol)
     home = _user_home_path(env, id)
     home === nothing && return SshUserConfig(SshKeyEntry[], Dict{Symbol,Any}())

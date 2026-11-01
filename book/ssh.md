@@ -70,6 +70,10 @@ call**, and `(ssh-server …)`'s own options are the same set:
 | `max-connections` | `4` | concurrent sessions per server |
 | `banner` | `"air ssh"` | the protocol banner |
 
+The same configuration also holds one login option: `ui=false` (or `ui=naught`)
+turns off the default UI an interactive login opens (see
+[Interactive UIs over SSH](#interactive-uis-over-ssh)).
+
 The host key is generated on first use and stored in the process database at
 `.sys.ssh.<key>`, so no file exists on disk and `(ssh-close! :myserver)` followed
 by a new `(ssh-server :myserver …)` is the same host. `(ssh-host-key :myserver)`
@@ -92,6 +96,9 @@ air> (def (twice ?x) (x * 2))
 naught
 air> (exit)
 ```
+
+An interactive login opens the default UI first, so this transcript is what
+remains after dismissing it (or what `ui=false` gives you directly).
 
 Public-key authentication is the only method; a password is never accepted and
 never offered. Every refusal — an unknown user, a wrong key, a user outside the
@@ -145,6 +152,46 @@ Output goes to the client: `(print …)`/`(println …)` in a session write to t
 channel, including from a `task` the session spawns. There is no
 non-interactive exec: `ssh host command` is refused (it opens a channel request
 air does not serve).
+
+### Interactive UIs over SSH
+
+Every SSH session is a **connection**: air records it under `.io.conn` as
+`(conn id=:s1 kind=:ssh user=:alice …)` while the channel is open and marks it
+closed afterwards, so the record outlives the socket. `(ui-connections)` lists
+the caller's live connections, and `(ui-attached)` names the widget on one.
+
+**An interactive login opens the default UI.** Before the REPL starts, the
+session attaches a fresh `(ui-shell)` — a tab shell with a browser and a scratch
+notebook in the user's home namespace — so the client lands on a tabbed UI
+rather than a bare prompt. `Esc` pops one layer at a time (a scroll view, then
+the active tab, then the UI); once the shell is dismissed the REPL takes over,
+and everything typed after the dismissing key is read as ordinary input.
+`(current-ui)` names the shell form for the whole session, so
+
+```air
+(val myshell (current-ui))
+```
+
+at the prompt keeps the widget (and its state) after the session ends. The shell
+is held on the session's task, so if nothing stores it, it is collected when the
+session ends. Opt out with `ui=false` (or `ui=naught`) in `$.config.ssh`, or in
+the `ssh` val of `$.config`; a non-interactive session (no pty, so `-T`, sftp,
+scp) never opens a UI either way:
+
+```air
+(namespace $.config.ssh
+  (val authorized-keys (…))
+  (val ui false))
+```
+
+`(ui-attach! widget)` with no connection attaches to the session's own channel
+— it takes over the alternate screen, draws the widget full-screen, and returns
+the REPL when the widget is dismissed. That is what `(ui-show key)` does, and
+what a composite widget such as `(ui-attach! (ui-shell))` gives you over SSH: a
+tabbed browser, notebook, and editor. Because the widget is durable data, a
+detach (`Esc` on the last tab, or `(ui-detach!)`) leaves the instance and its
+state in place, and a reattach restores it. See
+[User interfaces](ui.md#connections).
 
 ## Paths, directories, and files
 

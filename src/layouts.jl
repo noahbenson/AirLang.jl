@@ -107,6 +107,56 @@ function _layout_for(x::Form)
     end
 end
 
+"""
+    _layout_head(head) -> Union{Nothing,LayoutSpec}
+
+The newest layout declared for a call to `head`, ignoring the rest of the shape.
+The editor needs this: while a form is being typed there is no form to match a
+pattern against, only the head symbol and the columns on screen.
+"""
+function _layout_head(head::Symbol)
+    return lock(LAYOUTS_LOCK) do
+        for specs in (get(LAYOUTS, head, nothing), get(DEFAULT_LAYOUTS, head, nothing))
+            specs === nothing && continue
+            isempty(specs) && continue
+            return specs[end]
+        end
+        nothing
+    end
+end
+
+"""
+    _lo_inner(spec, col, aligncol) -> Int
+
+The continuation column a layout gives a form whose opening parenthesis is at
+0-based column `col` and whose last pinned head element starts at `aligncol`.
+Shared by the pretty printer and the editor's auto-indent so the two can never
+disagree.
+"""
+_lo_inner(spec::LayoutSpec, col::Integer, aligncol::Integer) =
+    max(spec.indent === :align ? aligncol : col + spec.indent, col + 1)
+
+"""
+    _lo_aligncol(col, heads) -> Int
+
+The align column for a form whose opener is at 0-based `col` and whose first
+`spec.head` sequence elements have the given flat spellings.
+"""
+function _lo_aligncol(col::Integer, heads)
+    cur = col + 1
+    aligncol = col + 2
+    first = true
+    for h in heads
+        if !first
+            cur += 1
+        end
+        first = false
+        aligncol = cur
+        cur += textwidth(h)
+    end
+    return aligncol
+end
+
 # ---- declaration -------------------------------------------------------------
 
 function _layout_int_opt(env::Env, scope::Scope, call::FormContainer, key::Symbol,
@@ -316,8 +366,7 @@ function _pretty_show_layout(io::IO, x::FormContainer, col::Integer,
         aligncol = cur
         cur = _pretty_show(io, fv, cur, width)
     end
-    inner = spec.indent === :align ? aligncol : col + spec.indent
-    inner = max(inner, col + 1)      # never back up past the opening "("
+    inner = _lo_inner(spec, col, aligncol)   # never back up past the opening "("
     for i in (npin + 1):n
         fv = to_form(x.seq[i])
         if first

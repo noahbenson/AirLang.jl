@@ -713,6 +713,73 @@ label unique to the instance and element, so retracting it never disturbs an
 equal fact asserted elsewhere. Assertions and callbacks run in the namespace and
 `val` bindings captured at instantiation.
 
+**Human interfaces (HUI).** On top of the `(ui …)` runtime, composite widgets
+are ordinary air values: a constructor creates a `mut` holding the widget's
+state and returns a `(ui KIND state=<mut> ns=<path> …)` form, so the form is the
+durable handle — `(val w (ui-notebook text="(+ 1 2)"))` keeps the widget, and
+`(ui-attach! w)` shows it. Constructors: `(ui-code [ns] text= state=)`,
+`(ui-editor [ns] target=sym text= state=)`, `(ui-notebook [ns] text= state=
+collapse-lines=20)`, `(ui-browser [root] root= state=)`, `(ui-shell state=)`, and
+`(ui-chat in= out= peer= state=)`. The kinds render through one interaction
+framework: styled lines with a role theme (`(ui-theme)`, `(ui-theme! role=entry
+… [theme] reset=true)`, `(ui-style role)`, and a per-widget `theme=` map
+installed only while that widget draws; an entry is a bare fg color or a map of
+`fg=`/`color=`, `bg=`, `bold=`, `dim=`, `italic=`, `underline=`, and `reverse=`
+changes on an inherited role, `ui-theme` prints a bare color only when the fg is
+the role's sole departure from plain text and a field map otherwise, and
+`ui-theme!` takes a whole saved palette — `(theme …)` — positionally so
+`(ui-theme! reset=true (ui-theme))` round-trips), a terminal key model (CR is
+Enter, LF is Ctrl-J,
+`ESC [`-sequences are editing keys, `ESC` plus a printable is Alt-`c`, bracketed
+paste is one event), and one text buffer with layout-driven automatic
+indentation, bracket pairing, and syntax highlighting. Keys never indent: Tab /
+Shift-Tab switch tabs, Alt-1…9 select one, Ctrl-J runs/saves/sends, Ctrl-R runs
+every notebook cell in order (one at a time; refused while a cell is in flight),
+Ctrl-O/Alt-O clear the active cell's/all cells' output, Ctrl-G and Alt-G insert a
+notebook cell below/above, Ctrl-V and Alt-V jump a cell or message,
+PageUp/PageDown page, and Esc pops exactly one layer (a scroll view, then the
+tab — confirming when it would discard edits — then the UI). A notebook cell
+records the input text that produced its output, so an edited cell shows its
+output muted (stale) until re-run, and a code widget stores its output with its
+text so it reopens showing it; a code buffer will not run unless the reader
+reports it closed. A fresh shell opens its default tabs only when a renderer
+starts it, so a headless render shows none. The browser's Ctrl-J opens the editor for a `def` and
+a notebook (seeded with its name) for a `val`; Alt-J opens a `val`'s definition.
+A **chat** takes a *pair* of streams the caller wires (`in=` receives, `out=`
+posts, both required). Messages render as cells with `user_bg`/`peer_bg`
+tints; Enter inserts a newline and Ctrl-J sends; a draft beginning with `(` is
+**code mode** — it is logged on the sender's side only, evaluated in the chat's
+namespace, and only the result is logged on both sides and posted. A pump task
+fetches `in=` with a short timeout from the widget's first build until it is
+closed (not on attach/detach). An evaluation runs as a background job — the
+frame stays live, the status row names it, and the instance's own ticker applies
+the result with no renderer attached, storing it in the widget's state;
+dismissing neither waits for nor stops the job, and Ctrl-C raises `:ctrl-c`
+without aborting it. The status row right-aligns whole key hints only (each has
+a long and a short spelling; short is used only when it fits strictly more),
+and the terminal writer remembers the last frame and sends only the rows whose
+text changed. Connections are
+inert records under `.io.conn` (`(conn id= kind= user= since= attached= closed=)`,
+`read=_`, `write=owner`); `(ui-attach! [conn] widget)`, `(ui-detach! [conn])`,
+`(ui-attached)`, `(ui-connection)`, and `(ui-connections)` drive them, `ui-show`
+attaches the caller's own connection, and one widget renders per connection.
+A connection renders one `ui` element at a time, and the element is ordinary
+air data: the attach records the connection in the element's state
+transactionally as `controller=`, and detaching or closing clears that field
+without deleting the element. Attaching a raw `(ui …)` form makes an ephemeral
+*projection* — an unregistered instance the ticker retracts only when no
+renderer and no job remain, so a running job's result is written first — while
+`ui-open`'s named instance survives; `(ui-attached)` returns the form for a
+projection and the key for an instance. `(current-ui)` is bound to the
+instance's form around every evaluation it runs. An interactive SSH pty login
+opens a default `(ui-shell)` (browser and notebook in `$`) held on the session
+task, so it is collected when the session ends unless the user stores the form;
+`ui=false` (or `ui=naught`) in `$.config.ssh`, or in the `ssh` val of
+`$.config`, opts out, and a non-pty session never gets one. `ns-entries` and
+`ns-entry` list namespace entries as
+`(entry name=:sym kind=:def|:val|:sub|:proxy|:alias owner= doc= src=)`, omitting
+unreadable and hidden entries.
+
 **Agents and channels.** A user record carries `kind=:human|:agent` (the default
 is `:human`; `create-user` and `create-constituent` are always human).
 `(create-agent :bot provider=:fireworks model="…" api-key="…" …)` creates an
