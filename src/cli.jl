@@ -98,8 +98,13 @@ function _serve_forever()
 end
 
 function _serve_loop()
+    # A redirected stdout and stderr are buffered, so a startup file's output and
+    # the server's debug diagnostics can sit unseen in `docker compose logs` for
+    # a long time; flush once a second so a running server's log is readable.
     println(stderr, "air: serving; press Ctrl-C (SIGINT) to stop")
     while true
-        sleep(3600)
+        flush(stdout)
+        flush(stderr)
+        sleep(1)
     end
 end

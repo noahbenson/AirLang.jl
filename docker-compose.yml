@@ -42,6 +42,10 @@ services:
       PGUSER: air
       PGPASSWORD: air
       PGDATABASE: air
+      # Every SSH refusal is silent on the wire by design; the reason is logged
+      # at debug level. `JULIA_DEBUG=AirLang docker compose up -d` surfaces it
+      # in `docker compose logs air`.
+      JULIA_DEBUG: ${JULIA_DEBUG:-}
     ports:
       - "2222:2222"
     volumes:
@@ -50,6 +54,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # air loads the interpreter and evaluates `startup.air` before it opens
+      # port 2222 (a few seconds), but Docker publishes the port as soon as the
+      # container starts. A connection in that window is accepted by the
+      # Docker proxy and reset during key exchange, which an SSH client reports
+      # as an immediate close. This makes readiness visible: `docker compose up
+      # -d --wait` blocks until the port answers, and `docker compose ps` shows
+      # (healthy). `/dev/tcp` tests the port without spawning a process.
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/2222'"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
     working_dir: /work
 
   postgres:

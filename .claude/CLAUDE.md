@@ -682,7 +682,12 @@ a directory is a namespace and a file is an immutable **`bytes`** val
 `bytes-slice`, `bytes?`; content equality, `#<bytes N>` printing). Remote paths
 split on `.` and `/`, a leading one is root-absolute, `..` is rejected, and an
 upload is buffered and committed whole at `CLOSE` (no exec, no recursive
-delete).
+delete). A refusal is silent on the wire; the refused stage and reason are
+logged at debug level (`JULIA_DEBUG=AirLang`). A session resolves the user's
+home and `$.config.ssh` through the database root captured when the server
+started, so a server over an opened database admits that database's users.
+`bind="::"` listens dual-stack and is needed when a container's port is
+published on both families (`ssh localhost` tries `::1` first).
 
 **User interfaces.** `ui` is a reserved inert head, so `(ui KIND params… children…)`
 never reduces at any depth and a UI tree is data; `ui-open` evaluates its

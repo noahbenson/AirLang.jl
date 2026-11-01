@@ -112,22 +112,37 @@ sidecar, and brings up air as an SSH server:
 
 ```bash
 docker compose up -d --build         # air (SSH on :2222) plus PostgreSQL
+docker compose up -d --wait          # ...and block until air is listening
 docker compose logs -f air           # follow the air log
 docker compose down                  # stop both; the database volume survives
 ```
 
+`docker compose up -d` publishes port 2222 at once but air takes a few seconds
+to load the interpreter and evaluate `startup.air` before it listens. A
+connection in that window is accepted by Docker's proxy and reset during key
+exchange, so `ssh` reports an immediate close; `--wait` blocks on the compose
+healthcheck until the port answers, and `ssh -v` shows the same window as
+`kex_exchange_identification: read: Connection reset by peer`.
+
 `docker compose up -d` runs `air --serve startup.air` in the container; add
 `--build` on the first run and after changing the image's source. The
 repository's `startup.air` opens the PostgreSQL sidecar as the namespace `.db`,
-creates an example user `:alice` with a placeholder SSH key, and starts
-`(ssh-server :sshd port=2222 bind="0.0.0.0")`; compose publishes port 2222 and
-mounts `./lib` at `/air/lib`, the first `AIR_LIBPATH` entry. Edit `startup.air`
-to install your own public key (replace the base64 blob with the contents of
+creates an example user with a placeholder SSH key, and starts
+`(ssh-server :sshd port=2222 bind="::")`; compose publishes port 2222 and mounts
+`./lib` at `/air/lib`, the first `AIR_LIBPATH` entry. Edit `startup.air` to set
+your own user name and public key (replace the base64 blob with the contents of
 `~/.ssh/id_ed25519.pub`), then `docker compose restart air`. Log in with:
 
 ```bash
-ssh -p 2222 alice@localhost
+ssh -p 2222 <your-user>@localhost
 ```
+
+`::` is dual-stack: `ssh localhost` tries `::1` before `127.0.0.1`, and a server
+bound only to `0.0.0.0` (IPv4) leaves Docker's proxy with nowhere to send the
+IPv6 attempt, which the client reports as an immediate close during key
+exchange. Every SSH refusal is silent on the wire by design; to see why one
+failed, run `JULIA_DEBUG=AirLang docker compose up -d` and follow
+`docker compose logs -f air`.
 
 `--serve` is the one CLI flag the container needs: it runs the files and `-e`
 chunks, then keeps the process alive so its `ssh-server` (and any other process

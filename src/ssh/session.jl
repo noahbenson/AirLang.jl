@@ -38,10 +38,14 @@ here; a failure ends this connection only.
 function _ssh_session!(server::_SshServer, sock)
     fd = ccall(:dup, Cint, (Cint,), _ssh_fd(sock))
     close(sock)
-    fd < 0 && return nothing
+    if fd < 0
+        @debug "air ssh connection dropped: the socket could not be duplicated"
+        return nothing
+    end
     session = _ls_new()
     if session == C_NULL
         ccall(:close, Cint, (Cint,), fd)
+        @debug "air ssh connection dropped: libssh could not allocate a session"
         return nothing
     end
     chan = C_NULL
@@ -56,15 +60,41 @@ function _ssh_session!(server::_SshServer, sock)
         _ls_set_timeout(session, _SSH_HANDSHAKE_TIMEOUT)
         rc = _ls_bind_accept_fd(server.bindptr, session, fd)
         owned = !(fd > 0 && Int(_ls_get_fd(session)) == fd)
-        rc == SSH_ERROR && return nothing
-        _ls_handle_key_exchange(session) == SSH_ERROR && return nothing
-        auth = _ssh_auth_new(server.env, server)
-        _ssh_authenticate!(auth, session) || return nothing
-        id = auth.claimed
-        id === nothing && return nothing
-        chan = _ssh_channel_open!(session)
-        chan == C_NULL && return nothing
-        _ssh_serve!(server, session, chan, id)
+        if rc == SSH_ERROR
+            @debug "air ssh connection dropped during accept" error = _ssh_error(server.bindptr)
+            return nothing
+        end
+        if _ls_handle_key_exchange(session) == SSH_ERROR
+            @debug "air ssh connection dropped during key exchange" error = _ssh_error(session)
+            return nothing
+        end
+        # A session task has no context of its own, so give it the server's
+        # captured database root. `_ssh_admit` reads a user's `$.config.ssh` as
+        # that user and the subsystem starts in their home; both paths resolve
+        # through `@`, and without this the session would look in the process
+        # store instead of the database the server was started over. The context
+        # is per task, so setting `user` inside it does not disturb anyone else.
+        ctx = TaskContext(server.owner, nothing, server.dbroot, naught)
+        run_session = function ()
+            auth = _ssh_auth_new(server.env, server)
+            if !_ssh_authenticate!(auth, session)
+                @debug "air ssh connection dropped: authentication failed" failures = auth.failures
+                return nothing
+            end
+            id = auth.claimed
+            if id === nothing
+                @debug "air ssh connection dropped: authentication completed without a user"
+                return nothing
+            end
+            chan = _ssh_channel_open!(session)
+            if chan == C_NULL
+                @debug "air ssh connection dropped: no session channel" user = id
+                return nothing
+            end
+            _ssh_serve!(server, session, chan, id)
+            return nothing
+        end
+        _with_context(server.env, ctx, run_session)
     catch e
         # A client's failure is that client's problem; it never reaches the
         # server's task. `@debug` keeps the diagnosis reachable without making a
@@ -198,10 +228,16 @@ end
 function _ssh_serve!(server::_SshServer, session::Ptr{Cvoid}, chan::Ptr{Cvoid},
                      id::Symbol)
     kind, cols, rows, tty = _ssh_channel_kind!(session, chan)
-    kind === nothing && return nothing
+    if kind === nothing
+        @debug "air ssh session ended: no shell or sftp request" user = id
+        return nothing
+    end
     env = _session_env(server.env)
     home = _home_ns(env, id)
-    home === nothing && return nothing
+    if home === nothing
+        @debug "air ssh session ended: user has no home namespace" user = id
+        return nothing
+    end
     _ls_set_blocking(session, false)
     if kind === :sftp
         ctx = TaskContext(id, home, server.dbroot, naught)

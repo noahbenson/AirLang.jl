@@ -376,3 +376,51 @@ _ssh_sftp_cmd(port::Integer, key::AbstractString, batchfile::AbstractString,
         end
     end
 end
+
+# A server started over an attached database admits a user whose record lives in
+# that database (`@.user`) and reads the user's `$.config.ssh` and home from
+# there. The session task has no context of its own, so this is the regression
+# test from `docker compose up`: without the server's captured database root the
+# session looked in the process store, found no user record, and refused every
+# key (the client reported "Permission denied (publickey)").
+@testset "ssh attached database" begin
+    if _ssh_client_works()
+        env2 = default_env()
+        ev2(s) = air_string(air_eval(env2, read_air(s)))
+        dir2 = mktempdir()
+        keypath = joinpath(dir2, "quinn")
+        run(pipeline(ignorestatus(`$(_ssh_binary(:ssh_keygen)) -q -t ed25519 -N "" -f $keypath`),
+                     stdout = devnull, stderr = devnull))
+        quinnpub = strip(read(keypath * ".pub", String))
+        try
+            @test occursin("mut", ev2("(open-airdb .m memory=true)"))
+            @test ev2("(create-user :quinn)") == ":quinn"
+            @test ev2("(as-user :quinn (namespace \$.config.ssh " *
+                      "(val authorized-keys (\"$quinnpub\"))))") == "naught"
+            @test ev2("(ssh-server :dbt port=0)") == ":dbt"
+            port = parse(Int, ev2("(get (ssh-servers) :dbt :port)"))
+            out, err, rc = _ssh_run(_ssh_client_cmd(port, keypath, "quinn");
+                                    input = "(current-user)\n(exit)\n")
+            @test rc == 0
+            @test occursin(":quinn", out)
+            # The home the session starts in is the attached database's, so a
+            # def typed at the prompt is there for the next session.
+            out, err, rc = _ssh_run(_ssh_client_cmd(port, keypath, "quinn");
+                                    input = "(def (thrice ?x) (x * 3))\n(exit)\n")
+            @test rc == 0
+            out, err, rc = _ssh_run(_ssh_client_cmd(port, keypath, "quinn");
+                                    input = "(thrice 2)\n(exit)\n")
+            @test rc == 0
+            @test occursin("6", out)
+        finally
+            try
+                air_eval(env2, read_air("(ssh-close! :dbt)"))
+            catch
+            end
+            try
+                air_eval(env2, read_air("(close-airdb .m)"))
+            catch
+            end
+        end
+    end
+end

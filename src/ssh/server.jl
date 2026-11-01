@@ -261,11 +261,22 @@ function _ssh_accept_loop(server::_SshServer)
                 # `ssh-close!` closes the listener, and `accept` then throws.
                 break
             end
-            if length(server.sessions) >= server.max_connections
+            n = lock(server.lock) do
+                length(server.sessions)
+            end
+            if n >= server.max_connections
+                @debug "air ssh connection refused: max-connections reached" connections = n
                 try close(sock) catch end
                 continue
             end
-            t = @async begin
+            # Register the task from inside itself: the accept loop used to push
+            # after `@async`, so a session that failed immediately could finish
+            # and delete itself before the push, leaving a dead task counted
+            # forever (and eventually closing every connection).
+            @async begin
+                lock(server.lock) do
+                    push!(server.sessions, current_task())
+                end
                 try
                     _ssh_session!(server, sock)
                 catch e
@@ -277,9 +288,6 @@ function _ssh_accept_loop(server::_SshServer)
                         delete!(server.sessions, current_task())
                     end
                 end
-            end
-            lock(server.lock) do
-                push!(server.sessions, t)
             end
         end
     finally

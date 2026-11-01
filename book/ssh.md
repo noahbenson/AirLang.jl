@@ -99,6 +99,31 @@ server's scope, a malformed config — looks the same to the client, so the serv
 does not enumerate its users, and the connection is dropped after six failed
 attempts.
 
+Because a refusal says nothing on the wire, the diagnosis is a log line: the
+server records every refused attempt and every dropped connection, with its
+stage and reason, at debug level. Set `JULIA_DEBUG=AirLang` on the server
+process (`JULIA_DEBUG=all` also works) to see it:
+
+```text
+┌ Debug: air ssh refused a public-key attempt
+│   reason = "the offered ssh-ed25519 key is not among :alice's authorized keys"
+└ @ AirLang …/src/ssh/auth.jl
+```
+
+A client that reports `Connection closed by remote host` *during key exchange*
+usually did not reach air's SSH server at all — for instance, a Docker port
+published for a container whose server bound only `0.0.0.0`, while `ssh
+localhost` tries `::1` first. Bind `"::"` to listen dual-stack; the container's
+`startup.air` does. The same symptom appears while the server is still starting:
+air loads the interpreter and evaluates `startup.air` for a few seconds before
+`(ssh-server …)` opens the port, but Docker publishes the port as soon as the
+container starts, so an early connection is accepted by the proxy and reset
+during key exchange.
+`ssh -v` distinguishes the two kinds of failure — a reset or close during key
+exchange is "not listening yet" (or the wrong address family), while
+`Permission denied (publickey)` after a completed handshake is a refusal whose
+reason is in the debug log.
+
 ## The remote REPL
 
 The session is the local REPL with a line editor: history (Up/Down), `Ctrl-A`,

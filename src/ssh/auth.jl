@@ -93,6 +93,24 @@ function _ssh_admit(auth::_SshAuth, id::Symbol)
     return isempty(keys) ? nothing : keys
 end
 
+# Why an attempt was refused, written to the log and never to the client: every
+# refusal must look identical on the wire, so the diagnosis lives here instead.
+function _ssh_refusal_reason(auth::_SshAuth, name, id, entries, key::Ptr{Cvoid})
+    name === nothing && return "the client did not name a user"
+    id === nothing &&
+        return "the client name $(repr(String(name))) is not a valid user id"
+    (id in auth.admitted) || return "user :$id is outside the server's scope"
+    entries === nothing &&
+        return "user :$id has no readable authorized-keys (a config error is logged above)"
+    isempty(entries) && return "user :$id has no authorized keys"
+    key == C_NULL && return "no public key was offered"
+    type_name, _ = _ls_public_identity(key)
+    allowed = auth.server.key_types
+    (isempty(allowed) || type_name in allowed) &&
+        return "the offered $(type_name) key is not among :$id's authorized keys"
+    return "the offered key type $(type_name) is not in the server's key-types"
+end
+
 """
     _ssh_handle_auth!(auth, message) -> Bool
 
@@ -138,6 +156,8 @@ function _ssh_handle_auth!(auth::_SshAuth, message::Ptr{Cvoid})
         _ls_auth_reply_pk_ok(message)
         return false
     end
+    @debug "air ssh refused a public-key attempt" reason = _ssh_refusal_reason(
+        auth, name, id, entries, key)
     _ls_message_reply_default(message)
     auth.failures += 1
     return false

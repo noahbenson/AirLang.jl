@@ -154,6 +154,7 @@ The host's `lib/` is mounted at `/air/lib` and used as air's library path.
 
 ```bash
 docker compose up -d --build   # air serving SSH on :2222, plus PostgreSQL
+docker compose up -d --wait    # ...and block until it is listening
 docker compose logs -f air     # watch the startup log
 docker compose run --rm air -e '(+ 1 2)'   # one-off command, same mounts
 ./bin/air-docker               # an interactive REPL in the container
@@ -162,15 +163,27 @@ docker compose run --rm air -e '(+ 1 2)'   # one-off command, same mounts
 `--build` is needed on the first run and after changing the image's source;
 `docker compose up -d` alone starts an image that already exists.
 
+The container publishes port 2222 immediately, but air loads the interpreter
+and evaluates `startup.air` before it listens — a few seconds. A connection
+during that window is accepted by Docker's proxy and closed during key exchange,
+which `ssh` reports as an immediate close. `--wait` blocks on the compose
+healthcheck until the port answers; without it, wait for `air is serving SSH on
+port 2222` in `docker compose logs -f air`.
+
 The container runs `air --serve startup.air` from the repository root. That
 file opens the PostgreSQL sidecar as the namespace `.db`, creates an example
-user `:alice` with a **placeholder** SSH key, and starts an SSH server on port
-2222 (published by compose). Replace the placeholder key in `startup.air` with
-your own, then `docker compose restart air` and log in:
+user with a **placeholder** SSH key, and starts an SSH server on port 2222
+(published by compose), bound dual-stack so both `ssh localhost` (which tries
+`::1` first) and `127.0.0.1` reach it. Replace the user name and placeholder key
+in `startup.air` with your own, then `docker compose restart air` and log in:
 
 ```bash
-ssh -p 2222 alice@localhost
+ssh -p 2222 <your-user>@localhost
 ```
+
+Every SSH refusal is silent on the wire by design; to see why a login failed,
+start the stack as `JULIA_DEBUG=AirLang docker compose up -d` and watch
+`docker compose logs -f air`.
 
 `--serve` runs the files and `-e` chunks, then keeps the process alive so the
 SSH server keeps listening until SIGINT/SIGTERM.

@@ -77,6 +77,49 @@ include("jobs.jl")
 include("events.jl")
 include("cli.jl")
 
+import PrecompileTools
+
+# Compile the interpreter's hot path into the package image. Constructing an
+# environment and evaluating one definition reaches the reducer, the evaluator,
+# `def`, and the bootstrap transaction — several very large methods whose first
+# call otherwise costs ~30 s in the JIT, once per process. `@compile_workload`
+# runs only while the package is being precompiled, and it also records the
+# dynamically dispatched callees that plain compilation would miss.
+#
+# The script below is a compressed `startup.air`: it goes through the same
+# loader (one transaction over the whole source), creates a user, writes a
+# `val` into a config namespace, opens and closes a database root, and starts
+# and stops an SSH server. Those are the other few seconds of first-use
+# compilation a serving process pays. Nothing here touches the host: the env is
+# a throwaway in-memory database, `memory=true` opens a second one, and the
+# server takes a free port and is closed before the workload ends.
+PrecompileTools.@compile_workload begin
+    let env = Env()
+        air_eval(env, read_air("(def (air-precompile-sentinel ?x) x)"))
+        air_string(air_eval(env, read_air("(+ 1 2)")))
+        _load_air_source(env, """
+            (create-user :air-precompile-user)
+            (as-user :air-precompile-user
+                (namespace \$.config.ssh (val authorized-keys ())))
+            (open-airdb .air-precompile-db memory=true)
+            (close-airdb .air-precompile-db)
+            """, "<precompile>")
+        _resume_jobs_quietly!(env)
+        # `__init__` has not run at precompile time, so make libssh available
+        # explicitly. The block is guarded because a host where libssh cannot
+        # be loaded should still precompile — the server itself raises a
+        # catchable error at run time there.
+        try
+            _ssh_init!()
+            _load_air_source(env, """
+                (ssh-server :air-precompile-sshd port=0 bind="127.0.0.1")
+                (ssh-close! :air-precompile-sshd)
+                """, "<precompile>")
+        catch
+        end
+    end
+end
+
 export read_air, read_all_air, air_eval, air_repl, air_main, air_string,
     air_pretty_string,
     default_env, Env, Scope, Rule, RuleStore, canonicalize, truthy, naught,
