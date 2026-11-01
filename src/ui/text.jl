@@ -487,10 +487,13 @@ end
 
 # ---- indentation of a whole line --------------------------------------------
 
-# Set the current line's leading whitespace to exactly `n` spaces, keeping the
-# cursor on the same character where possible.
-function _tb_reindent!(b::_TextBuffer, n::Int)
-    line = b.lines[b.row]
+# Set a line's leading whitespace to exactly `n` spaces, keeping the cursor and
+# the selection anchor on the same character where possible. This is the raw
+# form used by automatic reindentation (which is part of an edit that already
+# took its undo snapshot).
+function _tb_set_indent!(b::_TextBuffer, row::Int, n::Int)
+    (1 <= row <= length(b.lines)) || return false
+    line = b.lines[row]
     k = 0
     while k < length(line) && (line[k + 1] == ' ' || line[k + 1] == '\t')
         k += 1
@@ -498,11 +501,19 @@ function _tb_reindent!(b::_TextBuffer, n::Int)
     n = max(n, 0)
     k == n && return false
     body = line[k+1:end]
-    b.lines[b.row] = vcat(Char[' ' for _ in 1:n], body)
-    b.col = clamp(b.col - k + n, 0, length(b.lines[b.row]))
-    b.goal = -1
+    b.lines[row] = vcat(Char[' ' for _ in 1:n], body)
+    shift = n - k
+    b.row == row && (b.col = clamp(b.col + shift, 0, length(b.lines[row])))
+    if b.anchor !== nothing && b.anchor[1] == row
+        b.anchor = (row, clamp(b.anchor[2] + shift, 0, length(b.lines[row])))
+    end
+    b.row == row && (b.goal = -1)
     return true
 end
+
+# Set the current line's leading whitespace to exactly `n` spaces, keeping the
+# cursor on the same character where possible.
+_tb_reindent!(b::_TextBuffer, n::Int) = _tb_set_indent!(b, b.row, n)
 
 _tb_leading_spaces(b::_TextBuffer, row::Int = b.row) =
     (line = b.lines[row]; k = 0;

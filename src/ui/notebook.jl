@@ -27,11 +27,13 @@ mutable struct _Notebook <: _Comp
     cells::Vector{_CodeBlock}
     active::Int
     collapse::Int                   # lines shown for a long cell
-    mode::Symbol                    # :nav (the document) | :scroll (one cell)
+    mode::Symbol                    # :nav (editing) | :scroll (one cell) | :select
     width::Int
     cur_row::Int                    # the cursor's document row, from the last draw
     cur_col::Int
     queue::Vector{Int}              # cells waiting for run-all, in order
+    chord::Char                     # a pending two-key command, '\0' for none
+    last_deleted::Union{Nothing,Tuple{Int,_CodeBlock}}
 end
 
 _comp_title(c::_Notebook) = "notebook"
@@ -70,7 +72,8 @@ function _comp_notebook(inst::_UiInstance, node::_UiNode)
     f = get(node.params, _map_key(Symbol(":collapse-lines")), nothing)
     collapse = f === nothing ? 20 : (l = _leafof(f); l isa Real ? Int(l) : 20)
     base = _CompBase(node; state = state, nspath = nspath)
-    c = _Notebook(base, _CodeBlock[], 1, max(collapse, 4), :nav, 80, 0, 2, Int[])
+    c = _Notebook(base, _CodeBlock[], 1, max(collapse, 4), :nav, 80, 0, 2, Int[],
+                  '\0', nothing)
     active = 1
     v = _comp_state_value(inst, state)
     if v !== nothing
@@ -164,7 +167,7 @@ function _nb_run_all!(c::_Notebook, inst::_UiInstance)
         c.base.status = "no cells to run"
         return nothing
     end
-    c.mode = :nav                       # run-all reads as a document action
+    c.mode === :scroll && (c.mode = :nav)   # run-all is not a per-cell view
     c.base.status = ""
     _nb_run_next!(c, inst)
     return nothing
@@ -225,18 +228,19 @@ function _nb_window(n::Int, row::Int, collapse::Int, active::Bool)
     return (from, from + collapse - 1, from - 1, n - (from + collapse - 1))
 end
 
-_nb_gutter(active::Bool) =
+_nb_gutter(active::Bool, select::Bool = false) =
+    select && active ? _UiSpan("▌ ", _ui_role(:selection)) :
     _UiSpan(active ? "▌ " : "│ ", _ui_role(active ? :accent : :border))
 
 function _nb_push_cell!(c::_Notebook, doc::Vector{_UiLine}, cell::_CodeBlock,
                         is_active::Bool, full::Bool)
     b = cell.buf
     text = _tb_text(b)
-    hl = _hl_lines(text)
+    hl = _cb_render_lines(cell, is_active)
     n = _tb_nlines(b)
     (from, to, above, below) = full ? (1, n, 0, 0) :
         _nb_window(n, is_active ? b.row : 1, c.collapse, is_active)
-    gut = _nb_gutter(is_active)
+    gut = _nb_gutter(is_active, !full && c.mode === :select)
     above > 0 && push!(doc, _ui_styled([gut, _UiSpan(
         string("… ", above, " lines above"), _ui_role(:muted))]))
     for k in from:to
@@ -249,7 +253,7 @@ function _nb_push_cell!(c::_Notebook, doc::Vector{_UiLine}, cell::_CodeBlock,
     end
     below > 0 && push!(doc, _ui_styled([gut, _UiSpan(
         string("… ", below, " more lines — enter to open"), _ui_role(:muted))]))
-    if !isempty(cell.out)
+    if !isempty(cell.out) || cell.elapsed !== nothing
         stale = cell.out_for != text
         push!(doc, _ui_styled(vcat([gut,
             _ui_ruler(max(c.width - 3, 8), cell.elapsed; stale = stale).spans...])))
@@ -278,13 +282,22 @@ function _comp_lines(c::_Notebook, inst::_UiInstance, width::Int)
     return doc
 end
 
-_comp_cursor(c::_Notebook, inst::_UiInstance) = (c.cur_row, c.cur_col)
+_comp_cursor(c::_Notebook, inst::_UiInstance) =
+    c.mode === :select ? nothing : (c.cur_row, c.cur_col)
 
 _comp_dirty(c::_Notebook, inst::_UiInstance) =
     any(cell -> _tb_text(cell.buf) != cell.saved, c.cells)
 
 function _comp_status(c::_Notebook, inst::_UiInstance)
     isempty(c.base.status) || return c.base.status
+    if c.mode === :select
+        s = string("cell ", c.active, "/", length(c.cells), "  ·  select")
+        if c.chord != '\0'
+            what = c.chord == 'd' ? "delete" : "interrupt"
+            s *= string("  ·  ", c.chord, "… (", c.chord, ": ", what, ")")
+        end
+        return s
+    end
     cell = c.cells[c.active]
     v = _ui_closure(_tb_text(cell.buf))
     verdict = v[1] === :ok ? "closed" :
@@ -309,8 +322,12 @@ end
 
 _comp_hints(c::_Notebook) =
     c.mode === :scroll ? ["ctrl-j: run" => "^J run", "esc: document" => "esc"] :
-    ["ctrl-j: run" => "^J run", "ctrl-r: all" => "^R all",
-     "ctrl-g/alt-g: insert" => "^G/alt-G cell", "ctrl-o: clear" => "^O clear"]
+    c.mode === :select ?
+        ["enter: edit" => "enter", "j/k: cell" => "j/k",
+         "a/b: insert" => "a/b", "i,i: interrupt" => "i,i",
+         "ctrl-j: run" => "^J run", "esc: close" => "esc"] :
+        ["ctrl-j: run" => "^J run", "ctrl-shift-j: run & next" => "^J next",
+         "ctrl-r: all" => "^R all", "esc: select" => "esc"]
 
 # ---- cell motion -------------------------------------------------------------
 
@@ -361,6 +378,99 @@ function _nb_insert!(c::_Notebook, inst::_UiInstance, after::Int)
     return nothing
 end
 
+# ---- running a cell from the document ----------------------------------------
+
+# Run the active cell in place (the notebook's Ctrl-J); true when a job started.
+# A refused run (unclosed input) leaves its explanation as the status.
+function _nb_run_active!(c::_Notebook, inst::_UiInstance)
+    if _comp_running(c)
+        c.base.status = "a cell is still running"
+        return false
+    end
+    cell = c.cells[c.active]
+    _cb_run!(cell, inst)
+    c.base.status = cell.base.status
+    _nb_store!(c, inst)
+    return _comp_running(cell)
+end
+
+# Ctrl-Shift-J / Alt-Enter: run the active cell, then move to the cell below —
+# inserting one when the active cell is the last. `mode` is `:nav` when the
+# document was being edited and `:select` when a cell was selected.
+function _nb_run_advance!(c::_Notebook, inst::_UiInstance, mode::Symbol)
+    _nb_run_active!(c, inst) || return nothing
+    i = c.active < length(c.cells) ? c.active + 1 : 0
+    if i == 0
+        push!(c.cells, _nb_new_cell(inst, c.base.nspath))
+        i = length(c.cells)
+    end
+    c.active = i
+    c.mode = mode
+    _nb_place!(c.cells[i].buf, :first)
+    _nb_store!(c, inst)
+    return nothing
+end
+
+# ---- delete, restore, and interrupt ------------------------------------------
+
+# Remove the active cell and keep it for `z`; deleting the only cell clears it
+# instead, since a notebook always has a cell to type in.
+function _nb_delete!(c::_Notebook, inst::_UiInstance)
+    pos = c.active
+    if length(c.cells) == 1
+        cell = c.cells[1]
+        if _comp_running(cell)
+            c.base.status = "a cell is still running"
+            return nothing
+        end
+        _tb_set_text!(cell.buf, "")
+        cell.saved = ""
+        empty!(cell.out)
+        cell.out_for = ""
+        cell.failed = false
+        cell.elapsed = nothing
+        cell.base.status = ""
+        c.base.status = "cleared the last cell"
+        _nb_store!(c, inst)
+        return nothing
+    end
+    cell = c.cells[pos]
+    deleteat!(c.cells, pos)
+    c.queue = [q > pos ? q - 1 : q for q in c.queue if q != pos]
+    c.last_deleted = (pos, cell)
+    c.active = clamp(pos, 1, length(c.cells))
+    c.base.status = "deleted a cell — z restores it"
+    _nb_store!(c, inst)
+    return nothing
+end
+
+# `z`: put the last deleted cell back where it was.
+function _nb_restore_deleted!(c::_Notebook, inst::_UiInstance)
+    c.last_deleted === nothing && (c.base.status = "nothing to restore")
+    d = c.last_deleted
+    d === nothing && return nothing
+    c.last_deleted = nothing
+    pos = clamp(d[1], 1, length(c.cells) + 1)
+    insert!(c.cells, pos, d[2])
+    c.queue = [q >= pos ? q + 1 : q for q in c.queue]
+    c.active = pos
+    c.base.status = "restored a cell"
+    _nb_store!(c, inst)
+    return nothing
+end
+
+# `i,i`: stop the running cell (its job's token makes Air's blocking primitives
+# and the evaluation loop yield) and abandon any queued run-all.
+function _nb_interrupt!(c::_Notebook, inst::_UiInstance)
+    empty!(c.queue)
+    n = 0
+    for cell in c.cells
+        _comp_cancel_job!(cell) && (n += 1)
+    end
+    c.base.status = n == 0 ? "nothing to interrupt" : "interrupting…"
+    return nothing
+end
+
 # ---- keys --------------------------------------------------------------------
 
 function _comp_key!(c::_Notebook, inst::_UiInstance, k::_UiKey)
@@ -372,6 +482,7 @@ function _comp_key!(c::_Notebook, inst::_UiInstance, k::_UiKey)
         res = _comp_key!(cell, inst, k)
         return res === :bubble ? :bubble : :handled
     end
+    c.mode === :select && return _nb_select_key!(c, inst, k)
     # Any key but a bare motion ends a transient message; clearing before the
     # key is handled lets the key itself leave a new one (a comment toggle).
     if !_nb_nav_key(k)
@@ -383,43 +494,54 @@ function _comp_key!(c::_Notebook, inst::_UiInstance, k::_UiKey)
             c.mode = :nav
             return :handled
         end
-        return :bubble
+        # Editing → selecting; selecting → the shell (Esc pops one layer at a
+        # time, and the tab close is the layer below).
+        c.mode = :select
+        c.chord = '\0'
+        c.base.status = ""
+        return :handled
     elseif k.name === :tab
         return :bubble
+    elseif k.name === :enter && k.alt
+        _nb_run_advance!(c, inst, :nav)
+        return :handled
     elseif k.name === :enter && c.mode === :nav &&
            _tb_nlines(cell.buf) > c.collapse
         c.mode = :scroll
         return :handled
-    elseif k.name === :char && k.ctrl && k.char == 'j'
-        if _comp_running(c)
-            c.base.status = "a cell is still running"
-            return :handled
-        end
-        _cb_run!(cell, inst)
-        _nb_store!(c, inst)
-        # A refused run (unclosed input) explains itself here; a started run
-        # leaves the message empty and shows the job's label.
-        c.base.status = cell.base.status
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'j' && k.shift
+        _nb_run_advance!(c, inst, :nav)
         return :handled
-    elseif k.name === :char && k.ctrl && k.char == 'r'
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'j'
+        _nb_run_active!(c, inst)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'r'
         _nb_run_all!(c, inst)
         return :handled
-    elseif k.name === :char && k.ctrl && k.char == 'o'
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'o'
         _nb_clear!(c, inst, false)
         return :handled
     elseif k.name === :char && k.alt && k.char == 'o'
         _nb_clear!(c, inst, true)
         return :handled
-    elseif k.name === :char && k.ctrl && k.char == 'g'
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'g'
         _nb_insert!(c, inst, 1)
         return :handled
     elseif k.name === :char && k.alt && k.char == 'g'
         _nb_insert!(c, inst, 0)
         return :handled
-    elseif k.name === :char && k.ctrl && k.char == 'v'
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'v'
         _nb_jump!(c, 1)
         return :handled
     elseif k.name === :char && k.alt && k.char == 'v'
+        _nb_jump!(c, -1)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && !k.shift && k.char == 'n' &&
+           cell.buf.row == _tb_nlines(cell.buf) && c.active < length(c.cells)
+        _nb_jump!(c, 1)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && !k.shift && k.char == 'p' &&
+           cell.buf.row == 1 && c.active > 1
         _nb_jump!(c, -1)
         return :handled
     elseif k.name === :up && c.mode === :nav && cell.buf.row == 1 && c.active > 1
@@ -436,6 +558,101 @@ function _comp_key!(c::_Notebook, inst::_UiInstance, k::_UiKey)
     end
     res = _comp_key!(cell, inst, k)
     return res === :bubble ? :bubble : :handled
+end
+
+# Select mode is Jupyter's command mode: single-key commands, no typing. Every
+# key is swallowed here (an unbound key does nothing rather than escaping into
+# the buffer); only Esc bubbles, closing the tab one layer down.
+function _nb_select_key!(c::_Notebook, inst::_UiInstance, k::_UiKey)
+    chord = c.chord
+    c.chord = '\0'
+    if chord != '\0'
+        if k.name === :char && !k.ctrl && !k.alt && k.char == chord
+            chord == 'd' ? _nb_delete!(c, inst) : _nb_interrupt!(c, inst)
+        end
+        return :handled
+    end
+    plain = k.name === :char && !k.ctrl && !k.alt && k.char !== nothing
+    if k.name === :esc
+        c.base.status = ""
+        return :bubble
+    elseif k.name === :enter && k.alt
+        _nb_run_advance!(c, inst, :select)
+        return :handled
+    elseif k.name === :enter
+        c.mode = :nav
+        c.base.status = ""
+        return :handled
+    elseif k.name === :up || (plain && k.char == 'k')
+        _nb_jump!(c, -1)
+        return :handled
+    elseif k.name === :down || (plain && k.char == 'j')
+        _nb_jump!(c, 1)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && !k.shift && k.char == 'p'
+        _nb_jump!(c, -1)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && !k.shift && k.char == 'n'
+        _nb_jump!(c, 1)
+        return :handled
+    elseif k.name === :home
+        _nb_jump!(c, 1 - c.active)
+        return :handled
+    elseif k.name === :end
+        _nb_jump!(c, length(c.cells) - c.active)
+        return :handled
+    elseif k.name === :pageup
+        _nb_jump!(c, -10)
+        return :handled
+    elseif k.name === :pagedown
+        _nb_jump!(c, 10)
+        return :handled
+    elseif plain && k.char == 'a'
+        _nb_insert!(c, inst, 0)
+        return :handled
+    elseif plain && k.char == 'b'
+        _nb_insert!(c, inst, 1)
+        return :handled
+    elseif plain && k.char == 'd'
+        c.chord = 'd'
+        c.base.status = ""
+        return :handled
+    elseif plain && k.char == 'i'
+        c.chord = 'i'
+        c.base.status = ""
+        return :handled
+    elseif plain && k.char == 'z'
+        _nb_restore_deleted!(c, inst)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'j' && k.shift
+        _nb_run_advance!(c, inst, :select)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'j'
+        _nb_run_active!(c, inst)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'r'
+        _nb_run_all!(c, inst)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'o'
+        _nb_clear!(c, inst, false)
+        return :handled
+    elseif k.name === :char && k.alt && k.char == 'o'
+        _nb_clear!(c, inst, true)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'g'
+        _nb_insert!(c, inst, 1)
+        return :handled
+    elseif k.name === :char && k.alt && k.char == 'g'
+        _nb_insert!(c, inst, 0)
+        return :handled
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 'v'
+        _nb_jump!(c, 1)
+        return :handled
+    elseif k.name === :char && k.alt && k.char == 'v'
+        _nb_jump!(c, -1)
+        return :handled
+    end
+    return :handled
 end
 
 # Whether a key only moves (so it leaves the transient status message alone).

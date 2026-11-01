@@ -128,16 +128,30 @@ end
 
 _comp_title(c::_CodeBlock) = c.mode === :editor ? "editor" : "code"
 
-function _comp_lines(c::_CodeBlock, inst::_UiInstance, width::Int)
-    c.width = width
+# The highlighted text lines, with the form around the cursor tinted when this
+# is the buffer the cursor is in. Both the standalone block and the notebook's
+# active cell draw through this, so the tint means the same thing in both.
+function _cb_render_lines(c::_CodeBlock, active::Bool)
     text = _tb_text(c.buf)
     hl = _hl_lines(text)
+    active || return hl
+    span = _ui_form_span(text, _tb_index(c.buf))
+    span === nothing && return hl
+    for (row, a, b) in _ui_form_segments(text, span)
+        row <= length(hl) && (hl[row] = _hl_tint(hl[row], a, b))
+    end
+    return hl
+end
+
+function _comp_lines(c::_CodeBlock, inst::_UiInstance, width::Int)
+    c.width = width
+    hl = _cb_render_lines(c, true)
     out = _UiLine[]
     for i in 1:_tb_nlines(c.buf)
         spans = i <= length(hl) ? hl[i] : _UiSpan[]
         push!(out, _ui_styled(spans))
     end
-    if !isempty(c.out)
+    if !isempty(c.out) || (c.elapsed !== nothing && c.mode === :code)
         push!(out, _ui_ruler(max(width - 1, 8), c.elapsed))
         append!(out, c.out)
     end
@@ -182,6 +196,12 @@ function _cb_insert!(c::_CodeBlock, ch::Char)
     ctx = _ui_at_context(_tb_text(b), _tb_index(b))
     nextc = _tb_char_at(b, b.row, b.col)
     quoted = (ctx === :string || ctx === :comment)
+    # A closer typed on an otherwise blank line belongs at its opener's column.
+    if ch == ')' && !hadsel &&
+       all(c -> c == ' ' || c == '\t', b.lines[b.row][1:b.col])
+        col = _ui_opener_col(_tb_text_before_cursor(b))
+        (col === nothing || col == b.col) || _tb_set_indent!(b, b.row, col)
+    end
     # Typing the closer that is already ahead steps over it: `)` anywhere, and a
     # `"` only when the scan says we are inside a string (that is its closer).
     if !hadsel && nextc == ch && (ch == ')' || (ch == '"' && ctx === :string))
@@ -261,11 +281,52 @@ function _cb_reindent!(c::_CodeBlock)
     return nothing
 end
 
+# Reindent the lines below an edit when the edit changed the form they are in.
+# `old` is the text as it was before the edit; a line that sat at its canonical
+# indent moves with the structure, a line with extra spaces keeps them, and a
+# deliberately reduced indent is left alone. Lines inside strings and block
+# comments are content, not layout, so they are never touched.
+function _cb_reindent_after!(c::_CodeBlock, old::AbstractString, edit_row::Int)
+    b = c.buf
+    newtext = _tb_text(b)
+    oldind = _ui_indent_lines(old)
+    newind = _ui_indent_lines(newtext)
+    protected = _ui_protected_lines(newtext)
+    shifted = _tb_nlines(b) - length(oldind)
+    for r in (edit_row + 1):_tb_nlines(b)
+        (1 <= r <= length(protected)) && protected[r] && continue
+        old_r = r - shifted
+        old_canon = 1 <= old_r <= length(oldind) ? oldind[old_r] : nothing
+        cur = _tb_leading_spaces(b, r)
+        firstnz = findfirst(ch -> ch != ' ' && ch != '\t', b.lines[r])
+        closer = firstnz !== nothing && b.lines[r][firstnz] == ')'
+        target = if closer || _tb_line_blank(b, r)
+            newind[r]
+        elseif old_canon === nothing
+            cur
+        elseif cur >= old_canon
+            max(cur + (newind[r] - old_canon), 0)
+        else
+            cur
+        end
+        target != cur && _tb_set_indent!(b, r, target)
+    end
+    return nothing
+end
+
+# Run an editing operation and reindent the lines whose context it changed.
+function _cb_edit!(c::_CodeBlock, f::Function)
+    old = _tb_text(c.buf)
+    f()
+    _cb_reindent_after!(c, old, c.buf.row)
+    return nothing
+end
+
 # ---- running ------------------------------------------------------------------
 
 # Append one value's text to the output area.
 function _cb_push_output!(c::_CodeBlock, text::AbstractString, role::Symbol)
-    for line in split(text, '\n')
+    for line in split(text, '\n'; keepempty = true)
         push!(c.out, _ui_styled([_UiSpan(String(line), _ui_role(role))]))
     end
     return nothing
@@ -303,41 +364,67 @@ function _cb_run!(c::_CodeBlock, inst::_UiInstance;
 end
 
 # Apply a finished run. `text` is the buffer as it was when the run started, so
-# an edit made meanwhile leaves the output visibly stale. `elapsed` is the
-# job's measured duration; it says how long *this* run took, which is what the
-# status row and the output ruler show.
+# an edit made meanwhile leaves the output visibly stale. `res` is the
+# evaluation's `(status, payload, printed)`. `elapsed` is the job's measured
+# duration; it says how long *this* run took, which is what the status row and
+# the output ruler show.
+#
+# The output area shows what the run printed and then the last reduced form
+# only; a final `naught` contributes nothing, and a run with no visible output
+# still gets a ruler (its timing is information too).
 function _cb_apply!(c::_CodeBlock, inst::_UiInstance, text::AbstractString,
-                    status::Symbol, result; elapsed::Float64 = 0.0)
+                    res; elapsed::Float64 = 0.0)
     empty!(c.out)
     c.elapsed = elapsed > 0 ? elapsed : nothing
+    status, payload, printed = res
+    isempty(printed) || _cb_push_output!(c, chomp(printed), :text)
     if status === :error
-        _cb_push_output!(c, "error: " * result, :error)
+        _cb_push_output!(c, "error: " * payload, :error)
         c.base.status = _ui_join_took("error", c.elapsed)
         c.out_for = text
         c.failed = true
         _cb_store!(c, inst)
         return nothing
+    elseif status === :cancelled
+        _cb_push_output!(c, "interrupted", :warning)
+        c.base.status = _ui_join_took("interrupted", c.elapsed)
+        c.out_for = text
+        c.failed = false
+        _cb_store!(c, inst)
+        return nothing
     end
     c.failed = false
+    values = payload
     width = max(c.width - 1, 8)
-    for v in result
-        _cb_push_output!(c, air_pretty_string(inst.env, v; width = width), :text)
+    if !isempty(values) && !isequal(values[end], naught)
+        _cb_push_output!(c, air_pretty_string(inst.env, values[end];
+                                             width = width), :text)
     end
     c.out_for = text
     c.saved = text
     msg = c.mode === :editor ? "saved" :
-        string(length(result), " result", length(result) == 1 ? "" : "s")
+        (isempty(values) ? "ok" :
+         string(length(values), " form", length(values) == 1 ? "" : "s"))
     c.base.status = _ui_join_took(msg, c.elapsed)
     _cb_store!(c, inst)
     return nothing
 end
 
-# A finished run: the job delivers `(text, (status, values))`, where `text` is
-# the buffer as it was when the run started.
+# A finished run: the job delivers `(text, (status, payload, printed))`, where
+# `text` is the buffer as it was when the run started.
 function _comp_job_done!(c::_CodeBlock, inst::_UiInstance, res,
                          elapsed::Float64 = 0.0)
     tag, value = res
-    if tag !== :ok
+    if tag === :cancelled
+        empty!(c.out)
+        c.elapsed = elapsed > 0 ? elapsed : nothing
+        _cb_push_output!(c, "interrupted", :warning)
+        c.base.status = _ui_join_took("interrupted", c.elapsed)
+        c.out_for = _tb_text(c.buf)
+        c.failed = false
+        _cb_store!(c, inst)
+        return nothing
+    elseif tag !== :ok
         empty!(c.out)
         c.elapsed = elapsed > 0 ? elapsed : nothing
         _cb_push_output!(c, "error: " * value, :error)
@@ -346,8 +433,8 @@ function _comp_job_done!(c::_CodeBlock, inst::_UiInstance, res,
         _cb_store!(c, inst)
         return nothing
     end
-    text, (status, result) = value
-    _cb_apply!(c, inst, text, status, result; elapsed = elapsed)
+    text, res = value
+    _cb_apply!(c, inst, text, res; elapsed = elapsed)
     return nothing
 end
 
@@ -568,6 +655,16 @@ end
 function _cb_motion_key!(c::_CodeBlock, k::_UiKey)
     b = c.buf
     sel = k.shift
+    # The Emacs line motions, so the keys a notebook user knows work in a cell.
+    if k.name === :char && k.ctrl && !k.alt
+        if k.char == 'n' || k.char == 'N'
+            _tb_move_v!(b, 1; select = sel)
+            return true
+        elseif k.char == 'p' || k.char == 'P'
+            _tb_move_v!(b, -1; select = sel)
+            return true
+        end
+    end
     if k.name === :left
         _tb_move_h!(b, -1; select = sel)
     elseif k.name === :right
@@ -595,16 +692,16 @@ function _comp_key!(c::_CodeBlock, inst::_UiInstance, k::_UiKey)
     c.prompt !== nothing && return _cb_prompt_key!(c, k)
     _cb_motion_key!(c, k) && return :handled
     if k.name === :paste
-        _cb_paste!(c, k.text)
+        _cb_edit!(c, () -> _cb_paste!(c, k.text))
         return :handled
     elseif k.name === :enter
-        _cb_newline!(c)
+        _cb_edit!(c, () -> _cb_newline!(c))
         return :handled
     elseif k.name === :backspace
-        _cb_backspace!(c)
+        _cb_edit!(c, () -> _cb_backspace!(c))
         return :handled
     elseif k.name === :delete
-        _tb_delete!(b)
+        _cb_edit!(c, () -> _tb_delete!(b))
         return :handled
     elseif k.name === :tab
         return :bubble                       # the shell's tab switch
@@ -622,6 +719,8 @@ function _comp_key!(c::_CodeBlock, inst::_UiInstance, k::_UiKey)
                 _tb_end!(b)
             elseif ch == 'b'
                 _tb_move_h!(b, -1)
+            elseif ch == 'd'
+                _cb_edit!(c, () -> _tb_delete!(b))
             elseif ch == 'f'
                 _tb_move_h!(b, 1)
             elseif ch == 'k'
@@ -658,7 +757,7 @@ function _comp_key!(c::_CodeBlock, inst::_UiInstance, k::_UiKey)
             end
             return :handled
         end
-        isprint(ch) && _cb_insert!(c, ch)
+        isprint(ch) && _cb_edit!(c, () -> _cb_insert!(c, ch))
         return :handled
     end
     return :bubble

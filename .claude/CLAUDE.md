@@ -641,22 +641,38 @@ Enter, LF is Ctrl-J,
 paste is one event), and one text buffer with layout-driven automatic
 indentation, bracket pairing, and syntax highlighting. Keys never indent: Tab /
 Shift-Tab switch tabs, Alt-1…9 select one, Alt-←/→ move the active tab and Alt-W
-closes them all (asking once if any is dirty), Ctrl-J runs/saves/sends, Ctrl-R runs
+closes them all (asking once if any is dirty), Ctrl-J runs/saves/sends,
+Ctrl-Shift-J and Alt-Enter run the active notebook cell and advance to the next
+(inserting one below at the end), Ctrl-R runs
 every notebook cell in order (one at a time; refused while a cell is in flight),
 Ctrl-O/Alt-O clear the active cell's/all cells' output, Ctrl-G and Alt-G insert a
 notebook cell below/above, Ctrl-V and Alt-V jump a cell or message,
+Ctrl-N/Ctrl-P move a line down/up (crossing notebook cells at their edges),
+Ctrl-D deletes forward,
 PageUp/PageDown page, Ctrl-S finds in the buffer (again for the next match;
 an incremental prompt that owns every key until Enter keeps the match or Esc
 cancels and restores the cursor), Alt-L goes to a line number, Alt-] jumps to
 the matching bracket, Alt-; comments/uncomments the current or selected lines,
-and Esc pops exactly one layer (a prompt, then a scroll view, then the tab —
-confirming when it would discard edits — then the UI). A notebook cell
+and Esc pops exactly one layer (a prompt, then a scroll view, then a notebook's
+select mode, then the tab — confirming when it would discard edits — then the
+UI). The notebook is Jupyter-familiar: Esc from editing enters `:select`, a
+command mode with the cursor hidden and the active cell tinted, where j/k or the
+arrows move, Home/End jump, Enter edits, a/b insert, d,d deletes (z restores the
+last one), i,i interrupts (emptying the run-all queue and cancelling the running
+job cooperatively — a single long non-blocking form still cannot be stopped
+until the reducer polls its token), and Esc bubbles outward. Evaluation output
+is captured: `println` lands in the output area, not at the terminal cursor; the
+output shows whatever was printed and then only the last top-level form's value,
+a final `naught` contributing nothing (though the ruler and timing still show).
+A notebook cell
 records the input text that produced its output, so an edited cell shows its
 output muted (stale) until re-run, and a code widget stores its output with its
 text so it reopens showing it; both record how long the run took (timed on the
 job's task) in the ruler above the output and in the status row, and store it
 with the output; a code buffer will not run unless the reader reports it
-closed. A fresh shell opens its default tabs only when a renderer
+closed. Editing reindents the lines below the edit as their canonical indents
+change (strings and comments are never touched), and the form containing the
+cursor is tinted with the `:form_bg` role. A fresh shell opens its default tabs only when a renderer
 starts it, so a headless render shows none. The browser's Ctrl-J opens the editor for a `def` and
 a notebook (seeded with its name) for a `val`; Alt-J opens a `val`'s definition.
 Its Ctrl-S opens a filter line that narrows the tree live to the entries whose

@@ -258,7 +258,7 @@
 
         # A second run is refused while one is in flight.
         @test B._comp_start_job!(c, inst,
-            () -> (B._tb_text(c.buf), (:ok, Form[Form(1)])))
+            () -> (B._tb_text(c.buf), (:ok, Form[Form(1)], "")))
         B._cb_run!(c, inst)
         @test c.base.status == "still running"
         wait_for(() -> (B._comp_tick!(c, inst); !B._comp_running(c)))
@@ -297,7 +297,7 @@
         B._tb_set_text!(c.buf, "(+ 40 2)")
         # Start a run that lands well after the renderer leaves.
         @test B._comp_start_job!(c, inst,
-            () -> (sleep(0.3); ("(+ 40 2)", (:ok, Form[Form(42)]))))
+            () -> (sleep(0.3); ("(+ 40 2)", (:ok, Form[Form(42)], ""))))
         # Detaching does not wait for it: the run is still in flight and the
         # widget is still alive after the renderer is gone.
         (res, _) = term_run(:cb17, [ESC]; settle = false)
@@ -323,10 +323,10 @@
         inst = B._ui_lookup(env, Form(Symbol(":cb22")))
         c = B._comp_build(inst)
         @test B._comp_start_job!(c, inst,
-            () -> (sleep(0.06); ("(+ 1 2)", (:ok, Form[Form(3)]))))
+            () -> (sleep(0.06); ("(+ 1 2)", (:ok, Form[Form(3)], ""))))
         wait_for(() -> (B._comp_tick!(c, inst); !B._comp_running(c)))
         @test c.elapsed >= 0.05
-        @test occursin("1 result", c.base.status)
+        @test occursin("1 form", c.base.status)
         @test occursin("ms", c.base.status)
         # The ruler above the output carries the same duration...
         doc = B._comp_lines(c, inst, 40)

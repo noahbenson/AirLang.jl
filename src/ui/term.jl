@@ -21,8 +21,11 @@ _tb_drain!(b::_TermBackend) = UInt8[]
 _tb_unread!(b::_TermBackend, data) = nothing
 _tb_write(b::_TermBackend, data) = nothing
 
-const _TERM_ENTER = "\e[?1049h\e[?25l\e[?2004h"
-const _TERM_LEAVE = "\e[?2004l\e[?25h\e[?1049l"
+# modifyOtherKeys level 1 makes keys with no standard encoding (notably
+# Ctrl-Shift-letter, so Ctrl-Shift-J can differ from Ctrl-J) arrive as CSI
+# sequences; terminals that do not know it ignore it.
+const _TERM_ENTER = "\e[?1049h\e[?25l\e[?2004h\e[>4;1m"
+const _TERM_LEAVE = "\e[>4;0m\e[?2004l\e[?25h\e[?1049l"
 
 # The standard enter/leave for a byte-channel backend (used by the SSH and
 # stream backends; the local backend additionally changes the terminal mode).

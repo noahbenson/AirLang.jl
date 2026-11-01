@@ -258,17 +258,26 @@ function _chat_send!(c::_Chat, inst::_UiInstance)
     return nothing
 end
 
-# Apply a finished code send: log the results, then post each value.
+# Apply a finished code send: log what the evaluation printed, then the
+# results, then post each value. Printing is a sender-side side effect, like an
+# error — the peer receives what the code returned, not what it said along the
+# way. An interrupted evaluation reads as an error to the sender and posts
+# nothing.
 function _comp_job_done!(c::_Chat, inst::_UiInstance, res)
     tag, value = res
     if tag !== :ok
-        _chat_append!(c, :me, :error, "error: " * value)
-        c.base.status = "error"
+        msg = tag === :cancelled ? "interrupted" : "error: " * value
+        _chat_append!(c, :me, :error, msg)
+        c.base.status = tag === :cancelled ? "interrupted" : "error"
     else
-        status, result = value
+        status, result, printed = value
+        isempty(printed) || _chat_append!(c, :me, :result, chomp(printed))
         if status === :error
             _chat_append!(c, :me, :error, "error: " * result)
             c.base.status = "error"
+        elseif status === :cancelled
+            _chat_append!(c, :me, :error, result)
+            c.base.status = "interrupted"
         else
             width = max(c.width - 2, 8)
             for v in result

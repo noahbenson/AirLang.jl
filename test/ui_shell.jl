@@ -97,7 +97,11 @@
         @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
         @test titles(c) == ["scratch"]            # the active tab closes
         @test c.active == 1
-        # With one tab left, Esc dismisses the whole shell.
+        @test c.tabs[1].comp.mode === :nav
+        # With one tab left, the first Esc enters the notebook's select mode
+        # and the next dismisses the whole shell.
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test c.tabs[1].comp.mode === :select
         @test B._comp_key!(c, inst, B._ui_key(:esc)) === :dismiss
         ev("(ui-close! :shx)")
     end
@@ -109,10 +113,13 @@
         B._comp_key!(c, inst, B._ui_key(:char; char = 's', ctrl = true))
         @test nb.cells[1].prompt !== nothing
         @test occursin("search:", B._comp_prompt(c, inst))
-        # Esc cancels the prompt; the tab stays. The next Esc closes it.
+        # Esc cancels the prompt and the tab stays. The next Esc enters the
+        # notebook's select mode, and the one after that closes the tab.
         @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
         @test nb.cells[1].prompt === nothing
         @test titles(c) == ["browser", "scratch"]
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test nb.mode === :select
         @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
         @test titles(c) == ["browser"]
         ev("(ui-close! :shx)")
@@ -198,7 +205,9 @@
         B._comp_key!(nb, inst, B._ui_key(:char; char = 'x'))
         @test B._comp_dirty(c, inst)
         @test occursin("discard", B._comp_status(c, inst)) == false
-        # Esc asks; anything but `y` keeps the tab.
+        # Esc enters select mode; the next asks. Anything but `y` keeps the tab.
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test nb.mode === :select
         @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
         @test c.confirm === :close
         @test occursin("discard", B._comp_status(c, inst))
@@ -230,9 +239,10 @@
     @testset "the terminal renderer" begin
         w = evd("(ui-shell)")
         open_form!(:sh1, w)
-        # Tab to the scratch notebook, then Esc twice: the first closes the
-        # scratch tab, the second closes the browser and dismisses.
-        (res, out) = term_run(:sh1, [TAB, ESC, ESC])
+        # Tab to the scratch notebook, then Esc three times: the first enters
+        # the notebook's select mode, the second closes the scratch tab, and the
+        # third closes the browser and dismisses.
+        (res, out) = term_run(:sh1, [TAB, ESC, ESC, ESC])
         @test res[1] === :ok
         @test occursin("browser", out)
         ev("(ui-close! :sh1)")

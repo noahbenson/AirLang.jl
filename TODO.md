@@ -111,6 +111,20 @@ SFTP), the immutable `bytes` extern,
   task's stack, so it is collected when the session ends unless the user stores
   it; `ui=false`/`ui=naught` in `$.config.ssh` (or the `ssh` val of
   `$.config`) opts out, and a non-pty session never gets one.
+- [x] **A Jupyter-familiar notebook.** The editing keys a Jupyter user reaches
+  for: `Ctrl-N`/`Ctrl-P` move by line and cross cells at their edges, `Ctrl-D`
+  deletes forward, and `Ctrl-Shift-J` (`Alt-Enter` where a terminal cannot send
+  it) runs the cell and advances, inserting one below at the end. Editing
+  reindents the lines below the edit from the layout's canonical indents
+  (strings and comments untouched), and the cursor's innermost form is tinted
+  with `form_bg`. `println` is captured into the output area instead of landing
+  at the terminal cursor, and the output is whatever was printed followed by
+  only the last top-level form's value (a final `naught` contributes nothing,
+  though the ruler and timing still show). Esc now layers edit → select →
+  shell: `:select` is a Jupyter command mode (`j`/`k`, `Home`/`End`, Enter,
+  `a`/`b`, `d,d` delete, `z` restore, `i,i` interrupt, Ctrl-J run), with chords
+  shown in the status row. The key model decodes CSI-u and `modifyOtherKeys` so
+  modified keys such as `Ctrl-Shift-J` arrive distinctly (`test/ui_keys.jl`).
 - [ ] **HUI follow-ups.**
   - [x] *Editing:* in-buffer search, go-to-line, bracket match/jump, and a
     comment toggle.
@@ -126,9 +140,14 @@ SFTP), the immutable `bytes` extern,
   - [x] *Chat:* an unread marker — messages that arrive while the log is
     scrolled away from its newest entry are counted in the status row and
     marked by a `── n new ──` rule where they begin.
-  - *Evaluation:* preemption. Ctrl-C raises `:ctrl-c` and the job keeps running;
-    aborting a running evaluation needs a cancellable task or a structured
-    shutdown checklist on the Air side (propose it, do not build it here).
+  - *Evaluation:* preemption. A notebook's `i,i` now cancels cooperatively: each
+    job owns a `CancelToken`, Air's blocking operations (`fetch`, `await` on a
+    delivered promise, …) honor it, and `_comp_eval` checks it between
+    top-level forms, so a queued or blocking run stops promptly. A **single long
+    non-blocking form** still runs to completion, because the reducer itself
+    does not poll the token; true preemption needs that change on the Air side
+    (propose it, do not build it here). Ctrl-C still raises `:ctrl-c` without
+    aborting the job.
   - [x] *Automation:* the SSH test needs the test target's OpenSSH_jll, so it
     runs under `Pkg.test` and is skipped otherwise; the local backend is
     unit-tested over pipes, and its pty path was verified once by hand with a
@@ -158,7 +177,10 @@ SFTP), the immutable `bytes` extern,
 - [ ] **Non-interactive exec over SSH.** `ssh host command` opens a channel
   request air does not serve, so only the REPL and the SFTP subsystem are
   available; legacy `scp` (`scp -O`) depends on exec and therefore fails.
-- [ ] **Preemptible evaluation.** `Ctrl-C` in a session evaluates
+- [ ] **Preemptible evaluation.** A notebook's `i,i` cancels a job's token
+  cooperatively — Air's blocking operations honor it and evaluation checks it
+  between top-level forms — but the reducer itself does not poll it, so one long
+  non-blocking form runs to completion. `Ctrl-C` in a session evaluates
   `(raise :ctrl-c)`, but air evaluation is not preemptible, so a byte sent while
   a form runs is read only when that form finishes.
 - [x] **Data formats** — `decode`/`encode` (with `format=`) and

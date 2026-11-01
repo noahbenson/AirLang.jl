@@ -47,10 +47,13 @@ mutable struct _UiJob
     chan::Channel{Any}
     label::String                   # shown while the job runs
     elapsed::Float64                # seconds `f` took (0 until it returns)
+    token::Union{Nothing,CancelToken}  # the job's cooperative cancellation
 end
 
 _UiJob(chan::Channel{Any}, label::AbstractString) =
-    _UiJob(chan, String(label), 0.0)
+    _UiJob(chan, String(label), 0.0, nothing)
+_UiJob(chan::Channel{Any}, label::AbstractString, token::CancelToken) =
+    _UiJob(chan, String(label), 0.0, token)
 
 """
     _CompBase
@@ -126,18 +129,24 @@ function _comp_start_job!(c::_Comp, inst::_UiInstance, f::Function;
                           label::AbstractString = "running…")
     _comp_running(c) && return false
     chan = Channel{Any}(1)
-    job = _UiJob(chan, label)
+    tok = CancelToken()
+    job = _UiJob(chan, label, tok)
     c.base.job = job
     Threads.@spawn begin
         # Block scopes do not cross a task boundary; this is the same start a
         # `(task …)` makes.
         _reset_block_scopes!()
+        # Every blocking Air primitive in `f` reads this task's token, so a
+        # `_comp_cancel_job!` wakes it; `_comp_eval` also polls it between
+        # top-level forms.
+        setcancaltoken!(tok)
         t0 = time()
         res = try
             (:ok, f())
         catch e
             e isa InterruptException && rethrow()
-            (:error, sprint(showerror, e))
+            e isa Cancelled ? (:cancelled, sprint(showerror, e)) :
+                (:error, sprint(showerror, e))
         end
         job.elapsed = time() - t0
         try
@@ -146,6 +155,17 @@ function _comp_start_job!(c::_Comp, inst::_UiInstance, f::Function;
         end
         nothing
     end
+    return true
+end
+
+# Cancel the widget's running job. The job applies its own `:cancelled` result
+# on the instance's ticker; this only asks it to stop.
+function _comp_cancel_job!(c::_Comp)
+    j = c.base.job
+    j === nothing && return false
+    tok = j.token
+    tok === nothing && return false
+    iscancelled(tok) || cancel!(tok)
     return true
 end
 
@@ -385,20 +405,28 @@ function _comp_context(c::_Comp, inst::_UiInstance, ns::Union{Nothing,Namespace}
 end
 
 # Evaluate `text` in the component's namespace, returning
-# `(:ok, [values])` or `(:error, message)`.
+# `(status, payload, printed)`: `:ok` with the top-level values, `:error` with
+# the message, or `:cancelled` with the message. `printed` is everything the
+# evaluation wrote with `(print …)`/`(println …)`, captured from a sink of its
+# own so it lands in the widget's output instead of the ambient terminal.
 function _comp_eval(c::_Comp, inst::_UiInstance, text::AbstractString)
     status, forms = _read_complete(text)
     if status === :error
-        return (:error, sprint(showerror, forms))
+        return (:error, sprint(showerror, forms), "")
     end
     values = Form[]
     env = inst.env
     ns = _comp_ns(c, inst)
-    ctx = _comp_context(c, inst, ns)
+    ctx0 = _comp_context(c, inst, ns)
+    buf = IOBuffer()
+    ctx = TaskContext(ctx0.user, ctx0.ns, ctx0.dbroot, ctx0.env, buf)
     try
         _with_context(env, ctx, () -> Air.setvars(() -> Base.ScopedValues.with(
             () -> begin
                 for f in forms
+                    # Job cancellation is cooperative outside Air's blocking
+                    # primitives: check between top-level forms.
+                    checkcancel(canceltoken())
                     # The namespace's layers are re-read per form, so a `def`
                     # earlier in the buffer is visible to a later form.
                     scope = ns === nothing ? inst.lscope :
@@ -407,10 +435,13 @@ function _comp_eval(c::_Comp, inst::_UiInstance, text::AbstractString)
                 end
             end, _UI_CURRENT => inst.widget), inst.bindings))
     catch e
+        if e isa Cancelled
+            return (:cancelled, sprint(showerror, e), String(take!(buf)))
+        end
         e isa AirError || rethrow()
-        return (:error, sprint(showerror, e))
+        return (:error, sprint(showerror, e), String(take!(buf)))
     end
-    return (:ok, values)
+    return (:ok, values, String(take!(buf)))
 end
 
 # ---- building ----------------------------------------------------------------

@@ -277,6 +277,51 @@ function _ui_indent_at(s::AbstractString)
     return _lo_inner(spec, col, _lo_aligncol(col, heads))
 end
 
+# The canonical indentation of every line of `text`, by the same rule a newline
+# uses: the innermost open form decides. A line whose first non-blank character
+# is a closer instead takes the innermost opener's column, which is where that
+# closer belongs. Line 1 is always column 0.
+function _ui_indent_lines(text::AbstractString)
+    lines = split(String(text), '\n'; keepempty = true)
+    out = Int[0]
+    prefix = String(lines[1])
+    for i in 2:length(lines)
+        line = lines[i]
+        k = 1
+        while k <= length(line) && (line[k] == ' ' || line[k] == '\t')
+            k += 1
+        end
+        if k <= length(line) && line[k] == ')'
+            col = _ui_opener_col(prefix)
+            push!(out, col === nothing ? 0 : col)
+        else
+            push!(out, _ui_indent_at(prefix))
+        end
+        prefix = prefix * "\n" * line
+    end
+    return out
+end
+
+# The lines of `text` whose leading text is inside a string or block comment.
+# Reindentation must not touch these: their whitespace is content, not layout.
+function _ui_protected_lines(text::AbstractString)
+    cs = collect(String(text))
+    n = 0
+    for c in cs
+        c == '\n' && (n += 1)
+    end
+    protected = falses(n + 1)
+    for t in _code_scan_cs(cs)
+        (t.kind === :string || t.kind === :comment) || continue
+        (r0, _) = _code_rowcol(cs, t.start)
+        (r1, _) = _code_rowcol(cs, min(t.stop, length(cs)))
+        for r in r0:r1
+            protected[r] = true
+        end
+    end
+    return protected
+end
+
 # The innermost unclosed opener's column, for dedenting a typed closer.
 function _ui_opener_col(s::AbstractString)
     cs = collect(s)
@@ -340,6 +385,72 @@ function _ui_bracket_match(text::AbstractString, idx::Int)
         end
     end
     return nothing
+end
+
+# ---- the form around the cursor ----------------------------------------------
+
+"""
+    _ui_form_span(text, pos) -> Union{Nothing,Tuple{Int,Int}}
+
+The character span of the innermost form that contains character position
+`pos` (1-based, the cursor's position in `_tb_text`): the opener's index through
+its matching closer's index, or through the end of the text when the form is
+unterminated. `nothing` when the cursor is not inside a form.
+"""
+function _ui_form_span(text::AbstractString, pos::Int)
+    cs = collect(String(text))
+    pos = clamp(pos, 1, length(cs) + 1)
+    toks = _code_scan_cs(cs)
+    stack = Int[]
+    for (i, t) in enumerate(toks)
+        t.start >= pos && break
+        if t.kind === :open
+            push!(stack, i)
+        elseif t.kind === :close && !isempty(stack)
+            pop!(stack)
+        end
+    end
+    isempty(stack) && return nothing
+    oi = stack[end]
+    o = toks[oi]
+    stopidx = length(cs)
+    for j in (oi + 1):length(toks)
+        t = toks[j]
+        if t.kind === :close && t.depth == o.depth
+            stopidx = t.start
+            break
+        end
+    end
+    return (o.start, stopidx)
+end
+
+"""
+    _ui_form_segments(text, span) -> Vector{Tuple{Int,Int,Int}}
+
+The parts of a form span on each line it touches, as `(row, startcol, stopcol)`
+with 0-based display columns and an exclusive stop. Empty when the span is
+empty.
+"""
+function _ui_form_segments(text::AbstractString, span::Tuple{Int,Int})
+    cs = collect(String(text))
+    starts = Int[1]
+    for (i, c) in enumerate(cs)
+        c == '\n' && push!(starts, i + 1)
+    end
+    (a, b) = span
+    segs = Tuple{Int,Int,Int}[]
+    for ln in 1:length(starts)
+        lo = starts[ln]
+        hi = ln < length(starts) ? starts[ln + 1] - 2 : length(cs)
+        hi < lo && continue
+        s = max(a, lo)
+        e = min(b, hi)
+        s > e && continue
+        c0 = textwidth(String(cs[lo:(s - 1)]))
+        c1 = textwidth(String(cs[lo:e]))
+        push!(segs, (ln, c0, c1))
+    end
+    return segs
 end
 
 # ---- line comments -----------------------------------------------------------
