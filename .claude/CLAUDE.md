@@ -669,7 +669,9 @@ tints; Enter inserts a newline and Ctrl-J sends; a draft beginning with `(` is
 **code mode** — it is logged on the sender's side only, evaluated in the chat's
 namespace, and only the result is logged on both sides and posted. A pump task
 fetches `in=` with a short timeout from the widget's first build until it is
-closed (not on attach/detach). An evaluation runs as a background job — the
+closed (not on attach/detach), and a message that arrives while the log is
+scrolled away from its newest entry is counted as unread — the status row and a
+`── n new ──` rule in the log say so, and reaching the bottom clears it. An evaluation runs as a background job — the
 frame stays live, the status row names it, and the instance's own ticker applies
 the result with no renderer attached, storing it in the widget's state;
 dismissing neither waits for nor stops the job, and Ctrl-C raises `:ctrl-c`

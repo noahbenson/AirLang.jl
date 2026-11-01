@@ -204,4 +204,49 @@
         B._comp_close!(c, inst)
         ev("(ui-close! :ch6)")
     end
+
+    @testset "messages that arrive while scrolled away are marked unread" begin
+        stream_val!(:u_in)
+        stream_val!(:u_out)
+        w = evd("(ui-chat in=u_in out=u_out peer=:alice)")
+        open_form!(:ch7, w)
+        inst = B._ui_lookup(env, Form(Symbol(":ch7")))
+        c = B._comp_chat(inst, inst.root)
+        c.log_rows = 6
+        # A message read at the bottom of the log is not unread.
+        B._chat_receive!(c, inst, Form("one"))
+        @test c.unread == 0
+        # Scrolling away and then receiving counts what is below the window.
+        c.stick = false
+        c.scroll = 1
+        B._chat_receive!(c, inst, Form("two"))
+        B._chat_receive!(c, inst, Form("three"))
+        @test c.unread == 2
+        st = B._comp_status(c, inst)
+        @test occursin("2 new", st)
+        @test occursin("peer: alice", st)
+        @test B._comp_hints(c)[2].first == "ctrl-v: 2 new"
+        # The log draws a rule where the unseen messages begin.
+        lines = [l.text for l in B._chat_window(c, 30, 6)]
+        d = findfirst(l -> occursin("2 new", l), lines)
+        @test d !== nothing
+        @test findfirst(l -> startswith(l, "two"), lines) > d
+        # Reaching the bottom clears the count.
+        ctrl_v = B._ui_key(:char; char = 'v', ctrl = true)
+        B._comp_key!(c, inst, ctrl_v)
+        B._comp_key!(c, inst, ctrl_v)
+        @test c.stick
+        @test c.unread == 0
+        @test !occursin("new", B._comp_status(c, inst))
+        @test B._comp_hints(c)[2].first == "ctrl-v: scroll"
+        @test all(l -> !occursin("2 new", l),
+                  [l.text for l in B._chat_window(c, 30, 6)])
+        # While stuck, the next one is read as it lands.
+        B._chat_receive!(c, inst, Form("four"))
+        @test c.unread == 0
+        @test any(l -> startswith(l.text, "four"),
+                  B._chat_window(c, 30, 6))
+        B._comp_close!(c, inst)
+        ev("(ui-close! :ch7)")
+    end
 end

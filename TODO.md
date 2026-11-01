@@ -123,7 +123,9 @@ SFTP), the immutable `bytes` extern,
     name across every subnamespace (shown flat with its path), Enter accepts and
     stores it, Esc cancels then clears it, and Enter on a matching subnamespace
     makes it the root.
-  - *Chat:* an unread marker for messages that arrived while scrolled away.
+  - [x] *Chat:* an unread marker — messages that arrive while the log is
+    scrolled away from its newest entry are counted in the status row and
+    marked by a `── n new ──` rule where they begin.
   - *Evaluation:* preemption. Ctrl-C raises `:ctrl-c` and the job keeps running;
     aborting a running evaluation needs a cancellable task or a structured
     shutdown checklist on the Air side (propose it, do not build it here).

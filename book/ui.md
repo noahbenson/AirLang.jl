@@ -578,6 +578,13 @@ The input is a full code block, so it gets the same indentation, pairing, and
 highlighting as any other buffer, and it grows to five rows before scrolling.
 `Ctrl-V`/`Alt-V` move one message and `PageUp`/`PageDown` one page.
 
+Messages that arrive while the log is scrolled away from its newest entry are
+**unread**: the status row counts them (`2 new · peer: alice`), the hint row
+offers `Ctrl-V` with the count, and the log draws a rule (`── 2 new ───`) where
+the unseen messages begin. Scrolling back to the bottom, sending, or receiving
+while already there clears the count, and it is not stored — a reopened chat
+starts with its whole log read.
+
 **Code mode.** When the draft begins with `(`, it is code. On send, the source
 is appended to *this side's* log only, evaluated in the chat's namespace under
 the captured context, and the result is appended to both logs and posted. The
