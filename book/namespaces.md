@@ -193,10 +193,17 @@ at the point it was created, and **inherits the current task's `val` bindings**:
 ```
 
 The spawned task receives a copy of the bindings, so a later `bind` in the parent
-does not change what the task sees. A task is a process item: its promise lives
-in the current namespace's database, but the running task itself is not
-serialized, so a promise whose task never delivered (because the process
+does not change what the task sees. `bindings=false` installs no overrides and
+`bindings=(x=1 …)` installs exactly those values. A task is a process item: its
+promise lives in the current namespace's database, but the running task itself
+is not serialized, so a promise whose task never delivered (because the process
 stopped) is simply never delivered.
+
+`(task form… durable=true name=:x)` instead registers a **durable task** — a
+record in `$.config.tasks` that reruns from the start after a restart, replaying
+its `(checkpoint form)` steps — and `(do-at …)`, `(do-in …)`, `(tx-at …)`, and
+`(tx-in …)` schedule events the same way. See
+[Events and Durable Tasks](events.md).
 
 (delays-actors-and-promises)=
 ## Delays, actors, and promises

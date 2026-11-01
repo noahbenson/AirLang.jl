@@ -304,6 +304,47 @@
   the stream's `read`/`write` ACL gates receiving and delivering. A stream is
   opaque on a `get` path, compares by identity, prints as `#<stream uuid>`, and
   serializes as the link `"&uuid"`.
+* Events, scheduled transactions, and durable tasks: `(do-at time body…)` and
+  `(do-in interval body…)` register a durable **event** in the creator's
+  `$.config.events`, run its body in its own task at a wall-clock time or after
+  a delay, and return a promise that receives the value (`(tx-at …)`/`(tx-in …)`
+  run the body as one transaction). `repeat=true` on `do-in`/`tx-in` re-arms
+  after each completed run; `name=`, `bindings=`, `let=`, and `catch=` are the
+  options. `(events)`, `(event x)`, `(cancel-event x)`, and `(events-resume)`
+  list, inspect, cancel, and resume; `(tasks)`, `(task-info)`,
+  `(cancel-task)`, and `(tasks-resume)` are the same for durable tasks, which
+  `(task … durable=true name=:x)` registers in `$.config.tasks`. A record holds
+  the body, the captured context (namespace, layers, bindings, `@`, `.env`), the
+  schedule, the status, the attempts, and the promise; an error is delivered as
+  an error object, and a result the database cannot hold as `:un-storable`.
+  `bindings=true` snapshots the creator's `val` overrides as data, so an event
+  sees the values as of creation and a captured stream still posts after a
+  restart. A durable task reruns from the start and replays its
+  `(checkpoint form)` steps (at-least-once). Records are coordinated within one
+  process; `air` resumes them on startup before the REPL or serving. See
+  [Events and Durable Tasks](events.md).
+* Agents and channels: a user record carries `kind=:human|:agent`, and
+  `(create-agent :bot config…)` makes an `:agent` constituent whose inference
+  settings live in `$.config.agent` (`user-kind`, `agent?`, `agents`,
+  `agent-config`, `agent-config!`). A session is a mutable behind the named form
+  `agent/<agent>/sessions/<sid>`; its handle carries a channel of three streams
+  (outbox, inbox, and a hook copy queue), and `open-session`, `sessions`,
+  `session-info`, `session-history`, `session-channel`, `session-post`,
+  `session-fetch`, `session-hook!`, `session-resume`, and `session-close!`
+  manage it, with `channel?`/`channel-post`/`channel-fetch`/`channel-ready?`/
+  `channel-count`/`channel-hook!`/`channel-unhook!`/`channel-close!` over the
+  channel. A worker task turns a text message into a model turn and a
+  keyword-headed form into a command (`:help`, `:context`, `:reset`, `:system`,
+  `:model`, `:compact`, `:stop`), answers with a structured `(reply …)` or an
+  error object, and keeps the transcript, usage, and context estimate in the
+  session state; `context=` enables usage-driven compaction. The transport
+  speaks the Anthropic Messages API and the OpenAI chat-completions dialect
+  (Fireworks, OpenAI, DeepSeek, and any `:compatible` server), retries 429/5xx
+  with backoff, and is replaceable in tests. A reply is copied to the notify
+  queue when the owner's `on-receive` hook is installed, so the hook and
+  `session-fetch` never steal from each other; a failing hook is recorded in
+  `last-hook-error`. Sessions are durable and resume lazily on the next
+  message. See [Agents](agents.md).
 
 **Deferred**
 
@@ -313,16 +354,24 @@
 * The outer engine's incremental RETE alpha/beta network (a full re-derivation
   runs on each assert instead).
 * Forms-as-functions querying (`(f 1)` on a collection returns its element).
-* Serializable tasks: a task is a process item, so only its promise is
-  stored (as a link until delivered, as its value afterwards). Storing the
-  running task so it can respawn after a reload is deferred; a promise whose
-  task never delivered is simply never delivered.
+* Serializable task *stacks*: a durable task reruns from the start and replays
+  its `checkpoint`s, so a step between a side effect and its checkpoint can
+  repeat (at-least-once), and conditional checkpoints can mis-replay. Cron
+  syntax, retry/backoff policies, preemption on cancel, a single heap-based
+  scheduler (there is one polling task per job), cross-database/cross-process
+  leases, labelled checkpoints, and purging reused names are deferred. A plain
+  (non-durable) task is still a process item: only its promise is stored.
 * Sockets and other extern types; `pmap` and higher-level parallel helpers built
   on `task`.
 * Incremental SSH transfers and a non-interactive exec channel: an SFTP upload
   is buffered and committed as one `bytes` val at `CLOSE` (correct and atomic,
   but not streamed), and `ssh host command` is not served, so only the REPL and
   the SFTP subsystem are available.
+* Streaming model replies (SSE), tool and function calling, an agent that
+  evaluates air code, an exact tokenizer, prompt caching, session purge and
+  garbage collection, cross-process session locks, provider-specific quirks
+  (e.g. `max_completion_tokens`), and cost/rate accounting. The agent layer is
+  text in, one reply out.
 
 **Spec notes**
 

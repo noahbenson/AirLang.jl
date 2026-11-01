@@ -130,26 +130,39 @@ extent without disturbing other tasks.
 function _val_binding!(env::Env, path::Vector{Symbol}, name::Symbol, value::Form;
                        entry::Union{Nothing,VolatileForm} = nothing)
     key = _val_key(path, name)
-    b = get(env.vals, key, nothing)
-    if b !== nothing && isequal(b.var.initial_value, value)
-        # The same definition seen again: keep the live `Var` (a `bind` on it
-        # must survive a namespace resync) but point the binding at the entry
-        # that currently defines it.
-        if entry !== nothing && (b.entry === nothing || b.entry.id != entry.id)
-            b = ValBinding(b.var, b.path, b.name, entry)
-            env.vals[key] = b
-            env.valof[b.var] = b
-        end
+    b = get(_val_table(env).bindings, key, nothing)
+    if b !== nothing && isequal(b.var.initial_value, value) &&
+       (entry === nothing || (b.entry !== nothing && b.entry.id == entry.id))
         return b
     end
-    b = ValBinding(Var{Form}(value), copy(path), name, entry)
-    env.vals[key] = b
-    env.valof[b.var] = b
-    return b
+    return _update_vals!(env) do table
+        b0 = get(table.bindings, key, nothing)
+        if b0 !== nothing && isequal(b0.var.initial_value, value)
+            # The same definition seen again: keep the live `Var` (a `bind` on
+            # it must survive a namespace resync) but point the binding at the
+            # entry that currently defines it.
+            if entry === nothing ||
+               (b0.entry !== nothing && b0.entry.id == entry.id)
+                return (table, b0)
+            end
+            b1 = ValBinding(b0.var, b0.path, b0.name, entry)
+            bindings = copy(table.bindings)
+            bindings[key] = b1
+            reverse = copy(table.reverse)
+            reverse[b0.var] = b1
+            return (_ValTable(bindings, reverse), b1)
+        end
+        b1 = ValBinding(Var{Form}(value), copy(path), name, entry)
+        bindings = copy(table.bindings)
+        bindings[key] = b1
+        reverse = copy(table.reverse)
+        reverse[b1.var] = b1
+        return (_ValTable(bindings, reverse), b1)
+    end
 end
 
 _val_binding(env::Env, path::Vector{Symbol}, name::Symbol) =
-    get(env.vals, _val_key(path, name), nothing)
+    get(_val_table(env).bindings, _val_key(path, name), nothing)
 
 # Give `path`'s `val` named `name` a binding that shares `src`'s `Var`, so an
 # imported `val` observes every rebinding of the source while keeping its own
@@ -158,14 +171,22 @@ _val_binding(env::Env, path::Vector{Symbol}, name::Symbol) =
 function _val_share!(env::Env, path::Vector{Symbol}, name::Symbol,
                      src::ValBinding, entry::VolatileForm)
     key = _val_key(path, name)
-    cur = get(env.vals, key, nothing)
+    cur = get(_val_table(env).bindings, key, nothing)
     if cur !== nothing && cur.var === src.var && cur.entry === entry
         return cur
     end
-    b = ValBinding(src.var, copy(path), name, entry)
-    env.vals[key] = b
-    haskey(env.valof, src.var) || (env.valof[src.var] = b)
-    return b
+    return _update_vals!(env) do table
+        cur0 = get(table.bindings, key, nothing)
+        if cur0 !== nothing && cur0.var === src.var && cur0.entry === entry
+            return (table, cur0)
+        end
+        b = ValBinding(src.var, copy(path), name, entry)
+        bindings = copy(table.bindings)
+        bindings[key] = b
+        reverse = copy(table.reverse)
+        haskey(reverse, src.var) || (reverse[src.var] = b)
+        return (_ValTable(bindings, reverse), b)
+    end
 end
 
 # The current value of a `(ns-val <path> :name)` marker, or the marker itself
@@ -190,8 +211,9 @@ function _find_val_binding(env::Env, scope::Scope, name::Symbol)
     _scope_has_layers(scope) && append!(stores, scope_layers(scope))
     push!(stores, env.rules)
     for store in stores
-        for i in get(store.by_symbol, name, Int[])
-            r = store.rules[i]
+        snap = _snapshot(store)
+        for i in get(snap.by_symbol, name, Int[])
+            r = snap.rules[i]
             isequal(r.pattern, Form(name)) || continue
             _is_ns_val(r.body) || continue
             path = _ns_path_of_marker(r.body)
@@ -233,7 +255,7 @@ _ns_path_of_form(x::Form) = _path_from_form(x)
 function _ns_db(env::Env, path::Vector{Symbol})
     t = Tuple(path)
     while true
-        db = get(env.dbs, t, nothing)
+        db = _db_registered(env, t)
         db === nothing || return db
         isempty(t) && return env.sysdb
         t = t[1:(end - 1)]
@@ -250,7 +272,8 @@ function _home_owner(env::Env, path::Vector{Symbol})
     idx = findfirst(==(_USER), path)
     idx === nothing && return nothing
     prefix = path[1:(idx - 1)]
-    (prefix == Symbol[_SYS] || haskey(env.dbs, Tuple(prefix))) || return nothing
+    (prefix == Symbol[_SYS] || _db_registered(env, Tuple(prefix)) !== nothing) ||
+        return nothing
     rest = path[(idx + 1):end]
     # A home and everything beneath it belong to its user.
     length(rest) >= 2 && rest[2] === _HOME && return rest[1]
@@ -265,7 +288,7 @@ end
 # the longest database root above it.
 function _db_user_policy(env::Env, path::Vector{Symbol})
     n = -1
-    for k in keys(env.dbs)
+    for k in _db_keys(env)
         m = length(k)
         if m > n && m <= length(path) && Tuple(path[1:m]) == k
             n = m
@@ -346,8 +369,9 @@ const _AIR_CONSTANTS = (:pi, :e, :tau, :inf, :nan)
 const _AIR_STDLIB = (:identity, :constantly)
 
 function _constant_value(env::Env, name::Symbol)
-    for i in get(env.rules.by_symbol, name, Int[])
-        r = env.rules.rules[i]
+    snap = _snapshot(env.rules)
+    for i in get(snap.by_symbol, name, Int[])
+        r = snap.rules[i]
         if r.pattern isa FormScalar && isequal(r.pattern, Form(name)) &&
            r.body isa FormScalar
             return r.body
@@ -456,26 +480,30 @@ end
 
 function _ns_wrap(env::Env, vf::VolatileForm, path::Vector{Symbol})
     key = Tuple(path)
-    cached = get(env.nscache, key, nothing)
-    if cached !== nothing && cached.vf.id == vf.id
-        _ns_sync!(env, cached)
-        return cached
-    end
-    ns = Namespace(vf, path)
-    if path == _AIR_PATH
-        ns.core = _air_core(env)
-        for name in keys(ns.core)
-            push!(ns.protected, name)
+    # Get-or-create under the cache lock, so two tasks can never build two
+    # wrappers (and so two compiled stores) for one namespace. Compiling happens
+    # outside the lock: it may open a transaction, and the lock must not be held
+    # across a commit.
+    ns = lock(env.metalock) do
+        cached = get(env.nscache, key, nothing)
+        (cached !== nothing && cached.vf.id == vf.id) && return cached
+        made = Namespace(vf, path)
+        if path == _AIR_PATH
+            made.core = _air_core(env)
+            for name in keys(made.core)
+                push!(made.protected, name)
+            end
+        elseif path == Symbol[_AIR, _SYS]
+            # `.air.sys` exposes the system functions by name; its map is fixed,
+            # so a nonempty `core` also tells `_ns_sync!` not to rebuild it.
+            made.core = _system_core()
+            for name in keys(made.core)
+                push!(made.protected, name)
+            end
         end
-    elseif path == Symbol[_AIR, _SYS]
-        # `.air.sys` exposes the system functions by name; its map is fixed, so a
-        # nonempty `core` also tells `_ns_sync!` not to rebuild it.
-        ns.core = _system_core()
-        for name in keys(ns.core)
-            push!(ns.protected, name)
-        end
+        env.nscache[key] = made
+        return made
     end
-    env.nscache[key] = ns
     _ns_sync!(env, ns)
     return ns
 end
@@ -516,7 +544,7 @@ end
 # Compile one stored `def` entry into the namespace's rule store. The entry
 # volatile rides on the rule so its exec ACL is checked when the rule fires and
 # its owner is the context `assume`/`owner` report.
-function _compile_def!(store::RuleStore, entry::VolatileForm, e::FormContainer)
+function _compile_def!(b::_RuleBuilder, entry::VolatileForm, e::FormContainer)
     pattern = to_form(e.seq[2])
     implicit = length(e.seq) < 3
     body = implicit ? naught : to_form(e.seq[3])
@@ -526,10 +554,10 @@ function _compile_def!(store::RuleStore, entry::VolatileForm, e::FormContainer)
     else
         nothing
     end
-    _add_rule_object!(store, Rule(0, pattern, body, raw_symbols(pattern),
-                                  params_of(pattern), _entry_held(e), _entry_doc(e),
-                                  implicit, entry, _meta_owner(entry), memo))
-    return store
+    _badd_rule_object!(b, Rule(0, pattern, body, raw_symbols(pattern),
+                               params_of(pattern), _entry_held(e), _entry_doc(e),
+                               implicit, entry, _meta_owner(entry), memo))
+    return b
 end
 
 # Compile one stored `val` entry into a rule that dereferences the name's
@@ -537,15 +565,15 @@ end
 # default; the rule body is the `(ns-val …)` marker, so a `bind` is visible
 # through every use. A `val` requires `r` rather than `x`; `_match_store` knows
 # the difference by the marker body.
-function _compile_val!(store::RuleStore, entry::VolatileForm, e::FormContainer,
+function _compile_val!(b::_RuleBuilder, entry::VolatileForm, e::FormContainer,
                        path::Vector{Symbol})
     pattern = to_form(e.seq[2])
     name = _def_name(pattern)
     body = name === nothing ? to_form(e.seq[3]) : _ns_val_marker(path, name)
-    _add_rule_object!(store, Rule(0, pattern, body, raw_symbols(pattern),
-                                  params_of(pattern), Set{Symbol}(), _entry_doc(e),
-                                  false, entry, _meta_owner(entry), nothing))
-    return store
+    _badd_rule_object!(b, Rule(0, pattern, body, raw_symbols(pattern),
+                               params_of(pattern), Set{Symbol}(), _entry_doc(e),
+                               false, entry, _meta_owner(entry), nothing))
+    return b
 end
 
 # The argument name a compiled proxy rule matches. It is a rest wildcard over
@@ -570,26 +598,26 @@ end
 # becomes a call rule that hands the whole call to `(ns-proxy-apply …)`, which
 # applies the source namespace's rules lazily. The proxy entry itself is the
 # rule's entry, so its (inherited) ACL gates the call.
-function _compile_proxy!(env::Env, store::RuleStore, entry::VolatileForm,
-                         b::FormContainer)
-    path = _ns_path_of_marker(b)
-    name = _ns_name_of_fn(b)
-    (path === nothing || name === nothing) && return store
-    src = _proxy_source_entry(env, b)
+function _compile_proxy!(env::Env, b::_RuleBuilder, entry::VolatileForm,
+                         e::FormContainer)
+    path = _ns_path_of_marker(e)
+    name = _ns_name_of_fn(e)
+    (path === nothing || name === nothing) && return b
+    src = _proxy_source_entry(env, e)
     if src !== nothing && head_symbol(_entry_body(src)) === _VAL_HEAD
-        _add_rule_object!(store, Rule(0, Form(name), _ns_val_marker(path, name),
-                                      [name], Symbol[], Set{Symbol}(), nothing,
-                                      false, entry, _meta_owner(entry), nothing))
-        return store
+        _badd_rule_object!(b, Rule(0, Form(name), _ns_val_marker(path, name),
+                                   [name], Symbol[], Set{Symbol}(), nothing,
+                                   false, entry, _meta_owner(entry), nothing))
+        return b
     end
     pattern = _ns_form(Form[Form(name), Form(_PROXY_SPEC)])
     args = _ns_form(Form[Form(Symbol("'")), Form(_PROXY_ARG)])
     body = _ns_form(Form[Form(NS_PROXY_APPLY), _ns_path_form(path),
                           Form(Symbol(":", String(name))), args])
-    _add_rule_object!(store, Rule(0, pattern, body, raw_symbols(pattern),
-                                  [_PROXY_ARG], Set([_PROXY_ARG]), nothing,
-                                  false, entry, _meta_owner(entry), nothing))
-    return store
+    _badd_rule_object!(b, Rule(0, pattern, body, raw_symbols(pattern),
+                               [_PROXY_ARG], Set([_PROXY_ARG]), nothing,
+                               false, entry, _meta_owner(entry), nothing))
+    return b
 end
 
 # The arguments a `(ns-proxy-apply …)` body carries: the held rest container
@@ -682,54 +710,81 @@ function _ns_map_get(env::Env, ns::Namespace, key::Symbol; lazy::Bool = true)
     return to_form(v[key])
 end
 
+# The namespaces this task is currently compiling, so a cyclic proxy import
+# (`.a` importing from `.b`, which imports from `.a`) terminates: the inner
+# request sees whatever the source last committed, and the outer compile
+# publishes the complete state.
+const _NS_SYNCING_KEY = :AirLangNsSyncing
+
+function _ns_syncing()
+    d = task_local_storage()
+    s = get(d, _NS_SYNCING_KEY, nothing)
+    s isa Set{Base.UUID} && return s
+    s = Set{Base.UUID}()
+    task_local_storage(_NS_SYNCING_KEY, s)
+    return s
+end
+
 # Rebuild the namespace's compiled rules and (for an ordinary namespace) its name
-# map from the volatile's entry sequence.
+# map from the volatile's entry sequence. The compile happens in a transaction:
+# it reads the namespace volatile and publishes the new rule snapshot together,
+# so a concurrent reader keeps the previously committed snapshot until this
+# transaction commits and an aborted definition leaves no compiled trace.
 function _ns_sync!(env::Env, ns::Namespace)
-    val = ns.vf[]
-    ns.synced === val && return ns
-    ns.busy && return ns
-    ns.busy = true
+    _snapshot(ns.rules).source === ns.vf[] && return ns
+    syncing = _ns_syncing()
+    ns.vf.id in syncing && return ns
+    push!(syncing, ns.vf.id)
     try
-        entries = _ns_entries_value(val)
-        _clear_rules!(ns.rules)
-        # Later definitions match first, so compile the entry sequence in reverse.
-        seen_vals = Set{Symbol}()
-        for e in Iterators.reverse(entries)
-            e isa VolatileForm || continue
-            b = _entry_body(e)
-            b isa FormContainer || continue
-            h = head_symbol(b)
-            if h === NS_PROXY
-                _compile_proxy!(env, ns.rules, e, b)
-                continue
-            end
-            (h === _DEF_HEAD || h === _VAL_HEAD) || continue
-            length(b.seq) >= 2 || continue
-            if h === _DEF_HEAD
-                _compile_def!(ns.rules, e, b)
-            else
-                _compile_val!(ns.rules, e, b, ns.path)
-                # Recover the thread-local binding (a namespace loaded from the
-                # database has entries but no in-memory binding yet). The entry
-                # sequence is walked newest-first, so the first entry for a name
-                # is the one that wins; an older duplicate must not reset it.
-                name = _def_name(to_form(b.seq[2]))
-                if name !== nothing && length(b.seq) >= 3 && !(name in seen_vals)
-                    push!(seen_vals, name)
-                    _entry_val_binding!(env, ns, e, b, name)
-                end
-            end
+        return _atomically() do
+            _ns_compile!(env, ns)
+            ns
         end
-        # `.air` keeps its fixed core map instead of compiling one.
-        if isempty(ns.core)
-            map = _ns_build_map(env, ns, entries)
-            newval = _ns_form(entries, map)
-            isequal(newval, val) || (ns.vf[] = newval)
-        end
-        ns.synced = ns.vf[]
     finally
-        ns.busy = false
+        delete!(syncing, ns.vf.id)
     end
+end
+
+function _ns_compile!(env::Env, ns::Namespace)
+    val = ns.vf[]
+    _snapshot(ns.rules).source === val && return ns
+    entries = _ns_entries_value(val)
+    b = _RuleBuilder()
+    # Later definitions match first, so compile the entry sequence in reverse.
+    seen_vals = Set{Symbol}()
+    for e in Iterators.reverse(entries)
+        e isa VolatileForm || continue
+        eb = _entry_body(e)
+        eb isa FormContainer || continue
+        h = head_symbol(eb)
+        if h === NS_PROXY
+            _compile_proxy!(env, b, e, eb)
+            continue
+        end
+        (h === _DEF_HEAD || h === _VAL_HEAD) || continue
+        length(eb.seq) >= 2 || continue
+        if h === _DEF_HEAD
+            _compile_def!(b, e, eb)
+        else
+            _compile_val!(b, e, eb, ns.path)
+            # Recover the thread-local binding (a namespace loaded from the
+            # database has entries but no in-memory binding yet). The entry
+            # sequence is walked newest-first, so the first entry for a name is
+            # the one that wins; an older duplicate must not reset it.
+            name = _def_name(to_form(eb.seq[2]))
+            if name !== nothing && length(eb.seq) >= 3 && !(name in seen_vals)
+                push!(seen_vals, name)
+                _entry_val_binding!(env, ns, e, eb, name)
+            end
+        end
+    end
+    # `.air` keeps its fixed core map instead of compiling one.
+    if isempty(ns.core)
+        map = _ns_build_map(env, ns, entries)
+        newval = _ns_form(entries, map)
+        isequal(newval, val) || (ns.vf[] = newval)
+    end
+    ns.rules.live[] = RuleSnapshot(b.rules, b.by_symbol, ns.vf[])
     return ns
 end
 
@@ -835,7 +890,7 @@ end
 
 function _ns_lookup_root(env::Env)
     vf = _ns_root(env)
-    cached = get(env.nscache, (), nothing)
+    cached = _ns_cached(env, ())
     if cached !== nothing && cached.vf.id == vf.id
         _ns_sync!(env, cached)
         return cached
@@ -846,7 +901,7 @@ end
 # The wrapper for a namespace value, scanning the cache and then the name table.
 function _ns_from_value(env::Env, v::Form)
     v isa VolatileForm || return nothing
-    for ns in values(env.nscache)
+    for ns in _ns_cached_values(env)
         ns.vf.id == v.id && return _ns_sync!(env, ns)
     end
     for (nm, vf) in named_forms(v.db)
@@ -1019,7 +1074,6 @@ end
 function _ns_store_entries!(env::Env, ns::Namespace, entries::Vector{Form})
     map = _ns_build_map(env, ns, entries)
     ns.vf[] = _ns_form(entries, map)
-    ns.synced = nothing
     _ns_sync!(env, ns)
     return ns
 end
@@ -1333,17 +1387,19 @@ end
 # ---- activating a namespace --------------------------------------------------
 
 # A copy of a namespace's own rules selected by `only`/`except`.
-function _filtered_store(ns::Namespace, only, except)
+function _filtered_store(env::Env, ns::Namespace, only, except)
     (only === nothing && isempty(except)) && return ns.rules
-    store = RuleStore()
-    for r in ns.rules.rules
+    _ns_sync!(env, ns)
+    snap = _snapshot(ns.rules)
+    b = _RuleBuilder()
+    for r in snap.rules
         name = _def_name(r.pattern)
         name === nothing && continue
         only !== nothing && !(name in only) && continue
         name in except && continue
-        _add_rule_object!(store, r)
+        _badd_rule_object!(b, r)
     end
-    return store
+    return RuleStore(RuleSnapshot(b.rules, b.by_symbol, nothing))
 end
 
 # The rule layers active in a namespace. Imports are materialized entries, so a
@@ -1473,7 +1529,7 @@ function _namespace_using_layers(env::Env, scope::Scope, call::FormContainer)
             throw(AirEvalError("no namespace at $(_ns_display(u.path))"))
         ls = _ns_active_layers(env, src)
         if u.only !== nothing || !isempty(u.except)
-            ls = RuleStore[_filtered_store(src, u.only, u.except); ls[2:end]]
+            ls = RuleStore[_filtered_store(env, src, u.only, u.except); ls[2:end]]
         end
         append!(layers, ls)
     end
@@ -1530,7 +1586,7 @@ function _bi_using(env::Env, scope::Scope, call::FormContainer)
             throw(AirEvalError("no namespace at $(_ns_display(u.path))"))
         ls = _ns_active_layers(env, src)
         if u.only !== nothing || !isempty(u.except)
-            ls = RuleStore[_filtered_store(src, u.only, u.except); ls[2:end]]
+            ls = RuleStore[_filtered_store(env, src, u.only, u.except); ls[2:end]]
         end
         append!(layers, ls)
         u.as === nothing || push!(bindings, u.as => src.vf)
@@ -1586,11 +1642,13 @@ end
 
 function _del_global!(env::Env, name::Symbol)
     _global_protected(name) && return naught
-    rules = env.rules.rules
-    for i in Iterators.reverse(eachindex(rules))
-        name in rules[i].anchors && deleteat!(rules, i)
+    _update_rules!(env.rules) do snap
+        rules = copy(snap.rules)
+        for i in Iterators.reverse(eachindex(rules))
+            name in rules[i].anchors && deleteat!(rules, i)
+        end
+        RuleSnapshot(rules, _rule_index(rules), snap.source)
     end
-    _reindex!(env.rules)
     return naught
 end
 
@@ -1736,7 +1794,7 @@ special!(:bind, _bi_bind)
 function _bindings_form(env::Env)
     pairs = Pair{Symbol,Any}[]
     for (v, val) in Air.vars()
-        b = get(env.valof, v, nothing)
+        b = get(_val_table(env).reverse, v, nothing)
         b === nothing && continue
         push!(pairs, Symbol(":", String(b.name)) => val)
     end

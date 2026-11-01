@@ -29,6 +29,8 @@ project:
       children:
         - file: ssh.md
         - file: ui.md
+        - file: agents.md
+        - file: events.md
     - title: Rules
       children:
         - file: rules.md

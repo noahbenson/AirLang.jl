@@ -158,6 +158,24 @@ Base.showerror(io::IO, e::AirStreamError) =
     print(io, "air stream error: ", e.msg)
 
 """
+    AirAgentError(tag, msg, data = Form[Form(msg)])
+
+An agent operation failed: the configuration is incomplete, the provider
+answered with an error status, the network failed, or the context window is
+exhausted. A `do` block sees it as the air error `(error :tag data…)`.
+"""
+struct AirAgentError <: AirError
+    tag::Symbol
+    msg::String
+    data::Vector{Form}
+end
+AirAgentError(tag::Symbol, msg::AbstractString) =
+    AirAgentError(tag, String(msg), Form[Form(String(msg))])
+
+Base.showerror(io::IO, e::AirAgentError) =
+    print(io, "air agent error: ", e.msg)
+
+"""
     AirThrown(form)
 
 An air error thrown by `(raise …)`. It carries the error object `form` — a form

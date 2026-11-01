@@ -27,6 +27,7 @@ process resources. Returns a process exit code.
 function air_main(args::Vector{String})
     env = default_env()
     if isempty(args)
+        _resume_jobs_quietly!(env)
         air_repl(; env = env, history = get(ENV, "AIR_HISTORY", nothing),
                  width = _terminal_width())
         return 0
@@ -65,7 +66,10 @@ function air_main(args::Vector{String})
         end
         i += 1
     end
-    serve && return _serve_forever()
+    if serve
+        _resume_jobs_quietly!(env)
+        return _serve_forever()
+    end
     return 0
 end
 

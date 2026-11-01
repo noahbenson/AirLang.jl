@@ -211,12 +211,14 @@ end
 
 function _collect_doc_rules!(out::Vector{Rule}, env::Env, scope::Scope,
                              store::RuleLayer, arg::Form, newest_first::Bool)
-    idxs = is_raw_symbol(arg) ? get(store.by_symbol, value(arg), Int[]) :
-           candidate_rule_indices(store, arg)
+    # One snapshot for the fetch and the index, so the two cannot disagree.
+    snap = store isa RuleStore ? _snapshot(store) : store
+    idxs = is_raw_symbol(arg) ? get(snap.by_symbol, value(arg), Int[]) :
+           candidate_rule_indices(snap, arg)
     found = Rule[]
     seen = Form[]
     for i in idxs
-        r = store.rules[i]
+        r = snap.rules[i]
         # A definition the user may not read behaves like an absent one.
         (r.entry !== nothing && !_can(env, r.entry, :read)) && continue
         # A namespace store is newest-first, so the first occurrence of a

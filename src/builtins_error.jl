@@ -155,6 +155,9 @@ function _error_form(e)
     e isa AirStreamError &&
         return _error_object(Form[Form(Symbol(":" * String(e.tag))), e.data...],
                              Pair{Symbol,Form}[])
+    e isa AirAgentError &&
+        return _error_object(Form[Form(Symbol(":" * String(e.tag))), e.data...],
+                             Pair{Symbol,Form}[])
     return _internal_error_form(e)
 end
 

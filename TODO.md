@@ -12,7 +12,8 @@ reduction engine, `def`, `let`, `if`/`cond`, `do`, `get`, `match?`, `matches`,
 wildcard? coll? atom? naught?`), collection verbs (`push pop drop length haskey
 in merge`), `seqpart`/`mappart`, namespaces (`namespace`, `using`/`use`/`import`,
 `clear`/`unuse`/`del`), thread-local `val`/`bind`/`bindings`, `task`/`await`,
-roots and homes (`$`, `@`, `.sys`, `.lib`, `.main`, `.env`), users and
+scheduled events (`do-at`/`do-in`/`tx-at`/`tx-in`) and durable tasks with
+checkpoints, resume, and cancellation, roots and homes (`$`, `@`, `.sys`, `.lib`, `.main`, `.env`), users and
 permissions (`as-user`, `create-user`, `create-constituent`, `set-admin`,
 `users`, `permissions`, `chmod!`, `chown!`, `assume`), `load-air`/`AIR_LIBPATH`
 libraries, `open-airdb`/`close-airdb` with per-database namespaces and users,
@@ -23,7 +24,8 @@ YAML, TOML, and `.env`), the set verbs, the Mathematica-style list verbs
 (`bit-and`, `bit-or`, `bit-xor`, `bit-not`, `bit-shift-left`,
 `bit-shift-right`), the REPL (multi-line input, `AIR_HISTORY`,
 pretty-printing), the SSH server (`ssh-server`: key login, a remote REPL,
-SFTP), the immutable `bytes` extern,
+SFTP), agent accounts with durable sessions and channels over the Anthropic
+and OpenAI-compatible APIs, the immutable `bytes` extern,
 `(exit)`, and the CLI.
 
 ---
@@ -62,7 +64,8 @@ SFTP), the immutable `bytes` extern,
   value that encodes as a link until delivered and as its value afterwards.
   `get`/`value` force a delay and read an actor or promise, printing and encoding
   never force one, and the three are `un-storable` across databases. `task`
-  returns a database promise whose running task is process-local.
+  returns a database promise; a plain task is process-local, while
+  `durable=true` stores a rerunnable record (see section 9).
 - [x] **SSH access.** `(ssh-server [name] opts…)` starts a server admits the
   users its owner may assume (`air`: everyone, an admin: itself and its
   constituents); a user logs in with a key from their own `$.config.ssh` and
@@ -81,6 +84,19 @@ SFTP), the immutable `bytes` extern,
   `ui-run` drive it, `ui-render` is a deterministic text renderer, and
   `ui-show` is a full-screen terminal renderer over SSH (alternate screen,
   focus, validation line, Esc to dismiss, Ctrl-C to abort). See `book/ui.md`.
+- [x] **Agents and channels.** A user record carries `kind=:human|:agent`, and
+  `(create-agent :name provider=… model=… api-key=… …)` creates an `:agent`
+  constituent whose inference settings live in `$.config.agent`; `open-session`
+  returns a durable session — a mutable behind `agent/<agent>/sessions/<sid>`
+  with a channel of an outbox, an inbox, and a hook copy queue. A worker task
+  turns a text message into a model turn and a keyword-headed form into a
+  command, answering with a structured `(reply …)` or an error object and
+  keeping the transcript, usage, and a context estimate in the state.
+  `context=` enables usage-driven compaction, the owner's `on-receive` hook
+  receives a copy of every reply (so `session-fetch` still sees it), and a
+  session reopens lazily after a restart. Providers: the Anthropic Messages API
+  and the OpenAI chat-completions dialect, including any `:compatible` server.
+  See `book/agents.md`.
 - [ ] **More UI renderers.** A local `stty`-driven terminal renderer (v1 needs a
   pty SSH session) and a web renderer would exercise the abstract layer; both
   implement the same attach/draw/event contract.
@@ -96,6 +112,23 @@ SFTP), the immutable `bytes` extern,
 - [ ] **Non-interactive exec over SSH.** `ssh host command` opens a channel
   request air does not serve, so only the REPL and the SFTP subsystem are
   available; legacy `scp` (`scp -O`) depends on exec and therefore fails.
+- [ ] **Streaming model replies.** The agent layer is text in, one whole reply
+  out; server-sent events would let a session show tokens as they arrive.
+- [ ] **Tools and air evaluation by an agent.** No function calling, and the
+  agent cannot evaluate air code; both need a tool-call loop in the worker and a
+  policy for what an `:agent` account may do.
+- [ ] **An exact tokenizer.** The context estimate is a characters-over-four
+  heuristic floored by the last exact input count, so compaction may trigger
+  early or late; a real tokenizer per provider would fix the trigger.
+- [ ] **Prompt caching.** Anthropic cache breakpoints and OpenAI's cached-input
+  accounting are ignored; both would reduce the cost of a long transcript.
+- [ ] **Session GC and cross-process locks.** Sessions (named forms, streams,
+  transcripts) accumulate with no purge, and two processes over one database are
+  not coordinated, so a single worker per session is an assumption rather than
+  an enforced invariant.
+- [ ] **Provider quirks and cost accounting.** Some OpenAI-compatible servers
+  want `max_completion_tokens` or reject a `system` message; `params=` is the
+  escape hatch for now. Usage is counted, not priced.
 - [ ] **Preemptible evaluation.** `Ctrl-C` in a session evaluates
   `(raise :ctrl-c)`, but air evaluation is not preemptible, so a byte sent while
   a form runs is read only when that form finishes.
@@ -568,14 +601,20 @@ class-based exception hierarchies.
 - [x] **Serializable promises.** `(promise)` is a single-assignment database
   value that always serializes as the link `"~uuid"` (pending or delivered), so
   a reader waits on the same promise and a delivery survives the round trip.
-- [ ] **Storing a `task` in the database.** `(task body…)` returns a database
-  `PromiseForm`, so the promise itself serializes (`"~uuid"` until delivered).
-  The running task, however, is a process item: its held body and context are
-  not stored, so a task in flight when the process stops never delivers, and a
-  promise that is saved but never delivered is simply lost for now. If
-  respawning is wanted, the database could store the body and context and re-run
-  it on load; the open question is *when* — immediately on load, lazily on the
-  first `await`, or never. No decision and no implementation yet.
+- [x] **Storing a `task` in the database.** `(task … durable=true name=:x)`
+  stores the record — captured body, namespace context, layers, `val` bindings,
+  `@`, `.env`, owner, schedule, status, attempts, checkpoints, result, error,
+  and promise — in the user's `$.config.tasks`, and a restart reruns it from
+  the start, replaying its `(checkpoint form)` steps. Resume happens when air
+  starts (before the REPL or serving) and on `(tasks-resume)`; a plain `task`
+  remains a process item whose running state is not stored. The same record
+  powers `(do-at …)`/`(do-in …)`/`(tx-at …)`/`(tx-in …)` events in
+  `$.config.events`. See `book/events.md`.
+- [ ] **Job scheduling refinements.** Cron syntax, retry/backoff policies,
+  cancellation that preempts a running body, a single heap-based scheduler
+  instead of one polling task per job, labelled checkpoints (`key=`), purging a
+  reused terminal name, and cross-process coordination (leases or heartbeats)
+  so two live processes over one database agree on cancels and deliveries.
 
 ## 10. Julia interop (`extern`)
 

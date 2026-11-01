@@ -233,14 +233,22 @@ _lib_lock(dir::AbstractString) =
 # namespace volatile itself is gone.
 function _purge_namespace_prefix!(env::Env, path::Vector{Symbol})
     n = length(path)
-    for key in collect(keys(env.nscache))
-        (length(key) >= n && key[1:n] == Tuple(path)) && delete!(env.nscache, key)
+    lock(env.metalock) do
+        for key in collect(keys(env.nscache))
+            (length(key) >= n && key[1:n] == Tuple(path)) && delete!(env.nscache, key)
+        end
+        return nothing
     end
-    for (key, b) in collect(env.vals)
-        p = key[1]
-        (length(p) >= n && p[1:n] == Tuple(path)) || continue
-        delete!(env.vals, key)
-        get(env.valof, b.var, nothing) === b && delete!(env.valof, b.var)
+    _update_vals!(env) do table
+        bindings = copy(table.bindings)
+        reverse = copy(table.reverse)
+        for (key, b) in table.bindings
+            p = key[1]
+            (length(p) >= n && p[1:n] == Tuple(path)) || continue
+            delete!(bindings, key)
+            get(reverse, b.var, nothing) === b && delete!(reverse, b.var)
+        end
+        return (_ValTable(bindings, reverse), nothing)
     end
     return nothing
 end

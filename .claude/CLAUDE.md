@@ -353,8 +353,10 @@ overrides as a mapping that `bind` can reinstall. `(task form…)` holds its
 arguments, evaluates them on a spawned task that inherits the current bindings,
 identity, namespace, and database context, and returns a database-backed
 promise; `(await p)` yields the final form's value or rethrows the task's error.
-`(promise)`/`(deliver p v)`/`(ready? p)` are the same value without a body (see
-Reference forms above), and `future` is a tombstone.
+`bindings=` (absent inherits, `false` none, a mapping exact) selects the
+overrides, and `durable=true name=:x` registers a restartable job instead (see
+Events below). `(promise)`/`(deliver p v)`/`(ready? p)` are the same value
+without a body (see Reference forms above), and `future` is a tombstone.
 
 **Users and permissions.** User ids are keywords (`:air`, `:alice`,
 `:game:bob`); `air` is the superuser, and a constituent is exactly
@@ -644,6 +646,61 @@ element but a user may not, and each element's fact is asserted under a reason
 label unique to the instance and element, so retracting it never disturbs an
 equal fact asserted elsewhere. Assertions and callbacks run in the namespace and
 `val` bindings captured at instantiation.
+
+**Agents and channels.** A user record carries `kind=:human|:agent` (the default
+is `:human`; `create-user` and `create-constituent` are always human).
+`(create-agent :bot provider=:fireworks model="…" api-key="…" …)` creates an
+`:agent` constituent of the caller and writes its inference settings — provider,
+dialect, `base-url`, model, API key, system prompt, `max-tokens`, `params`,
+`context`, `compact-at`, `compact-keep`, `timeout`, `retries` — as vals in
+`$.config.agent`, which only the agent and its admin can read; `agent-config`
+redacts `api-key` unless `secrets=true`, and `agent-config!` rotates it, which
+affects open sessions because the key is read live. A session is a **durable
+mutable behind the named form** `agent/<agent>/sessions/<sid>`, holding the
+status, a config snapshot, the transcript, the usage counters, and three
+streams; the handle `(session id=… agent=… owner=… state=<mut> channel=…)` is a
+convenience value and the mutable is the root. A channel's directions are from
+the **owner's** point of view: `out` carries a message *to* the agent, `in`
+carries its replies, and `in-notify` is the copy queue for the owner's
+`on-receive` hook. `open-session` creates one (or reopens one by `id=`),
+`sessions`/`session-info`/`session-history`/`session-channel` inspect it,
+`session-post`/`session-fetch`/`session-hook!`/`session-resume`/`session-close!`
+drive it, and the `channel-…` builtins are the same operations on a bare
+channel. A text message becomes a model turn; a keyword-headed form is a command
+(`:help`, `:context`, `:reset`, `:system`, `:model`, `:compact`, `:stop`);
+replies are `(reply text=… model=… stop=… usage=… time=…)` and failures are
+`(error :agent-http …)`/`:agent-network`/`:agent-misconfigured`/`:agent-context`
+objects. The hook form is called as `(form msg)`, runs as the owner in the
+namespace where it was installed, and is **handed a copy** — the original stays
+queued for `session-fetch`, and the hook runs whatever hook is installed when
+the copy is dequeued; a hook error lands in `last-hook-error`. Sessions are
+woken lazily: nothing runs after a restart until a message is posted or
+`open-session`/`session-resume` finds one queued. Use `timeout=` on every
+blocking fetch.
+
+**Events and durable tasks.** `(do-at time body…)` and `(do-in interval body…)`
+register a durable event in the creator's `$.config.events`, run the body in its
+own task, and return the promise it delivers; `(tx-at …)`/`(tx-in …)` make the
+body one `tx`. The body is the positional forms plus the block's `let=`/
+`catch=`, rebuilt as a `do`/`tx`; options are `name=`, `bindings=`, and (for
+the `-in` forms) `repeat=true`, which re-arms `interval` seconds after each run
+completes. `bindings=true` snapshots the creator's `val` overrides **as data**,
+so an event sees the values as of creation and a captured stream still works
+after a restart; an unstorable value fails at creation. A record holds id, name,
+kind, owner, `tx`, captured `ctx`, body, `at`/`interval`/`repeat`, `status`
+(`:pending`/`:running`/`:done`/`:error`/`:cancelled`), `attempts`, `delivered`,
+`checkpoints`, `result`, `error`, and the promise, and lives in the user's home.
+An error is *delivered* as an error object; cancelling settles an undelivered
+promise with `(error :event-cancelled name=…)`/`:task-cancelled`; the status
+write and delivery share a transaction. `(events)`/`(event x)`/`(cancel-event
+x)`/`(events-resume)` and `(tasks)`/`(task-info …)`/`(cancel-task …)`/
+`(tasks-resume)` take a name or promise and an optional user; a live name cannot
+be reused, a terminal one is shadowed. `(task … durable=true name=:x)` is the
+same record in `$.config.tasks`; it reruns from the start after a restart, and
+`(checkpoint form)` returns the value a previous attempt recorded (outside a
+durable run it just evaluates the form; inside an open transaction it raises).
+Records are single-process authority — no leases; `air` resumes them on startup
+before the REPL and serving, and `(resumed=n)` counts the records made active.
 
 **Keys.** A bare key is a keyword: `(form x=10)` has the key `:x`, so
 `(form x=10).:x` is `10`. A **computed key** is written `~expr=value`, and the

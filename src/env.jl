@@ -357,17 +357,86 @@ struct Rule
 end
 
 """
+    RuleSnapshot
+
+One immutable compiled state of a rule store: the rules in insertion order
+(which is match priority), the index from each raw symbol to the rule positions
+anchored by it, and — for a namespace's own store — the namespace volatile value
+the snapshot was compiled from (compared by identity to decide whether a resync
+is needed).
+
+A snapshot is never mutated after publication. A store publishes a whole new
+snapshot for every change, so a reader that takes one snapshot for the length of
+a lookup always sees one consistent rule set: a definition staged by another
+task is invisible until its transaction commits, and an aborted transaction
+publishes nothing.
+"""
+struct RuleSnapshot
+    rules::Vector{Rule}
+    by_symbol::Dict{Symbol,Vector{Int}}
+    source::Union{Nothing,Form}
+end
+RuleSnapshot() = RuleSnapshot(Rule[], Dict{Symbol,Vector{Int}}(), nothing)
+
+# The index from anchor symbol to rule position for a rule vector.
+function _rule_index(rules::Vector{Rule})
+    by = Dict{Symbol,Vector{Int}}()
+    for (i, r) in enumerate(rules)
+        for s in r.anchors
+            push!(get!(by, s, Int[]), i)
+        end
+    end
+    return by
+end
+
+# Run `f` in a transaction, joining one that is already open. Air's transaction
+# stages writes per task and publishes them atomically at commit, so a reader in
+# another task never observes a half-applied update and an abort discards it.
+@inline function _atomically(f::Function)
+    return currtx() === nothing ? tx(f) : f()
+end
+
+"""
     RuleStore
 
-The global rules, in insertion order (which is match priority), plus an index
-from each raw symbol to the rules anchored by it.
+A `RuleLayer` of global or compiled rules. The current contents live in an Air
+`Volatile`, so a store update is transactional: staged in the writer's task and
+published by one field assignment at commit. A namespace's store stamps its
+snapshot with the namespace value it was compiled from (see `RuleSnapshot`).
 """
 mutable struct RuleStore <: RuleLayer
+    live::Volatile{RuleSnapshot}
+end
+RuleStore() = RuleStore(Volatile{RuleSnapshot}(RuleSnapshot()))
+RuleStore(snap::RuleSnapshot) = RuleStore(Volatile{RuleSnapshot}(snap))
+
+# The current snapshot. Outside a transaction this is one field load; inside one
+# it is the transaction's (staged or committed) value and joins its read set.
+@inline _snapshot(store::RuleStore) = store.live[]
+
+# Read-modify-write a store. The read and the write are atomic with respect to
+# other tasks; a concurrent update makes the commit retry this closure on the
+# fresh snapshot instead of losing the other update.
+function _update_rules!(f::Function, store::RuleStore)
+    return _atomically() do
+        snap = f(store.live[])
+        store.live[] = snap
+        snap
+    end
+end
+
+# A private builder for compiling a store from scratch. The vectors are owned by
+# the builder until it is published as one `RuleSnapshot`; a builder seeded from
+# an existing snapshot gets copies of both containers and of every index vector,
+# so building never mutates a published snapshot.
+mutable struct _RuleBuilder
     rules::Vector{Rule}
     by_symbol::Dict{Symbol,Vector{Int}}
 end
+_RuleBuilder() = _RuleBuilder(Rule[], Dict{Symbol,Vector{Int}}())
 
-RuleStore() = RuleStore(Rule[], Dict{Symbol,Vector{Int}}())
+_copy_index(by::Dict{Symbol,Vector{Int}}) =
+    Dict{Symbol,Vector{Int}}(k => copy(v) for (k, v) in by)
 
 # ---- namespaces --------------------------------------------------------------
 
@@ -395,12 +464,13 @@ end
 
 A namespace: a `VolatileForm` holding a collection of forms (its sequence is the
 append-ordered list of entries — `def`s, `val`s, imported copies, proxies, and
-subnamespace markers; its map is the name index used by `.` access), a cache of
-the rules compiled from those entries, and the fixed `core` entries a built-in
-namespace exposes. `path` is the namespace's absolute address (`()` is the root).
-`protected` names can never be removed by `clear`/`del`. `synced` is the volatile
-value the caches were built from (compared by identity), and `busy` breaks a
-cycle while the caches are being rebuilt.
+subnamespace markers; its map is the name index used by `.` access), the rules
+compiled from those entries, and the fixed `core` entries a built-in namespace
+exposes. `path` is the namespace's absolute address (`()` is the root).
+`protected` names can never be removed by `clear`/`del`. The compiled rules are
+a transactional `RuleStore`: each compile publishes a fresh snapshot stamped with
+the volatile value it was built from, so a reader in another task never sees a
+partially rebuilt store and a rolled-back definition leaves no compiled trace.
 """
 mutable struct Namespace
     vf::VolatileForm
@@ -408,13 +478,10 @@ mutable struct Namespace
     core::Dict{Symbol,Form}
     protected::Set{Symbol}
     rules::RuleStore
-    synced::Union{Nothing,Form}
-    busy::Bool
 end
 
 function Namespace(vf::VolatileForm, path::Vector{Symbol})
-    return Namespace(vf, path, Dict{Symbol,Form}(), Set{Symbol}(), RuleStore(),
-                     nothing, false)
+    return Namespace(vf, path, Dict{Symbol,Form}(), Set{Symbol}(), RuleStore())
 end
 
 """
@@ -433,6 +500,32 @@ struct ValBinding
     path::Vector{Symbol}
     name::Symbol
     entry::Union{Nothing,VolatileForm}
+end
+
+"""
+    _ValTable
+
+The process's `val` bindings: `bindings` maps `(path, name)` to its `ValBinding`,
+and `reverse` maps a `Var` back to the binding so `(bindings)` can name an
+override. Held in an Air `Volatile` (see `Env.vals`) and replaced whole on a
+definition, so the two tables and the bindings they hold are published as one
+value and a reader never sees a half-installed `val`.
+"""
+struct _ValTable
+    bindings::Dict{Tuple,ValBinding}
+    reverse::IdDict{Any,ValBinding}
+end
+_ValTable() = _ValTable(Dict{Tuple,ValBinding}(), IdDict{Any,ValBinding}())
+
+@inline _val_table(env) = env.vals[]
+
+# Read-modify-write the binding table; `f` returns `(newtable, result)`.
+function _update_vals!(f::Function, env)
+    return _atomically() do
+        table, result = f(env.vals[])
+        env.vals[] = table
+        result
+    end
 end
 
 # ---- the environment ---------------------------------------------------------
@@ -498,14 +591,19 @@ mutable struct Env
     # one. A namespace at or under a key lives in that database rather than in
     # `sysdb`.
     dbs::Dict{Tuple,AirDB.AbstractDatabase}
-    # The `val` bindings, keyed by `(path, name)`, and the reverse index from a
-    # `Var` back to its binding so `bindings` can name what it reports.
-    vals::Dict{Tuple,ValBinding}
-    valof::IdDict{Any,ValBinding}
+    # The `val` bindings, keyed by `(path, name)`, with the reverse index from a
+    # `Var` back to its binding so `bindings` can name what it reports. Held in
+    # an Air `Volatile`: a definition stages a new table and publishes it at
+    # commit, so another task never sees a half-installed `val` and an aborted
+    # block installs nothing.
+    vals::Volatile{_ValTable}
     # The per-task evaluation contexts (user, current namespace, `@` root, and
-    # `.env`), the lock guarding the registry, and whether `_bootstrap!` has run.
+    # `.env`), the lock guarding the registry, the lock guarding the namespace
+    # wrapper cache and the opened-database table, and whether `_bootstrap!` has
+    # run.
     ctx::IdDict{Task,TaskContext}
     ctxlock::ReentrantLock
+    metalock::ReentrantLock
     booted::Ref{Bool}
 end
 
@@ -514,9 +612,8 @@ function Env(; db = nothing, max_steps::Int = 1_000_000, max_depth::Int = 2_000)
     env = Env(RuleStore(), max_steps, Ref(0), max_depth, Ref(0), nothing,
               Dict{Any,Any}(), nothing, sysdb,
               Dict{Tuple,Namespace}(), Dict{Tuple,AirDB.AbstractDatabase}(),
-              Dict{Tuple,ValBinding}(),
-              IdDict{Any,ValBinding}(), IdDict{Task,TaskContext}(),
-              ReentrantLock(), Ref(false))
+              Volatile{_ValTable}(_ValTable()), IdDict{Task,TaskContext}(),
+              ReentrantLock(), ReentrantLock(), Ref(false))
     register_constants!(env)
     register_stdlib!(env)
     _bootstrap!(env)
@@ -584,8 +681,25 @@ keyword constructor runs `_bootstrap!`, which a session must not repeat.
 function _session_env(env::Env)
     return Env(env.rules, env.max_steps, Ref(0), env.max_depth, Ref(0), nothing,
                Dict{Any,Any}(), env.nsroot, env.sysdb, env.nscache, env.dbs,
-               env.vals, env.valof, env.ctx, env.ctxlock, env.booted)
+               env.vals, env.ctx, env.ctxlock, env.metalock, env.booted)
 end
+
+# ---- the guarded process caches ----------------------------------------------
+#
+# The namespace-wrapper cache and the opened-database table are ordinary
+# dictionaries shared by every task using the environment. They are written only
+# when a namespace is first resolved or a database is opened, but a `Dict` cannot
+# be read while another task inserts into it, so every access goes through
+# `env.metalock`. The lock is never held across a transaction commit: a wrapper
+# is inserted under it and compiled outside it, and a database is registered or
+# removed under it without any other lock held.
+
+_ns_cached(env::Env, key) = lock(() -> get(env.nscache, key, nothing), env.metalock)
+_ns_cached_values(env::Env) = lock(() -> collect(values(env.nscache)), env.metalock)
+_ns_cached_keys(env::Env) = lock(() -> collect(keys(env.nscache)), env.metalock)
+_db_registered(env::Env, key) = lock(() -> get(env.dbs, key, nothing), env.metalock)
+_db_keys(env::Env) = lock(() -> collect(keys(env.dbs)), env.metalock)
+_db_pairs(env::Env) = lock(() -> collect(env.dbs), env.metalock)
 
 """
     default_env() -> Env
@@ -596,8 +710,44 @@ default_env() = Env()
 
 # ---- rule registration -------------------------------------------------------
 
-# Add or replace a rule. A pattern that is `isequal` to an existing one replaces
-# it, keeping its position (and so its priority).
+# Add or replace a rule in a private builder. A pattern that is `isequal` to an
+# existing one replaces it, keeping its position (and so its priority).
+function _badd_rule!(b::_RuleBuilder, pattern::Form, body::Form;
+                     held::Set{Symbol} = Set{Symbol}(),
+                     doc::Union{Nothing,String} = nothing,
+                     implicit::Bool = false,
+                     entry::Union{Nothing,VolatileForm} = nothing,
+                     owner::Union{Nothing,Symbol} = nothing,
+                     memo::Union{Nothing,_MemoTable} = nothing)
+    anchors = raw_symbols(pattern)
+    params = params_of(pattern)
+    for (i, r) in enumerate(b.rules)
+        if isequal(r.pattern, pattern)
+            b.rules[i] = Rule(i, pattern, body, anchors, params, held, doc,
+                              implicit, entry, owner, memo)
+            # A replacement can change the anchors, so rebuild the index.
+            empty!(b.by_symbol)
+            for (j, rr) in enumerate(b.rules)
+                for s in rr.anchors
+                    push!(get!(b.by_symbol, s, Int[]), j)
+                end
+            end
+            return b.rules[i]
+        end
+    end
+    id = length(b.rules) + 1
+    rule = Rule(id, pattern, body, anchors, params, held, doc, implicit, entry,
+                owner, memo)
+    push!(b.rules, rule)
+    for s in anchors
+        push!(get!(b.by_symbol, s, Int[]), id)
+    end
+    return rule
+end
+
+# Add or replace a rule in a published store. The read-modify-write is
+# transactional, so a concurrent update causes a retry rather than a lost rule,
+# and a reader sees the old store until the commit.
 function add_rule!(store::RuleStore, pattern::Form, body::Form;
                    held::Set{Symbol} = Set{Symbol}(),
                    doc::Union{Nothing,String} = nothing,
@@ -605,54 +755,27 @@ function add_rule!(store::RuleStore, pattern::Form, body::Form;
                    entry::Union{Nothing,VolatileForm} = nothing,
                    owner::Union{Nothing,Symbol} = nothing,
                    memo::Union{Nothing,_MemoTable} = nothing)
-    anchors = raw_symbols(pattern)
-    params = params_of(pattern)
-    for (i, r) in enumerate(store.rules)
-        if isequal(r.pattern, pattern)
-            store.rules[i] = Rule(i, pattern, body, anchors, params, held, doc,
-                                  implicit, entry, owner, memo)
-            _reindex!(store)
-            return store.rules[i]
-        end
+    made = Ref{Union{Nothing,Rule}}(nothing)
+    _update_rules!(store) do snap
+        b = _RuleBuilder(copy(snap.rules), _copy_index(snap.by_symbol))
+        made[] = _badd_rule!(b, pattern, body; held = held, doc = doc,
+                             implicit = implicit, entry = entry, owner = owner,
+                             memo = memo)
+        RuleSnapshot(b.rules, b.by_symbol, snap.source)
     end
-    id = length(store.rules) + 1
-    rule = Rule(id, pattern, body, anchors, params, held, doc, implicit, entry,
-                owner, memo)
-    push!(store.rules, rule)
-    for s in anchors
-        push!(get!(store.by_symbol, s, Int[]), id)
-    end
-    return rule
-end
-
-function _reindex!(store::RuleStore)
-    empty!(store.by_symbol)
-    for (i, r) in enumerate(store.rules)
-        for s in r.anchors
-            push!(get!(store.by_symbol, s, Int[]), i)
-        end
-    end
-    return store
-end
-
-# Empty a store in place. Namespace stores and the local layers built for
-# `using` are rebuilt as the namespace's volatile value changes.
-function _clear_rules!(store::RuleStore)
-    empty!(store.rules)
-    empty!(store.by_symbol)
-    return store
+    return made[]
 end
 
 # Append an already-built rule, keeping the store's insertion order (which is
 # matching priority). Used when a namespace's compiled rules are copied into a
 # filtered `using` layer.
-function _add_rule_object!(store::RuleStore, r::Rule)
-    id = length(store.rules) + 1
+function _badd_rule_object!(b::_RuleBuilder, r::Rule)
+    id = length(b.rules) + 1
     rule = Rule(id, r.pattern, r.body, r.anchors, r.params, r.held, r.doc,
                 r.implicit, r.entry, r.owner, r.memo)
-    push!(store.rules, rule)
+    push!(b.rules, rule)
     for s in rule.anchors
-        push!(get!(store.by_symbol, s, Int[]), id)
+        push!(get!(b.by_symbol, s, Int[]), id)
     end
     return rule
 end

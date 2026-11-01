@@ -18,7 +18,7 @@
 
 # The path of the namespace rooting `db`, or `nothing` if it is not open.
 function _db_root_path(env::Env, db::AirDB.AbstractDatabase)
-    for (t, d) in env.dbs
+    for (t, d) in _db_pairs(env)
         d === db && return Symbol[t...]
     end
     return nothing
@@ -190,7 +190,8 @@ function _ensure_db_user!(env::Env, db::AirDB.AbstractDatabase, opener::Symbol,
     _db_user_exists(env, db, opener) && return nothing
     _create_system_user!(env, opener;
                          admin = details === nothing ? false : details.admin,
-                         parent = details === nothing ? nothing : details.parent)
+                         parent = details === nothing ? nothing : details.parent,
+                         kind = details === nothing ? :human : details.kind)
     return nothing
 end
 
@@ -213,15 +214,17 @@ function open_airdb!(env::Env, path::Vector{Symbol}, db::AirDB.AbstractDatabase;
         # user record is looked for.
         details = _user_details(env, opener)
         root = tx() do
-            haskey(env.dbs, key) && throw(AirEvalError(
-                "a database is already open at $(_ns_display(path))"))
+            lock(env.metalock) do
+                haskey(env.dbs, key) && throw(AirEvalError(
+                    "a database is already open at $(_ns_display(path))"))
+                env.dbs[key] = db
+            end
+            registered = true
             # A namespace rooted in another database cannot become this
             # database's root.
             _ns_lookup(env, path; lazy = false) === nothing ||
                 throw(AirEvalError(
                     "a namespace already exists at $(_ns_display(path))"))
-            env.dbs[key] = db
-            registered = true
             existed = named_form(db, _ns_name(path); create = nothing) !== nothing
             ns = _ns_ensure!(env, path)
             c.dbroot = ns.vf
@@ -239,7 +242,7 @@ function open_airdb!(env::Env, path::Vector{Symbol}, db::AirDB.AbstractDatabase;
         return root
     catch
         c.dbroot = prevroot
-        registered && delete!(env.dbs, key)
+        registered && lock(() -> delete!(env.dbs, key), env.metalock)
         _purge_namespace_prefix!(env, path)
         try
             close(db)
@@ -280,11 +283,11 @@ function close_airdb!(env::Env, path::Vector{Symbol})
     key = Tuple(path)
     # A database rooted beneath this one lives inside a namespace this close
     # removes; close it first, or it is left open and unreachable.
-    for k in sort!(collect(keys(env.dbs)); by = length, rev = true)
+    for k in sort!(_db_keys(env); by = length, rev = true)
         (length(k) > length(key) && k[1:length(key)] == key) || continue
         close_airdb!(env, Symbol[k...])
     end
-    db = pop!(env.dbs, key, nothing)
+    db = lock(() -> pop!(env.dbs, key, nothing), env.metalock)
     db === nothing &&
         throw(AirEvalError("no open database at $(_ns_display(path))"))
     c = _context(env)

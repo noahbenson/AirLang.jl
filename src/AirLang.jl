@@ -19,6 +19,7 @@ using Random
 import Dates   # only qualified: `Dates` exports names (`now`, `day`, …) that
                # would shadow air's own
 import TOML    # only qualified, for the TOML data format
+import Downloads  # only qualified, for the agent HTTP transport
 
 # Types and helpers, then the engine, then the builtin library (which registers
 # itself at load time), then the public surface.
@@ -67,6 +68,10 @@ include("builtins_stream.jl")
 include("api.jl")
 include("ssh.jl")
 include("ui.jl")
+include("agents_providers.jl")
+include("agents.jl")
+include("jobs.jl")
+include("events.jl")
 include("cli.jl")
 
 export read_air, read_all_air, air_eval, air_repl, air_main, air_string,
@@ -74,6 +79,7 @@ export read_air, read_all_air, air_eval, air_repl, air_main, air_string,
     default_env, Env, Scope, Rule, RuleStore, canonicalize, truthy, naught,
     AirError, AirParseError, AirEvalError, AirDefError, AirThrown,
     AirPermissionDenied, AirProxyUnresolved, AirUnstorable, AirStreamError,
+    AirAgentError,
     air_match, check_anchor, params_of, raw_symbols, head_symbol,
     is_keyword, is_wildcard, is_raw_symbol,
     air_register_extern!, AirPromise, AirFuture, AirRegex, AirBytes,

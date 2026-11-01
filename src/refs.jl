@@ -104,37 +104,74 @@ function _force_ref_form(env::Env, x::Form)
     return x
 end
 
-# ---- the air delay thunk ----------------------------------------------------
+# ---- durable execution context ----------------------------------------------
 
-# The cell's initial value. Every field is plain data so the thunk itself is
-# storable in the database that holds the cell.
-function _air_delay_thunk(env::Env, scope::Scope, nspath::Vector{Symbol},
-                          dbpath::Union{Nothing,Vector{Symbol}}, captured::Vector{Form})
+# The context an air value stores so its body can be evaluated later, in another
+# process: the namespace path, the active rule layers, the `val` bindings,
+# `.env`, and the attached database root. A delay stores it inline; a scheduled
+# event or durable task stores it in its job record. The keys are the delay's,
+# and the order is stable so a delay's serialization does not change.
+#
+# `bindings` is the name→value mapping to store (a job may capture none, or an
+# explicit mapping); `envform` overrides the stored `.env` (a `clean` task stores
+# `naught`); `tail` is appended before the database root so a delay can put its
+# body in the same position as before.
+function _capture_context_pairs(env::Env, scope::Scope, nspath::Vector{Symbol},
+                                dbpath::Union{Nothing,Vector{Symbol}};
+                                bindings::Form = _bindings_form(env),
+                                envform::Union{Nothing,Form} = nothing,
+                                tail::Vector{Pair{Symbol,Form}} =
+                                    Pair{Symbol,Form}[])
     layers = Form[]
     if _scope_has_layers(scope)
         for layer in scope_layers(scope)
-            push!(layers, _air_delay_layer(env, layer, nspath))
+            push!(layers, _capture_layer(env, layer, nspath))
         end
     end
-    map = Pair{Symbol,Form}[
-        _DELAY_STATE_KEY => Form(_DELAY_PENDING),
+    pairs = Pair{Symbol,Form}[
         _DELAY_NS_KEY => _ns_path_form(nspath),
-        _DELAY_ENV_KEY => _context(env).env,
-        _DELAY_BINDINGS_KEY => _bindings_form(env),
-        _DELAY_LAYERS_KEY => _ns_form(layers),
-        _DELAY_BODY_KEY => _ns_form(captured)]
-    dbpath === nothing || push!(map, _DELAY_DBROOT_KEY => _ns_path_form(dbpath))
-    return _ns_form(Form[Form(_AIR_DELAY_HEAD)], map)
+        _DELAY_ENV_KEY => envform === nothing ? _context(env).env : envform,
+        _DELAY_BINDINGS_KEY => bindings,
+        _DELAY_LAYERS_KEY => _ns_form(layers)]
+    append!(pairs, tail)
+    dbpath === nothing ||
+        push!(pairs, _DELAY_DBROOT_KEY => _ns_path_form(dbpath))
+    return pairs
+end
+
+# The context as a standalone mapping, for a job record.
+function _capture_context(env::Env, scope::Scope, nspath::Vector{Symbol},
+                          dbpath::Union{Nothing,Vector{Symbol}};
+                          bindings::Form = _bindings_form(env),
+                          envform::Union{Nothing,Form} = nothing)
+    return _ns_form(Form[],
+                    _capture_context_pairs(env, scope, nspath, dbpath;
+                                           bindings = bindings,
+                                           envform = envform))
+end
+
+# The delay cell's initial value. Every field is plain data so the thunk itself
+# is storable in the database that holds the cell.
+function _air_delay_thunk(env::Env, scope::Scope, nspath::Vector{Symbol},
+                          dbpath::Union{Nothing,Vector{Symbol}}, captured::Vector{Form})
+    pairs = _capture_context_pairs(env, scope, nspath, dbpath;
+                                   tail = Pair{Symbol,Form}[
+                                       _DELAY_BODY_KEY => _ns_form(captured)])
+    return _ns_form(Form[Form(_AIR_DELAY_HEAD)],
+                    vcat(Pair{Symbol,Form}[
+                             _DELAY_STATE_KEY => Form(_DELAY_PENDING)], pairs))
 end
 
 # One active rule layer, as a form the loader can rebuild. An unfiltered layer is
 # a namespace's own store; a `using ... only=`/`except=` layer is a filtered copy
 # of one, which the set of names it kept reproduces exactly.
-function _air_delay_layer(env::Env, layer::RuleLayer, fallback::Vector{Symbol})
+function _capture_layer(env::Env, layer::RuleLayer, fallback::Vector{Symbol})
     layer isa RuleStore ||
         throw(AirEvalError("a delay cannot capture an unknown rule layer"))
+    cached = _ns_cached_values(env)
+    snap = _snapshot(layer)
     # An unfiltered layer is a namespace's own store; the cache tells us which.
-    for (_, ns) in env.nscache
+    for ns in cached
         ns.rules === layer &&
             return _ns_form(Form[], Pair{Symbol,Form}[_DELAY_NS_KEY => _ns_path_form(ns.path)])
     end
@@ -142,18 +179,19 @@ function _air_delay_layer(env::Env, layer::RuleLayer, fallback::Vector{Symbol})
     # store. Its rules share the source entries' volatiles, which identifies the
     # source; the names the layer kept reproduce the filter.
     src = nothing
-    if !isempty(layer.rules)
-        r0 = layer.rules[1]
-        for (_, ns) in env.nscache
+    if !isempty(snap.rules)
+        r0 = snap.rules[1]
+        for ns in cached
+            ss = _snapshot(ns.rules)
             any(rr -> rr.entry === r0.entry && isequal(rr.pattern, r0.pattern),
-                ns.rules.rules) || continue
+                ss.rules) || continue
             src = ns
             break
         end
     end
     path = src === nothing ? fallback : src.path
     names = Symbol[]
-    for r in layer.rules
+    for r in snap.rules
         n = _def_name(r.pattern)
         (n === nothing || n in names) && continue
         push!(names, n)
@@ -183,23 +221,26 @@ function _air_delay_load(form::Form)
     return _cache_delay_value!(env, cell, v)
 end
 
-# Rebuild the captured namespace context and evaluate the body in it. Identity is
-# deliberately *not* restored: stored code runs as the user who forces it, as a
-# stored `def` does.
-function _eval_air_delay(env::Env, state::FormContainer)
+# Rebuild the captured namespace context. Identity is deliberately *not*
+# restored unless a caller names one (`user`): a delay runs as the user who
+# forces it, as a stored `def` does, while a job runs as its owner.
+function _restore_context(env::Env, state::Form;
+                          user::Union{Nothing,Symbol} = nothing, out = nothing)
+    state isa FormContainer ||
+        throw(AirEvalError("a stored context is not a mapping"))
     nspath = haskey(state, _DELAY_NS_KEY) ?
         _stored_path(to_form(state[_DELAY_NS_KEY])) : nothing
     nspath === nothing &&
-        throw(AirEvalError("a delay's stored context is malformed"))
+        throw(AirEvalError("a stored context has no namespace"))
     ns = _ns_lookup(env, nspath)
     ns === nothing && throw(AirEvalError(
-        "the namespace $(_ns_display(nspath)) of a delay is not available"))
+        "the namespace $(_ns_display(nspath)) of a stored context is not available"))
     layers = RuleLayer[]
     if haskey(state, _DELAY_LAYERS_KEY)
         specs = to_form(state[_DELAY_LAYERS_KEY])
         if specs isa FormContainer
             for v in specs.seq
-                push!(layers, _air_delay_layer_store(env, to_form(v)))
+                push!(layers, _restore_layer(env, to_form(v)))
             end
         end
     end
@@ -226,37 +267,43 @@ function _eval_air_delay(env::Env, state::FormContainer)
     end
     envform = haskey(state, _DELAY_ENV_KEY) ?
         to_form(state[_DELAY_ENV_KEY]) : naught
-    ctx = TaskContext(c.user, ns, dbroot, envform)
+    ctx = TaskContext(user === nothing ? c.user : user, ns, dbroot, envform, out)
+    return (scope = scope, ctx = ctx, binds = binds)
+end
+
+# Rebuild the captured namespace context and evaluate the body in it.
+function _eval_air_delay(env::Env, state::FormContainer)
+    r = _restore_context(env, state)
     body = haskey(state, _DELAY_BODY_KEY) ? to_form(state[_DELAY_BODY_KEY]) : naught
-    return _with_context(env, ctx, () -> Air.setvars(() -> begin
-        r = naught
-        body isa FormContainer || return r
+    return _with_context(env, r.ctx, () -> Air.setvars(() -> begin
+        v = naught
+        body isa FormContainer || return v
         for b in body.seq
-            r = air_reduce(env, scope, to_form(b))
+            v = air_reduce(env, r.scope, to_form(b))
         end
-        return r
-    end, binds))
+        return v
+    end, r.binds))
 end
 
 # Rebuild one captured rule layer.
-function _air_delay_layer_store(env::Env, spec::Form)
+function _restore_layer(env::Env, spec::Form)
     spec isa FormContainer ||
-        throw(AirEvalError("a delay's stored context is malformed"))
+        throw(AirEvalError("a stored context is malformed"))
     haskey(spec, _DELAY_NS_KEY) ||
-        throw(AirEvalError("a delay's stored context is malformed"))
+        throw(AirEvalError("a stored context is malformed"))
     path = _stored_path(to_form(spec[_DELAY_NS_KEY]))
     path === nothing &&
-        throw(AirEvalError("a delay's stored context is malformed"))
+        throw(AirEvalError("a stored context is malformed"))
     ns = _ns_lookup(env, path)
     ns === nothing && throw(AirEvalError(
-        "the namespace $(_ns_display(path)) of a delay is not available"))
+        "the namespace $(_ns_display(path)) of a stored context is not available"))
     haskey(spec, _DELAY_ONLY_KEY) || haskey(spec, _DELAY_EXCEPT_KEY) ||
         return ns.rules
     only = haskey(spec, _DELAY_ONLY_KEY) ?
         _delay_name_set(to_form(spec[_DELAY_ONLY_KEY])) : nothing
     except = haskey(spec, _DELAY_EXCEPT_KEY) ?
         _delay_name_set(to_form(spec[_DELAY_EXCEPT_KEY])) : Set{Symbol}()
-    return _filtered_store(ns, only, except)
+    return _filtered_store(env, ns, only, except)
 end
 
 function _delay_name_set(x::Form)

@@ -149,6 +149,15 @@ producer, or drain in a loop:
                                 # => (1 4 9)
 ```
 
+## Streams under other layers
+
+A stream is the primitive beneath several higher-level interfaces. An
+[agent session](agents.md) is built on a pair of them — an outbox toward the
+model and an inbox for its replies, plus a private copy queue for the owner's
+`on-receive` hook. That hook is an agents-layer convenience, not a stream
+primitive: a stream itself has no notification callback, so a task that must
+react to deliveries without polling is what the agents layer builds on top.
+
 ## Errors
 
 | tag | when |

@@ -54,6 +54,9 @@ using AirDB
     if Base.find_package("OpenSSH_jll") !== nothing
         include("ssh.jl")
     end
+    include("agents.jl")
+    include("events.jl")
+    include("concurrency.jl")
     include("permissions.jl")
     include("scope.jl")
     include("quote.jl")

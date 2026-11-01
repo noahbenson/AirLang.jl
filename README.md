@@ -60,6 +60,23 @@ as plain text. Each element's value can be asserted as an ordinary fact, so
 rules use a form's choices without knowing a UI exists. See
 [User interfaces](book/ui.md).
 
+Air can also talk to a language-model server. `(create-agent :bot provider=:fireworks
+model="…" api-key="…")` creates an `:agent` account of the caller, and
+`(open-session :bot)` returns a durable session whose channel carries messages
+to the model and structured `(reply …)` forms back. Sessions persist in the
+agent's database, survive a restart, and resume lazily on the next message;
+providers are Anthropic's Messages API or any OpenAI-compatible
+chat-completions server. See [Agents](book/agents.md).
+
+Work can be scheduled instead of run at once. `(do-in (minutes 5) (check))`
+and `(do-at (time "2026-11-01T09:00") (report))` register durable events that
+fire in their own task and deliver a value to a promise; `tx-in`/`tx-at` make
+the body one transaction, `repeat=true` re-arms it, and `name=`, `(events)`,
+`(event …)`, and `(cancel-event …)` manage the registry. `(task … durable=true
+name=:x)` is the same record for a task: it reruns from the start after a
+restart, replaying its `(checkpoint form)` steps. See
+[Events and Durable Tasks](book/events.md).
+
 ## Documentation
 
 The [Air book](book/index.md) is the reference. It is built with Jupyter Book 2
@@ -82,6 +99,8 @@ The [Air book](book/index.md) is the reference. It is built with Jupyter Book 2
 | [Data formats](book/formats.md) | JSON, YAML, TOML, CSV, TSV, and `.env` |
 | [SSH access](book/ssh.md) | `ssh-server`, key login, the remote REPL, SFTP |
 | [User interfaces](book/ui.md) | `(ui …)` trees, widgets, assertions, the terminal renderer |
+| [Agents](book/agents.md) | `create-agent`, sessions, channels, the `on-receive` hook, providers |
+| [Events and durable tasks](book/events.md) | `do-at`/`do-in`/`tx-at`/`tx-in`, `bindings=`, checkpoints, resume |
 | [The two rule systems](book/rules.md) | reduction rules and the deductive engine |
 | [Times](book/time.md) · [Printing and layouts](book/printing.md) | time values, layouts, pretty printing |
 | [Errors](book/errors.md) · [Externs](book/externs.md) · [Testing](book/testing.md) | reference chapters |

@@ -669,9 +669,16 @@ builtin!(_MEMOIZED, (env, scope, args) -> begin
     f = args[1]
     xs = args[2:end]
     key = (f, Form(PVector{Any}(xs), PDict{Symbol,Any}()))
-    haskey(env.memo, key) && return env.memo[key]
+    # The cache is process-wide and not transactional; guard it with the metalock
+    # so concurrent tasks cannot corrupt the dictionary. The call itself runs
+    # outside the lock (it may open a transaction, and a lock must never be held
+    # across a commit); a duplicate computation under a race is harmless.
+    found, hit = lock(env.metalock) do
+        haskey(env.memo, key) ? (true, env.memo[key]) : (false, nothing)
+    end
+    found && return hit
     r = _call(env, scope, f, xs)
-    env.memo[key] = r
+    lock(() -> env.memo[key] = r, env.metalock)
     return r
 end)
 

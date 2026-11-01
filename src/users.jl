@@ -101,17 +101,27 @@ _keyword_form(id::Symbol) = Form(Symbol(":", String(id)))
 
 # ---- user records ------------------------------------------------------------
 
-# The stored `details` value for a user: `(admin=true)` or, for a constituent,
-# `(admin=false admin-of=:game)`.
-function _user_details_form(admin::Bool, parent::Union{Nothing,Symbol})
+# The account kinds: an ordinary person (`:human`) or an inference-backed agent
+# (`:agent`). The kind is distinct from `_user_kind`'s core/constituent split.
+const _ACCOUNT_KIND_KEY = Symbol(":kind")
+const _ACCOUNT_KINDS = (:human, :agent)
+
+# The stored `details` value for a user: `(admin=true kind=:human)` or, for a
+# constituent, `(admin=false admin-of=:game kind=:human)`.
+function _user_details_form(admin::Bool, parent::Union{Nothing,Symbol};
+                            kind::Symbol = :human)
+    kind in _ACCOUNT_KINDS ||
+        throw(AirEvalError("invalid account kind :$kind"))
     map = Pair{Symbol,Form}[Symbol(":admin") => Form(admin)]
     parent === nothing || push!(map, Symbol(":admin-of") => Form(parent))
+    push!(map, _ACCOUNT_KIND_KEY => _keyword_form(kind))
     return _ns_form(Form[], map)
 end
 
-# `(admin = Bool, parent = Union{Nothing,Symbol})`, or `nothing` if the user has
-# no record. Reading a record is a system operation, so it bypasses the
-# air-only access control on `.sys.user`.
+# `(admin = Bool, parent = Union{Nothing,Symbol}, kind = :human | :agent)`, or
+# `nothing` if the user has no record. Reading a record is a system operation, so
+# it bypasses the air-only access control on `.sys.user`. A record written before
+# account kinds existed is human.
 function _user_details(env::Env, id::Symbol)
     path = _user_base_path(env, id)
     path === nothing && return nothing
@@ -120,7 +130,8 @@ function _user_details(env::Env, id::Symbol)
     marker = _ns_map_get(env, ns, Symbol(":details"))
     marker === nothing && return nothing
     v = _ns_val_value(env, marker; check = false)
-    v isa FormContainer || return (admin = false, parent = nothing)
+    v isa FormContainer ||
+        return (admin = false, parent = nothing, kind = :human)
     admin = haskey(v, Symbol(":admin")) && truthy(to_form(v[Symbol(":admin")]))
     parent = if haskey(v, Symbol(":admin-of"))
         s = _symbolof(to_form(v[Symbol(":admin-of")]))
@@ -128,7 +139,15 @@ function _user_details(env::Env, id::Symbol)
     else
         nothing
     end
-    return (admin = admin, parent = parent)
+    kind = :human
+    if haskey(v, _ACCOUNT_KIND_KEY)
+        s = _symbolof(to_form(v[_ACCOUNT_KIND_KEY]))
+        if s !== nothing
+            k = _bindname(s)
+            k in _ACCOUNT_KINDS && (kind = k)
+        end
+    end
+    return (admin = admin, parent = parent, kind = kind)
 end
 
 _user_exists(env::Env, id::Symbol) = _user_details(env, id) !== nothing
@@ -201,9 +220,11 @@ function _as_air(env::Env, f::Function)
 end
 _as_air(f::Function, env::Env) = _as_air(env, f)   # do-block form
 
-# Create the user's record and home. `parent` is set only for a constituent.
+# Create the user's record and home. `parent` is set only for a constituent;
+# `kind` is the account kind (`create-user` and `create-constituent` are human).
 function _create_system_user!(env::Env, id::Symbol; admin::Bool = false,
-                              parent::Union{Nothing,Symbol} = nothing)
+                              parent::Union{Nothing,Symbol} = nothing,
+                              kind::Symbol = :human)
     _valid_user_id(id) || throw(AirEvalError("invalid user name :$id"))
     _user_exists(env, id) && throw(AirDefError("user :$id already exists"))
     path = _user_base_path(env, id)
@@ -211,7 +232,8 @@ function _create_system_user!(env::Env, id::Symbol; admin::Bool = false,
     return _as_air(env) do
         tx() do
             ns = _ns_ensure!(env, path)
-            _ns_add_val!(env, ns, Form(_DETAILS), _user_details_form(admin, parent))
+            _ns_add_val!(env, ns, Form(_DETAILS),
+                         _user_details_form(admin, parent; kind = kind))
             _ns_ensure!(env, _user_home_path(env, id))
             ns
         end
@@ -400,15 +422,43 @@ function _bi_set_admin(env::Env, scope::Scope, call::FormContainer)
         throw(AirEvalError("only a core user may be an admin"))
     _user_exists(env, id) || throw(AirEvalError("no such user: :$id"))
     flag = truthy(air_reduce(env, scope, to_form(call.seq[3])))
+    d = _user_details(env, id)
     path = _user_base_path(env, id)
     tx() do
         ns = _ns_lookup(env, path)
         ns === nothing && throw(AirEvalError("no such user: :$id"))
-        _ns_add_val!(env, ns, Form(_DETAILS), _user_details_form(flag, nothing))
+        # Rewrite the record in full, so the account kind survives the edit.
+        _ns_add_val!(env, ns, Form(_DETAILS),
+                     _user_details_form(flag, nothing; kind = d.kind))
     end
     return _keyword_form(id)
 end
 special!(Symbol("set-admin"), _bi_set_admin)
+
+# The account kind of a visible user: `:human` (the default) or `:agent`.
+builtin!(Symbol("user-kind"), (env, scope, args) -> begin
+    length(args) == 1 || throw(AirEvalError("user-kind takes one user name"))
+    id = _user_id_arg(env, scope, args[1])
+    d = _user_details(env, id)
+    d === nothing && throw(AirEvalError("no such user: :$id"))
+    id in _visible_user_ids(env, _current_user(env)) ||
+        throw(AirPermissionDenied(:read, _keyword_form(id)))
+    return _keyword_form(d.kind)
+end)
+
+# The agent ids among a list of visible user ids.
+function _agent_ids(env::Env, me::Symbol)
+    ids = _visible_user_ids(env, me)
+    return Symbol[id for id in ids
+                  if (d = _user_details(env, id)) !== nothing && d.kind === :agent]
+end
+
+# `(agents)` — the agent accounts the current user may see.
+builtin!(:agents, (env, scope, args) -> begin
+    isempty(args) || throw(AirEvalError("agents takes no arguments"))
+    seq = FormValue[_store_form(_keyword_form(id)) for id in _agent_ids(env, _current_user(env))]
+    return FormContainer(FormSeq(seq), FormMap())
+end)
 
 # ---- .env --------------------------------------------------------------------
 

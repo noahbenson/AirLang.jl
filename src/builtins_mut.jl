@@ -141,32 +141,26 @@ struct _SandboxDone <: Exception
     value::Form
 end
 
-# Aborting the transaction undoes the stores, but the process keeps three
-# non-transactional caches: the compiled rules of each namespace wrapper (read
-# without a sync, so a sandbox definition would otherwise stay live), the `val`
-# bindings, and the memo table. Snapshot them for the body and put them back
-# afterwards; every namespace wrapper is re-synced from its committed value.
+# Aborting the transaction undoes the transactional stores — namespace values,
+# compiled rule snapshots, and `val` bindings are all staged and discarded with
+# it — but the process also keeps the namespace-wrapper cache and the memo
+# table outside any transaction. Snapshot those two and put them back
+# afterwards.
 function _sandbox_snapshot(env::Env)
-    return (copy(env.nscache), copy(env.vals), copy(env.valof), copy(env.memo))
+    return lock(env.metalock) do
+        (copy(env.nscache), copy(env.memo))
+    end
 end
 
 function _sandbox_restore!(env::Env, snap)
-    nscache, vals, valof, memo = snap
-    empty!(env.nscache)
-    merge!(env.nscache, nscache)
-    empty!(env.vals)
-    merge!(env.vals, vals)
-    empty!(env.valof)
-    merge!(env.valof, valof)
-    empty!(env.memo)
-    merge!(env.memo, memo)
-    # Rebuild each wrapper's compiled rules from the value the caller sees now,
-    # which is the committed one (or the enclosing transaction's staged one).
-    for (_, ns) in nscache
-        ns.synced = nothing
-        _ns_sync!(env, ns)
+    nscache, memo = snap
+    lock(env.metalock) do
+        empty!(env.nscache)
+        merge!(env.nscache, nscache)
+        empty!(env.memo)
+        merge!(env.memo, memo)
+        return nothing
     end
-    return nothing
 end
 
 function _bi_sandbox(env::Env, scope::Scope, call::FormContainer)

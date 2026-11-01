@@ -146,3 +146,9 @@ than arithmetic in prose:
 
 The library loads lazily the first time it is referenced, as
 `.lib.time` (see [Loading files and libraries](libraries.md)).
+
+```{seealso}
+Durations are what schedule work: `(do-in (minutes 5) …)` runs a body five
+minutes from now and `(do-at (ago (days 1)) …)` fires at once. See
+[Events and Durable Tasks](events.md).
+```

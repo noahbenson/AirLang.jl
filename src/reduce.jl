@@ -809,8 +809,12 @@ end
 # The first rule of one store that matches `x`, honoring the held filter.
 function _match_store(store, env::Env, scope::Scope, x::Form;
                       want_held::Union{Nothing,Bool}=nothing)
-    for idx in candidate_rule_indices(store, x)
-        rule = store.rules[idx]
+    # One snapshot for the whole lookup: a store published by another task's
+    # commit between the index lookup and the rule fetch would otherwise mix two
+    # rule sets and could index out of range.
+    snap = store isa RuleStore ? _snapshot(store) : store
+    for idx in candidate_rule_indices(snap, x)
+        rule = snap.rules[idx]
         # Keep a rule when it satisfies the filter: `want_held=true` keeps the
         # rules that hold a parameter, `false` keeps the ones that hold none.
         (want_held === nothing || isempty(rule.held) != want_held) || continue
@@ -826,12 +830,16 @@ function _match_store(store, env::Env, scope::Scope, x::Form;
 end
 
 # The rules anchored by any raw symbol in `x`, in insertion order. A rule is
-# tried even if it cannot match; the extra candidates fail fast.
-function candidate_rule_indices(store, x::Form)
+# tried even if it cannot match; the extra candidates fail fast. Takes a rule
+# snapshot, or a store (whose current snapshot it reads once).
+candidate_rule_indices(store::RuleStore, x::Form) =
+    candidate_rule_indices(_snapshot(store), x)
+
+function candidate_rule_indices(snap::RuleSnapshot, x::Form)
     seen = Set{Int}()
     out = Int[]
     for s in raw_symbols(x)
-        for i in get(store.by_symbol, s, Int[])
+        for i in get(snap.by_symbol, s, Int[])
             i in seen && continue
             push!(seen, i)
             push!(out, i)

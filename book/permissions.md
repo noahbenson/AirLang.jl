@@ -28,6 +28,28 @@ written there. System users' records live in `.sys.user.<name>`; database
 users' live in `@.user.<name>`. The home is a capability: `$` is reachable even
 when the enclosing record is not, and `air`'s `.main` stays private.
 
+## Account kinds
+
+Every user record carries a **kind**, `kind=:human` or `kind=:agent`; a record
+without the field reads as `:human`. `create-user` and `create-constituent`
+always create human accounts, and `(user-kind id)` reads the kind of one.
+`(create-agent :bot config…)` creates an `:agent` constituent — see
+[Agents](agents.md):
+
+```air
+(user-kind :bob)                         ; => :human
+(as-user :game (create-agent :bot provider=:fireworks model="…"))
+(user-kind :game:bot)                    ; => :agent
+(agent? :game:bot)                       ; => true
+```
+
+An agent is an ordinary user in every other respect: it owns its home, its
+namespace entries carry the ordinary owner-only ACL, and nothing it does runs
+with more authority than the constituent `:game:bot` has. Its inference
+settings live in `$.config.agent`, which therefore follows the ordinary home
+rules — readable by the agent, by its administrator (the parent of a
+constituent), and by `air`, and by nobody else.
+
 (permissions)=
 ## Permissions
 

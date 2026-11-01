@@ -96,15 +96,35 @@ end
 # always carried across so it remains the same user's work; with `clean=true`
 # the `val` bindings are cleared instead of inherited.
 #
-# A task is a process item: its promise is stored immediately, but the task
+# A plain task is a process item: its promise is stored immediately, but the task
 # itself is not serialized, so a promise whose task never delivers (because the
-# process died) is simply never delivered.
+# process died) is simply never delivered. `durable=true` makes the task a
+# registered job instead (see jobs.jl): the record, its captured context, and its
+# checkpoints are durable, and the task reruns from the start after a restart.
 function _bi_task(env::Env, scope::Scope, call::FormContainer)
-    _check_options(call, "task", (Symbol(":clean"),))
+    _check_options(call, "task", (Symbol(":clean"), Symbol(":bindings"),
+                                 Symbol(":durable"), Symbol(":name")))
     body = Form[to_form(v) for v in _sx(call.seq, 2:length(call.seq))]
     isempty(body) && throw(AirEvalError("task needs a body"))
+    opt(k) = haskey(call.map, k) ?
+        air_reduce(env, scope, to_form(call.map[k])) : nothing
     clean = haskey(call.map, Symbol(":clean")) &&
             truthy(to_form(call.map[Symbol(":clean")]))
+    durable = opt(Symbol(":durable"))
+    durable = durable !== nothing && truthy(durable)
+    nameopt = opt(Symbol(":name"))
+    bindopt = opt(Symbol(":bindings"))
+    if durable
+        name = nameopt === nothing ? nothing :
+            _job_name_arg(env, scope, nameopt, "task")
+        bindings = _job_bindings_form(env, scope, bindopt, true)
+        made = _job_create!(env, scope, :task; body = body, bindings = bindings,
+                            envform = clean ? naught : nothing, name = name,
+                            at = _now_secs())
+        return made.promise
+    end
+    nameopt === nothing ||
+        throw(AirEvalError("task: name= requires durable=true"))
     captured = Form[_capture_form(scope, b) for b in body]
     # The task has no local scope, but it keeps the namespace layers active at
     # the point the task was created, so its free names still resolve against
@@ -112,7 +132,7 @@ function _bi_task(env::Env, scope::Scope, call::FormContainer)
     lscope = _scope_layers_only(scope)
     c = _context(env)
     ctx = TaskContext(c.user, c.ns, c.dbroot, clean ? naught : c.env, c.out)
-    bindings = clean ? IdDict{Air.Var,Any}() : Air.vars()
+    bindings = _job_binding_dict(env, scope, bindopt, clean)
     p = PromiseForm(_persist_db(env))
     Threads.@spawn begin
         _reset_block_scopes!()
