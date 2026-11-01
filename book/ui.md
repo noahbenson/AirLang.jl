@@ -302,6 +302,11 @@ the same instance.
 | `(ui-close! key)` | retract the instance's facts and forget it |
 | `(ui-instances)` | the caller's open instance keys |
 
+The composite constructors (`ui-code`, `ui-editor`, `ui-notebook`,
+`ui-browser`, `ui-shell`, `ui-chat`), the connection forms (`ui-attach!`,
+`ui-detach!`, `ui-attached`, `ui-connection`, `ui-connections`), and the theme
+forms (`ui-theme`, `ui-theme!`, `ui-style`) are described below.
+
 `ui-open` returns the key as a keyword; with no key it generates one (`:ui1`,
 `:ui2`, …). A key already in use is an error. Instances are owned by the user
 who opened them: `air` sees them all, another user sees only its own, and an
@@ -315,6 +320,335 @@ effect.
 
 `ui-close!` is idempotent, so a cleanup path need not know whether the UI
 already closed itself.
+
+## Composite widgets
+
+The catalog above is a set of single controls. The human-interface layer adds
+**composite** widgets — a code block, a definition editor, a notebook, a
+namespace browser, a chat, and a tabbed shell — on one shared interaction
+framework: styled lines, a terminal key model, a single editable text buffer
+with automatic indentation and bracket pairing, and air-aware highlighting.
+
+A composite is still one inert `(ui KIND …)` form, and still data. What makes
+it *durable* is that its constructor creates a `mut` holding its state, in the
+current namespace's database, and names that mut in the form:
+
+```air
+(val notes (ui-notebook text="(+ 1 2)"))   ; the mut is created here, once
+(ui-attach! notes)                         ; instantiate and run it here
+```
+
+`val` rather than `def` is the right binding: the constructor runs once, when
+the `val` is defined, so `notes` yields the same state mut every time. Storing
+the form anywhere reachable — a `val`, a `mut`, another widget — keeps the
+widget alive, and dropping the last reference lets its state go. A caller may
+pass `state=` to share one mut between two widgets.
+
+| constructor | creates |
+| --- | --- |
+| `(ui-code [ns] text="" state=…)` | `(ui code-block …)`, an editable source buffer |
+| `(ui-editor [ns] target=sym text= state=…)` | `(ui editor …)`, the definition editor |
+| `(ui-notebook [ns] text= state= collapse-lines=20)` | `(ui notebook …)`, input/output cells |
+| `(ui-browser [root] root= state=…)` | `(ui browser …)`, the namespace tree |
+| `(ui-shell state=…)` | `(ui shell …)`, a tab bar of widget forms |
+| `(ui-chat in= out= peer= state=…)` | `(ui chat …)`, a conversation over a stream pair |
+
+The optional first argument — or `root=`, or the namespace current at the call
+— names the namespace the widget evaluates in and targets, and is captured with
+the instance like any other UI context.
+
+### Keys
+
+Every composite shares one key model. A terminal sends bytes, so the renderer
+parses them into keys and keeps the distinctions that matter: CR is Enter and LF
+is Ctrl-J, `ESC [`-prefixed sequences are the editing keys, `ESC` followed by a
+printable character is Alt-`c`, and a lone `ESC` is flushed after 25 ms. Shift
+and Ctrl modifiers on arrows, Home/End, and Page keys survive parsing, and a
+bracketed paste arrives as one paste event.
+
+| key | meaning |
+| --- | --- |
+| `Ctrl-J` | run the cell, save the buffer, send the chat draft |
+| `Ctrl-R` | run every notebook cell, in document order |
+| `Ctrl-O`, `Alt-O` | clear the active cell's output, or every cell's |
+| `Ctrl-G`, `Alt-G` | insert a notebook cell below, above |
+| `Ctrl-V`, `Alt-V` | jump one cell or one message down, up |
+| `PageUp`, `PageDown` | page the document, the log, or the current cell |
+| `Tab`, `Shift-Tab` | switch tabs — never indentation |
+| `Alt-1` … `Alt-9` | select a tab directly |
+| `Esc` | pop one layer: a scroll view, then the tab, then the UI |
+| `Enter` | a newline in a text buffer; activation in a browser |
+| `Ctrl-A`/`Ctrl-E`, `Ctrl-B`/`Ctrl-F`, `Alt-B`/`Alt-F` | line start/end, character and word motion |
+| `Ctrl-K`, `Ctrl-U`, `Ctrl-W`, `Ctrl-Y` | kill to end, to start, a word; yank |
+| `Ctrl-Z`, `Alt-Z` | undo, redo |
+| `Ctrl-L` | re-indent the buffer from its layout |
+
+There is deliberately **no indent key**: Tab always switches tabs, and
+indentation is enforced automatically on every newline.
+
+The status row shows the title, the namespace, the closure verdict or the
+running job, and then right-aligns **whole key hints**. Each hint has a long and
+a short spelling (`ctrl-j: run` and `^J run`); the row fits as many complete
+hints as there is room for, never cutting one, and switches to the short
+spellings only when they fit strictly more hints. A narrow terminal therefore
+loses hints rather than showing a truncated one, and a row too narrow even for
+the left part alone is clipped by the renderer.
+
+### Code awareness: indentation, pairing, highlighting
+
+A text widget reuses the declarations the pretty printer already obeys. On
+Enter the editor scans the text before the cursor, keeps a stack of open
+containers with their opening column and head symbol, resolves the matching
+`(layout …)`, and continues at `open_col + indent` — or at the align column for
+`indent=align`, or under the last pinned head element while the head is still
+incomplete. A form with no declared layout continues at `open_col + 1`, and
+top-level text starts at column 0. Typing a closer on a whitespace-only line
+re-indents that line to its opener's column. The printer and the editor agree by
+construction: feeding a pretty-printed form back line by line reproduces exactly
+its own leading spaces.
+
+`(`, `[`, and `{` insert their closer; typing a closer that already sits at the
+cursor steps over it; Backspace inside an auto-paired empty pair removes both;
+Enter inside one opens three lines with the closer at the opener's column. `"`
+pairs only when the scanner is not already inside a string or a comment, and
+strings, raw
+strings, regex literals, and nested `#| … |#` comments are all respected. `'`
+is never paired — it is a symbol character and reader sugar.
+
+Highlighting colors atoms, strings, numbers, keywords, and wildcards; comments
+(including nested block comments) are scanned out of the token stream and
+colored separately; parentheses cycle through four roles by depth, and a
+mismatched closer or an unclosed opener is drawn as an error. A focused buffer's
+status line also reports the closure verdict from the reader itself — `code ·
+closed`, `code · unclosed`, `code · error` — so a buffer that would not parse
+cannot run.
+
+### `code-block`
+
+One buffer with an output area. `Ctrl-J` checks the closure verdict and refuses
+with an inline reason (`unclosed input: …`, `parse error: …`); otherwise it
+evaluates every top-level form in the widget's namespace under its captured
+context and prints each result beneath the buffer with the permission-aware
+pretty printer. Errors are drawn in the error role. The text that produced the
+current output is remembered, so editing the text without re-running leaves the
+old output visible and muted rather than pretending it is current. The output
+itself lives in the widget's state alongside the buffer, so a widget that is
+closed and reopened shows its last result still under its text.
+
+### `editor`
+
+The definition editor is the same buffer in `:editor` mode. `target=` names a
+definition; the buffer starts from the entry's stored source (`src=`), and when
+there is none it reconstructs the printed definition, best effort — comments and
+layout choices are not recoverable. `Ctrl-J` parses the buffer, requires
+top-level `def`/`val`/`namespace` forms, evaluates them in the target namespace
+appending in the usual way (later definitions win), and reports errors inline.
+The text that produced the current definitions is remembered as "saved".
+
+The editor edits *source text*, not live forms.
+
+### `notebook`
+
+A column of paired cells: each has an input buffer and its output, and output is
+never editable. The document is continuous — Up at the first line of a cell
+moves to the last line of the previous cell, Down at the last line moves to the
+next — and `Ctrl-V`/`Alt-V` jump a whole cell.
+
+`Ctrl-J` evaluates the active cell in place. `Ctrl-G` inserts an empty cell
+below and `Alt-G` above, moving the cursor there; they insert only and never
+run. A cell longer than `collapse-lines=` (default 20) shows that window plus
+`… N more`; Enter opens it as a scrolling, editable view and Esc returns to the
+collapsed document. `PageUp`/`PageDown` move ten lines inside a cell.
+
+Each cell records the exact input text that produced its output. When the input
+changes, the output stays on screen rendered muted, so it is visibly stale;
+re-running replaces it, and reverting the text clears the mark.
+
+`Ctrl-R` runs the whole document: the non-empty cells are queued in order and
+run one at a time, each starting only after the previous result has landed, so
+a later cell sees what an earlier one defined, and the cursor follows the cell
+being run. The queue stops at a cell that refuses to run (unclosed input), and
+`Ctrl-J`/`Ctrl-R` are refused while a cell is in flight. `Ctrl-O` clears the
+active cell's output and `Alt-O` clears every cell's, leaving the inputs and
+their saved text alone.
+
+### `browser`
+
+The namespace tree, built from `(ns-entries …)` (see
+[Namespaces](namespaces.md)). Unreadable and hidden entries are absent, not
+greyed. Up/Down move, Home/End jump, PageUp/PageDown page, Right expands a
+subnamespace or opens an entry, Left collapses or moves to the parent, and Enter
+toggles a subnamespace or opens an entry.
+
+`Ctrl-J` on a `def` (or a proxy) opens the definition editor for it; on a `val`
+it opens a notebook tab in that val's namespace, seeded with the val's name, so
+data can be explored without editing anything. `Alt-J` on a `val` opens the
+editor for its definition instead.
+
+### `shell`
+
+A tab bar over widget forms. A fresh shell starts with two tabs: a browser of
+the current namespace and a scratch notebook in it. `Tab`/`Shift-Tab` cycle and
+`Alt-1`…`Alt-9` select directly. The default tabs are opened when a renderer
+starts the shell, not when the form is built, so `(ui-render …)` of a fresh
+shell shows `(no tabs)` and creates nothing.
+
+`Esc` pops one layer: with a scroll view open it closes the view; otherwise it
+closes the active tab, first asking `y: discard` / `n: cancel` when the tab is
+dirty (an edited buffer, or a notebook cell whose text differs from what
+produced its output). Closing the last tab dismisses the shell — with no tabs
+there is nothing left to show.
+
+Tabs opened from the browser are runtime-only unless the user stores their form.
+That is the same rule as everywhere else: a widget survives because something
+reachable names it.
+
+### `chat`
+
+A conversation with a peer over a **pair** of streams that the caller supplies:
+
+```air
+(val to-alice   (stream))
+(val from-alice (stream))
+(val chat (ui-chat in=from-alice out=to-alice peer=:alice))
+(ui-attach! chat)
+```
+
+The widget never finds its own transport: `out=` is where it posts and `in=` is
+where it listens, and both are required — a chat with no input could never hear
+anything and one with no output could never speak. Messages render as cells: a
+header row naming the sender (`you` or the peer's name) and its clock, then the
+body, with the two directions tinted differently by role (`user_bg` for this
+side, `peer_bg` for the other), so a glance distinguishes them.
+
+`Enter` inserts a newline and `Ctrl-J` sends, so a draft may be several lines.
+The input is a full code block, so it gets the same indentation, pairing, and
+highlighting as any other buffer, and it grows to five rows before scrolling.
+`Ctrl-V`/`Alt-V` move one message and `PageUp`/`PageDown` one page.
+
+**Code mode.** When the draft begins with `(`, it is code. On send, the source
+is appended to *this side's* log only, evaluated in the chat's namespace under
+the captured context, and the result is appended to both logs and posted. The
+peer receives the **value**, never the source. A value that is a string arrives
+as text; anything else arrives as highlighted source. An error stays on the
+sender's side: it is logged as an error and nothing is posted.
+
+A pump task fetches the incoming stream with a short timeout and appends
+whatever it finds, so the log is live without the key loop ever blocking on
+it. The pump starts when the instance's widget is first built and runs until
+the widget is closed — not on attach/detach — so messages keep arriving and are
+stored while no renderer is attached, and a detached conversation resumes where
+it was.
+
+## Connections
+
+A widget is not bound to a terminal. A **connection** is where bytes come from,
+and a renderer joins a connection to a widget instance. That separation is what
+lets the same widget be shown locally, over SSH, or not at all, and what makes
+detach and reattach cheap: only the renderer stops, never the widget.
+
+Connections are recorded in the `.io.conn` namespace as ordinary data:
+
+```
+.io.conn.air         ns   — air's endpoints
+.io.conn.air.std     mut  — air's local/stdio endpoint
+.io.conn.air.s1      mut  — air's first remote session
+.io.conn.alice       mut  — a user's endpoint
+.io.conn.air.bob     mut  — a constituent's endpoint (`air:bob`)
+```
+
+A record is inert data — `(conn id=:s1 kind=:ssh user=:alice principal=:air:alice
+since=(time …) tty=true cols=80 rows=24 attached=naught closed=naught)` — with
+`read` granted to everyone and `write` to the record's owner. A constituent's
+record is owned by its admin, so the constituent can read its own connection but
+not edit it. The live byte source and the attached instance are process-local
+and are never serialized; the record outlives the socket.
+
+| form | meaning |
+| --- | --- |
+| `(ui-attach! [conn] widget)` | attach and run until dismissed; no `conn` means this session's own |
+| `(ui-detach! [conn])` | stop the renderer; the instance and its muts survive |
+| `(ui-attached [conn])` | the key of the instance attached there, or `naught` |
+| `(ui-connection [conn])` | one connection's record, or `naught` |
+| `(ui-connections [user])` | the caller's live connections (`air` sees every user's) |
+
+`widget` is either a `(ui …)` form — instantiated for the attach and closed when
+it leaves — or a key naming an open instance, which stays open. One widget per
+connection is allowed; a second attach raises `(error :ui-attached path)`. Only
+the task that opened a connection may attach to it, because a byte source
+belongs to one reader; detaching is allowed from anywhere.
+
+The instance — not the renderer — owns the widget and its background work. Its
+tree is built once, and a ticker applies finished jobs and writes the result
+into the widget's durable state. So **detaching never waits for or stops an
+evaluation**: a notebook's running cell and its run-all queue, a code block's
+run, and a chat's evaluation all continue with no renderer attached, and their
+results are in the state when the widget is reattached. Detaching flushes the
+widget's on-screen state (text, output, cursor) into its `mut`; only
+`ui-close!` tears the tree down and releases connection-era resources such as
+the chat pump. Ctrl-C still raises `(error :ctrl-c)` at the call site, but it
+does not abort the evaluation; that is a follow-up.
+
+`ui-show` is exactly "attach this session's connection": it looks up the current
+session's connection and attaches there, so the older spelling keeps working.
+`ui-run` is open + attach + close.
+
+## The theme
+
+Widgets name **roles** — `:text`, `:muted`, `:accent`, `:string`, `:comment`,
+`:number`, `:keyword`, `:wildcard`, `:symbol`, `:paren1`–`:paren4`, `:error`,
+`:success`, `:warning`, `:selection`, `:cursor`, `:focus`, `:user_bg`,
+`:peer_bg`, `:code_bg`, `:tab_active`, `:tab_inactive`, `:status`, `:prompt`,
+`:border` — and the
+renderer resolves them to a style at draw time. The default is ANSI-16 plus a
+few 256-color background tints, so it works on any xterm-compatible terminal.
+
+```air
+(ui-theme)                        ; => (theme accent=(bold=true fg=bright_blue) … string=green …)
+(ui-theme! string=:bright-yellow user-bg=:color235)
+(ui-theme! reset=true)            ; restore the defaults first
+(ui-theme! reset=true (ui-theme)) ; restore exactly the saved palette
+(ui-style :string)                ; => (style bg=default bold=false … fg=green …)
+```
+
+`ui-theme` prints a role as a **bare color** when its foreground is the only
+thing that departs from plain text, and as a **field map** otherwise, so a role
+with a background (`selection=(bg=blue)`) or a weight (`error=(bold=true
+fg=bright_red)`) says so. A field is named when it departs from plain text or
+from the role's own default, so a role deliberately restored to plain still
+round-trips. `ui-theme!` accepts the same two entry shapes, and takes a whole
+theme map as an optional positional argument — bare, or under the `theme` head
+that `ui-theme` emits — so `(ui-theme! reset=true (ui-theme))` restores exactly
+what was saved. Role entries given alongside a map win over it.
+
+A color read back from these maps prints as a bare symbol, as every symbol in
+a map value does; the keyword spelling (`:green`) is accepted on input.
+
+A color is an ANSI name (`:red`, `:bright_cyan`, …), a 256-color index
+(`:color235`), or an `rgbRRGGBB` triplet; a string spelling works too and `-`
+and `_` are interchangeable. `ui-theme!` is process-global; without `reset=true`
+an entry layers on the role's current style.
+
+A composite constructor also takes `theme=`, a map from roles to that widget's
+style for them:
+
+```air
+(ui-notebook text="(+ 1 2)" theme=(string=:red accent=:magenta))
+(ui-code theme=(string=(fg=:red bg=:blue bold=true) comment=(color=:cyan dim=true)))
+```
+
+An entry is either a bare color — a foreground recolor — or a map naming the
+fields to change: `fg=`/`color=`, `bg=`, `bold=`, `dim=`, `italic=`,
+`underline=`, and `reverse=`. Either form starts from the role it inherits, so
+an entry that names only `bold=` keeps the inherited ink and an omitted role is
+fully inherited. `color=` is a synonym for `fg=`, so naming both in one entry,
+or naming the same field twice, is an error. Only the roles it names change,
+and only while that widget is drawing — the process theme is untouched. A
+widget's theme also covers the rows it composes, such as the tabs a shell draws
+for its children. The map is resolved when the widget is built, so an unknown
+role, an unknown field, a duplicated field, an entry that names no field at
+all, a non-boolean flag, or a value that is not a color is an error at that
+point rather than a silent fallback.
 
 ## Renderers
 
@@ -346,10 +680,13 @@ indents, `tabs` shows the first tab, and a checkbox is `[x]` or `[ ]`.
 
 ### The terminal renderer
 
-`(ui-show :k)` requires an interactive SSH session (`src/ssh/`); otherwise it
-raises `(error :no-renderer …)`. It enters the alternate screen, draws a frame,
-redraws in place (clearing one line at a time rather than the whole screen, to
-avoid flicker), and restores the screen and cursor in `finally`.
+`(ui-show :k)` attaches this session's connection (see **Connections**), which
+is how the same call works over SSH and at a local terminal. It enters the
+alternate screen, draws a frame, and redraws in place. The writer remembers the
+previous frame and sends only the rows whose styled text changed, so a keystroke
+normally costs one row and a cursor move rather than a full screen; a resize
+invalidates the whole frame. It restores the screen and cursor in `finally`.
+Without an interactive terminal it raises `(error :no-renderer …)`.
 
 Focus is the renderer's, and Tab / Shift-Tab (or Up / Down) cycle through the
 value-bearing and button elements:
@@ -397,6 +734,12 @@ A callbacks and assertions run in the namespace, `val` bindings, and identity
 captured at instantiation, so a UI opened inside `(namespace .app …)` keeps
 writing `.app` even when the value is changed from another namespace or task.
 
+A composite widget adds two things the abstract runtime does not need. Its tree
+is built on first attach and then reused for every later renderer, so interaction
+state (cursor, scroll position, an open scroll view) survives a detach; and a
+ticker owned by the instance applies its background jobs and writes their results
+into the widget's durable `mut`, whether or not a renderer is attached.
+
 ## Example: experiment configuration
 
 ```air
@@ -426,10 +769,20 @@ Afterwards the selections are ordinary facts, so a rule can use
 
 ## Limits
 
-- **A shown UI is modal.** `ui-show` owns the session until it is dismissed;
-  there is no non-blocking dashboard yet.
-- **The terminal renderer needs a pty.** A local `stty`-driven renderer, a web
-  renderer, and incremental subtree updates are follow-ups; the abstract layer
-  and the text renderer are the contract they must meet.
+- **An attached UI is modal.** A connection shows one widget at a time until it
+  is dismissed; a widget cannot share a session with the REPL prompt.
+- **The terminal renderer needs a pty.** Both backends (SSH channel and local
+  terminal) take over a terminal; a web renderer and incremental subtree updates
+  are follow-ups. The abstract layer, the text renderer, and the shell describe
+  the contract they must meet.
+- **A key is what the terminal can say.** A lone Esc is separated from Alt by a
+  25 ms timeout, so a very fast Alt-key is indistinguishable from Esc and the
+  key; a terminal that maps Enter to LF loses Ctrl-J. xterm is the reference.
+- **Evaluation is not preemptible.** A cell's evaluation runs on a spawned task,
+  so the frame stays live while it works and the status row names the job; but
+  Ctrl-C cannot cancel the task itself (the same limitation as the REPL). The job
+  belongs to the instance, so dismissing the UI neither waits for it nor loses
+  it: it finishes in the background and its result is stored for the next
+  attach.
 - **Passwords are obscured, not protected.** A `password-input` value is an
   ordinary form, readable with `ui-values` and assertable like any other.

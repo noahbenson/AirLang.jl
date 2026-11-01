@@ -8,21 +8,7 @@
     evd(s) = air_eval(env, read_air(s))
     hasfact(where, f) = occursin(f, ev("(facts $where)"))
 
-    # Drive a terminal renderer over a scripted byte source.
-    function term_run(key::Symbol, bytes; cols = 40, rows = 12)
-        input = IOBuffer(Vector{UInt8}(bytes))
-        out = IOBuffer()
-        r = AirLang._TermRenderer(out; cols = Ref(cols), rows = Ref(rows),
-                                  readbyte = () -> eof(input) ? nothing :
-                                              read(input, UInt8))
-        inst = AirLang._ui_lookup(env, Form(Symbol(":" * String(key))))
-        result = try
-            (:ok, AirLang._ui_term_run!(r, inst))
-        catch e
-            (:err, e)
-        end
-        return result, String(take!(out))
-    end
+    term_run(key, bytes; kw...) = ui_term_run(env, key, bytes; kw...)
 
     # ---- inertness -----------------------------------------------------------
     @test ev("(ui checkbox initval=true)") == "(ui checkbox initval=true)"
@@ -225,4 +211,221 @@
     @test ev("(ui-value :t4 :i)") == "5"
     @test occursin("at most 10", screen)
     ev("(ui-close! :t4)")
+end
+
+# The theme: roles resolve to colors, `ui-theme!` recolors one, `ui-style`
+# reports a role's full style, and the defaults come back.
+@testset "ui theme" begin
+    db = MemoryDatabase()
+    env = Env(db = db)
+    ev(s) = air_string(air_eval(env, read_air(s)))
+    t0 = ev("(ui-theme)")
+    @test startswith(t0, "(theme ")
+    # A role that only recolors its foreground prints as a bare color; a role
+    # that also changes weight, background, or another field prints as a map.
+    @test occursin("string=green", t0)
+    @test occursin("comment=bright_black", t0)
+    @test occursin("error=(bold=true fg=bright_red)", t0)
+    @test occursin("selection=(bg=blue)", t0)
+    @test ev("(ui-style :string)") ==
+          "(style bg=default bold=false dim=false fg=green italic=false " *
+          "reverse=false underline=false)"
+    # A color name may be spelled with hyphens, and a string works too.
+    @test ev("(ui-theme! string=:bright-yellow)") == "naught"
+    @test occursin("fg=bright_yellow", ev("(ui-style :string)"))
+    @test ev("(ui-theme! number=\"cyan\")") == "naught"
+    @test occursin("fg=cyan", ev("(ui-style :number)"))
+    # An unknown role is refused, and the defaults are restorable.
+    err = ""
+    try
+        ev("(ui-theme! nonsense=:red)")
+    catch e
+        err = sprint(showerror, e)
+    end
+    @test occursin("unknown role", err)
+    # A global entry may set any style field, and a whole saved palette installs
+    # with one call, so a theme round-trips through `(ui-theme)`.
+    @test ev("(ui-theme! string=(bg=:blue bold=true))") == "naught"
+    @test occursin("bg=blue", ev("(ui-style :string)"))
+    @test occursin("bold=true", ev("(ui-style :string)"))
+    @test occursin("fg=bright_yellow", ev("(ui-style :string)"))  # kept
+    @test ev("(do (val t (ui-theme)) (ui-theme! reset=true string=:red) " *
+             "(ui-theme! reset=true t) (ui-style :string))") ==
+          "(style bg=blue bold=true dim=false fg=bright_yellow italic=false " *
+          "reverse=false underline=false)"
+    @test ev("(ui-theme! reset=true)") == "naught"
+    @test occursin("fg=green", ev("(ui-style :string)"))
+    @test occursin("bold=false", ev("(ui-style :string)"))
+    # An entry may also arrive as part of a whole theme map, bare or under the
+    # `theme` head, and role entries given alongside it win.
+    @test ev("(ui-theme! (theme number=:yellow comment=(bg=:blue)))") == "naught"
+    @test occursin("fg=yellow", ev("(ui-style :number)"))
+    @test occursin("bg=blue", ev("(ui-style :comment)"))
+    @test ev("(ui-theme! (number=:cyan) number=:red)") == "naught"
+    @test occursin("fg=red", ev("(ui-style :number)"))
+    # An entry that names the same field twice, or names no field at all, is
+    # refused rather than silently resolved.
+    everr(s) = ui_errmsg(() -> ev(s))
+    @test occursin("names fg twice",
+                   everr("(ui-theme! string=(fg=:red color=:blue))"))
+    @test occursin("names no fields", everr("(ui-theme! comment=())"))
+    @test ev("(ui-theme! reset=true)") == "naught"
+    # A widget may carry its own theme: it recolors the roles it names for that
+    # widget's draw, keeps the rest, and is installed only while drawing.
+    @test ev("(ui-open :th (ui-code text=\"(+ 1 2)\" theme=(string=:red)))") == ":th"
+    inst = AirLang._ui_lookup(env, Form(Symbol(":th")))
+    c = AirLang._comp_build(inst)
+    th = c.base.theme
+    @test th !== nothing
+    @test th[:string].fg === :red
+    @test th[:string].bg === :default
+    @test Base.ScopedValues.with(() -> AirLang._ui_role(:string).fg,
+                                 AirLang._UI_THEME_LOCAL => th) === :red
+    @test AirLang._ui_role(:string).fg === :green
+    ev("(ui-close! :th)")
+    # The renderer installs the map around the widget's own draw, so a string
+    # token in the body takes the widget's color instead of the process color.
+    ev("(ui-open :thd (ui-code text=\"(f \\\"x\\\")\" theme=(string=:red)))")
+    thinst = AirLang._ui_lookup(env, Form(Symbol(":thd")))
+    out = IOBuffer()
+    r = AirLang._TermRenderer(out; cols = Ref(40), rows = Ref(8),
+                              readbyte = () -> nothing)
+    r.comp = AirLang._comp_build(thinst)
+    AirLang._ui_term_draw!(r, thinst)
+    @test occursin("\e[0;31", String(take!(out)))
+    ev("(ui-close! :thd)")
+    # A theme entry must name a real role.
+    @test ev("(ui-open :thn (ui-code theme=(nonsense=:red)))") == ":thn"
+    inst = AirLang._ui_lookup(env, Form(Symbol(":thn")))
+    @test_throws AirLang.AirEvalError AirLang._comp_build(inst)
+    ev("(ui-close! :thn)")
+    # An entry may instead be a map of style fields, each replacing one field of
+    # the role it inherits; `color=` is a synonym for `fg=`.
+    ev("(ui-open :thm (ui-code theme=(string=(fg=:red bg=:blue bold=true) " *
+                       "comment=(color=:cyan dim=true))))")
+    inst = AirLang._ui_lookup(env, Form(Symbol(":thm")))
+    thm = AirLang._comp_build(inst).base.theme
+    @test thm[:string].fg === :red
+    @test thm[:string].bg === :blue
+    @test thm[:string].bold
+    @test !thm[:string].dim
+    @test thm[:comment].fg === :cyan
+    @test thm[:comment].dim
+    @test !thm[:comment].bold
+    ev("(ui-close! :thm)")
+    # Unknown fields and non-boolean flags are refused when the widget is built.
+    therr(src) = begin
+        ev("(ui-open :the " * src * ")")
+        inst = AirLang._ui_lookup(env, Form(Symbol(":the")))
+        msg = try
+            AirLang._comp_build(inst)
+            ""
+        catch e
+            sprint(showerror, e)
+        end
+        ev("(ui-close! :the)")
+        msg
+    end
+    @test occursin("unknown field", therr("(ui-code theme=(string=(frob=:red)))"))
+    @test occursin("must be true or false",
+                   therr("(ui-code theme=(string=(bold=1)))"))
+    # The same two entry errors a global entry raises.
+    @test occursin("names fg twice",
+                   therr("(ui-code theme=(string=(fg=:red color=:blue)))"))
+    @test occursin("names no fields", therr("(ui-code theme=(comment=()))"))
+end
+
+# The status row right-aligns as many whole key hints as fit; it never cuts one,
+# and it switches to the short spelling only when that shows more hints.
+@testset "status row hints" begin
+    db = MemoryDatabase()
+    env = Env(db = db)
+    ev(s) = air_string(air_eval(env, read_air(s)))
+    hints = ["ctrl-j: run" => "^J run", "esc: done" => "esc",
+             "ctrl-r: run all" => "^R all"]
+    longs = first.(hints)
+    shorts = last.(hints)
+    for w in 1:120
+        row = AirLang._ui_fit_hints("code", hints, w)
+        @test startswith(row, "code")
+        @test textwidth(row) <= max(w - 1, 4)
+        # Whatever follows is a run of whole hints in one spelling or the other.
+        ok = row == "code"
+        for hm in (longs, shorts), n in 1:3
+            ok |= endswith(row, join(hm[1:n], "   "))
+        end
+        @test ok
+    end
+    # Room for one long hint but two short ones: the short spelling wins.
+    @test endswith(AirLang._ui_fit_hints("code", hints, 20), "^J run   esc")
+    # Room for all three long ones: the long spelling wins.
+    @test endswith(AirLang._ui_fit_hints("code", hints, 60), join(longs, "   "))
+    # A tie keeps the long spelling, and no room at all is the left part alone.
+    @test endswith(AirLang._ui_fit_hints("code", hints, 17), "ctrl-j: run")
+    @test AirLang._ui_fit_hints("code", hints, 10) == "code"
+    # No hint at all, and a left part longer than the row, are both safe.
+    @test AirLang._ui_fit_hints("code", Pair{String,String}[], 40) == "code"
+    @test AirLang._ui_fit_hints(repeat("x", 50), hints, 20) == repeat("x", 50)
+
+    # A real widget's status line obeys the same bound at every width.
+    w = air_eval(env, read_air("(ui-notebook text=\"(+ 1 2)\")"))
+    ui_open_form!(env, :hintnb, w)
+    inst = AirLang._ui_lookup(env, Form(Symbol(":hintnb")))
+    c = AirLang._comp_notebook(inst, inst.root)
+    for width in (20, 30, 40, 60, 80, 120)
+        row = AirLang._comp_status_line(c, inst, width)
+        @test startswith(row, "notebook")
+        # Either the row carries whole hints and fits, or none fit and it is the
+        # left part alone (which the renderer clips).
+        @test textwidth(row) <= width - 1 || !occursin("   ", row)
+    end
+    ev("(ui-close! :hintnb)")
+end
+
+# The terminal writer keeps the last frame and sends only the rows that differ,
+# so a keystroke costs one row and a cursor move instead of a full screen.
+@testset "ui frames" begin
+    db = MemoryDatabase()
+    env = Env(db = db)
+    ev(s) = air_string(air_eval(env, read_air(s)))
+
+    ev("(ui-open :fr (ui-code text=\"(+ 1 2)\"))")
+    inst = AirLang._ui_lookup(env, Form(Symbol(":fr")))
+    out = IOBuffer()
+    r = AirLang._TermRenderer(out; cols = Ref(40), rows = Ref(8),
+                              readbyte = () -> nothing)
+    r.comp = AirLang._comp_build(inst)
+    AirLang._ui_term_draw!(r, inst)
+    first = String(take!(out))
+    @test occursin("\e[K", first)
+
+    # Nothing changed: the rows are all skipped and only the cursor is placed.
+    AirLang._ui_term_draw!(r, inst)
+    second = String(take!(out))
+    @test !occursin("\e[K", second)
+    @test occursin("\e[", second)
+
+    # An edit redraws the rows it touches, not the whole frame.
+    AirLang._tb_insert!(r.comp.buf, "(+ 1 2 3)")
+    AirLang._ui_term_draw!(r, inst)
+    third = String(take!(out))
+    @test occursin("\e[K", third)
+    @test count("\e[K", third) < count("\e[K", first)
+    ev("(ui-close! :fr)")
+
+    # Composite widgets answer `ui-render` headlessly, and building one for a
+    # view starts nothing (a chat's pump belongs to a renderer session).
+    ev("(def bt-one 1)")
+    ev("(ui-open :hb (ui-browser))")
+    @test occursin("bt-one", ev("(ui-render :hb)"))
+    ev("(ui-close! :hb)")
+
+    ev("(def hc-in (stream))")
+    ev("(def hc-out (stream))")
+    ev("(val hcw (ui-chat in=hc-in out=hc-out))")
+    @test ev("(ui-open :hch hcw)") == ":hch"
+    @test ev("(ui-render :hch)") == "\"\""
+    chinst = AirLang._ui_lookup(env, Form(Symbol(":hch")))
+    @test AirLang._comp_build(chinst).pump === nothing
+    ev("(ui-close! :hch)")
 end

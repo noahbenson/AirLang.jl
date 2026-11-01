@@ -80,6 +80,33 @@ passes `AIR_HISTORY` here when that variable is set.
 function air_repl(io_in::IO = stdin, io_out::IO = stdout; env::Env = default_env(),
                   pretty::Bool = true, width::Integer = 80,
                   history::Union{Nothing,AbstractString} = nothing)
+    # A local session on a real terminal is a connection like any other, so a
+    # widget can be attached to it from the prompt. A pipe is not: there is no
+    # terminal to take over.
+    conn = _repl_connection(env, io_in, io_out)
+    try
+        return _air_repl_loop(io_in, io_out; env = env, pretty = pretty,
+                              width = width, history = history)
+    finally
+        conn === nothing || _conn_close!(env, conn)
+    end
+end
+
+# Register the REPL's terminal as the `std` connection, or return `nothing` when
+# the REPL is not on a terminal (or the registration fails).
+function _repl_connection(env::Env, io_in::IO, io_out::IO)
+    (io_in === stdin && io_out === stdout && io_in isa Base.TTY &&
+     io_out isa Base.TTY) || return nothing
+    return try
+        _conn_open!(env, :std, _current_user(env); tty = true)
+    catch
+        nothing
+    end
+end
+
+function _air_repl_loop(io_in::IO, io_out::IO; env::Env = default_env(),
+                        pretty::Bool = true, width::Integer = 80,
+                        history::Union{Nothing,AbstractString} = nothing)
     buf = String[]
     print(io_out, "air> ")
     for line in eachline(io_in)

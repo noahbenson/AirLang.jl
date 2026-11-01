@@ -121,6 +121,22 @@ channel, including from a `task` the session spawns. There is no
 non-interactive exec: `ssh host command` is refused (it opens a channel request
 air does not serve).
 
+### Interactive UIs over SSH
+
+Every SSH session is a **connection**: air records it under `.io.conn` as
+`(conn id=:s1 kind=:ssh user=:alice …)` while the channel is open and marks it
+closed afterwards, so the record outlives the socket. `(ui-connections)` lists
+the caller's live connections, and `(ui-attached)` names the widget on one.
+
+`(ui-attach! widget)` with no connection attaches to the session's own channel
+— it takes over the alternate screen, draws the widget full-screen, and returns
+the REPL when the widget is dismissed. That is what `(ui-show key)` does, and
+what a composite widget such as `(ui-attach! (ui-shell))` gives you over SSH: a
+tabbed browser, notebook, and editor. Because the widget is durable data, a
+detach (`Esc` on the last tab, or `(ui-detach!)`) leaves the instance and its
+state in place, and a reattach restores it. See
+[User interfaces](ui.md#connections).
+
 ## Paths, directories, and files
 
 A remote path is an air path. It is split on both `.` and `/`, empty segments

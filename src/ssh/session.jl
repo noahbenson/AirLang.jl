@@ -209,9 +209,25 @@ function _ssh_serve!(server::_SshServer, session::Ptr{Cvoid}, chan::Ptr{Cvoid},
     else
         out = _SshChannelIO(chan, false, session, tty, cols, rows)
         ctx = TaskContext(id, home, server.dbroot, naught, out)
-        _with_context(env, ctx,
-                      () -> _ssh_repl!(env, server, session, chan, out;
-                                       cols = cols, rows = rows, tty = tty))
+        _with_context(env, ctx) do
+            # Register the connection so `(ui-attach! .io.conn… widget)` has a
+            # byte source to render on. Registration is best effort: a session
+            # must log in even when its record cannot be written (a database
+            # user, say), in which case `ui-show` still renders on the channel.
+            conn = try
+                _conn_open!(env, :ssh, id; out = out, tty = tty, cols = cols,
+                            rows = rows)
+            catch e
+                @debug "air ssh connection registration failed" exception = (e, catch_backtrace())
+                nothing
+            end
+            try
+                _ssh_repl!(env, server, session, chan, out; cols = cols,
+                           rows = rows, tty = tty)
+            finally
+                conn === nothing || _conn_close!(env, conn)
+            end
+        end
     end
     return nothing
 end

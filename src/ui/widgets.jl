@@ -53,8 +53,13 @@ struct _UiKind
     children::Symbol
 end
 
-# A stateful kind: it has a current value the user may change.
-_ui_kind_mutable(k::_UiKind) = k.value !== :none
+# A stateful kind: it has a current value the user may change. A composite kind
+# (`:component`) owns its own state instead, so it is not mutable in this sense
+# and air does not validate a value for it.
+_ui_kind_mutable(k::_UiKind) = k.value !== :none && k.value !== :component
+
+# Whether a kind is a composite widget (a code block, a notebook, …).
+_ui_kind_component(k::_UiKind) = k.value === :component
 
 const _UI_KIND_LIST = _UiKind[
     # Boolean widgets.
@@ -120,6 +125,15 @@ const _UI_KIND_LIST = _UiKind[
     _UiKind(Symbol("tab"), :none, _UI_COMMON_PARAMS, (), :any),
     _UiKind(Symbol("accordion"), :none, _UI_COMMON_PARAMS, (), :section),
     _UiKind(Symbol("section"), :none, _UI_COMMON_PARAMS, (), :any),
+    # Composite widgets. Their parameters are the component's own, so they are
+    # not checked against this catalog; their durable state is a `mut` named by
+    # `state=`, and they take no child elements.
+    _UiKind(Symbol("code-block"), :component, (), (), :none),
+    _UiKind(Symbol("editor"), :component, (), (), :none),
+    _UiKind(Symbol("notebook"), :component, (), (), :none),
+    _UiKind(Symbol("browser"), :component, (), (), :none),
+    _UiKind(Symbol("shell"), :component, (), (), :none),
+    _UiKind(Symbol("chat"), :component, (), (), :none),
 ]
 
 const _UI_KINDS = Dict{String,_UiKind}(String(k.name) => k for k in _UI_KIND_LIST)
@@ -137,8 +151,9 @@ end
 
 # ---- reading parameters ------------------------------------------------------
 
-# A parameter's leaf, or `nothing` when it is not a scalar.
-_ui_param_leaf(params, k) = haskey(params, k) ? _leafof(params[k]) : nothing
+# A parameter's leaf, or `nothing` when it is not a scalar. A container stores
+# raw leaves, so a value read out of one is re-wrapped before it is inspected.
+_ui_param_leaf(params, k) = haskey(params, k) ? _leafof(to_form(params[k])) : nothing
 
 _ui_param_bool(params, k) = (l = _ui_param_leaf(params, k); l isa Bool ? l : nothing)
 
@@ -306,6 +321,7 @@ end
 # Check the parameters of one element: unknown keys are an error naming the
 # kind, and a parameter that is present but malformed is an error naming it.
 function _ui_check_params(kind::_UiKind, params)
+    _ui_kind_component(kind) && return nothing
     allowed = kind.params
     for k in keys(params)
         k in allowed || throw(AirEvalError(

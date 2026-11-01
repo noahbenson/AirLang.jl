@@ -58,6 +58,8 @@ mutable struct _UiInstance
     dismissed::Bool
     closed::Bool
     lock::ReentrantLock
+    tree::Any               # the built component tree, when this is a widget
+    ticker::Any             # the task that applies background work
 end
 
 const _UI_INSTANCES = Dict{Symbol,_UiInstance}()
@@ -240,7 +242,8 @@ function _ui_build!(env::Env, scope::Scope, inst::_UiInstance, form::Form,
     ksym === nothing && throw(AirEvalError(
         "a UI widget type must be a symbol, got $(air_string(to_form(form.seq[2])))"))
     kind = _ui_kind(ksym)
-    _check_options(form, "ui " * String(kind.name), kind.params)
+    _ui_kind_component(kind) ||
+        _check_options(form, "ui " * String(kind.name), kind.params)
 
     # Evaluate parameters. `assert` stays raw (evaluated per value); callbacks
     # keep the lexical names they will need when they fire.
@@ -312,7 +315,7 @@ function _ui_instantiate(env::Env, scope::Scope, key::Symbol, tree::Form)
                        Dict{String,Form}(), _session_env(env),
                        TaskContext(c.user, c.ns, c.dbroot, c.env, c.out),
                        _scope_layers_only(scope), Air.vars(), _UiRenderer[],
-                       0, true, false, false, ReentrantLock())
+                       0, true, false, false, ReentrantLock(), nothing, nothing)
     root = _ui_build!(env, scope, inst, tree, nothing, "root", nodes)
     inst.root = root
     for node in nodes
@@ -507,6 +510,18 @@ function _ui_close_key(env::Env, keyform::Form)
         _ui_retract_all!(inst)
         inst.closed = true
         inst.dismissed = true
+        # Closing is where a widget's held resources (a chat's receiving task)
+        # are released, and where its last state is written. A mere detach does
+        # neither: the tree lives on with the instance.
+        tree = inst.tree
+        inst.tree = nothing
+        if tree !== nothing
+            try
+                _comp_close!(tree, inst)
+            catch e
+                e isa AirError || rethrow()
+            end
+        end
     end
     lock(_UI_INSTANCES_LOCK) do
         get(_UI_INSTANCES, inst.key, nothing) === inst &&

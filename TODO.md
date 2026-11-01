@@ -81,9 +81,53 @@ SFTP), the immutable `bytes` extern,
   `ui-run` drive it, `ui-render` is a deterministic text renderer, and
   `ui-show` is a full-screen terminal renderer over SSH (alternate screen,
   focus, validation line, Esc to dismiss, Ctrl-C to abort). See `book/ui.md`.
-- [ ] **More UI renderers.** A local `stty`-driven terminal renderer (v1 needs a
-  pty SSH session) and a web renderer would exercise the abstract layer; both
-  implement the same attach/draw/event contract.
+- [x] **Human-interface (HUI) layer.** A shared interaction framework — styled
+  lines, a role-based theme, a key model that keeps CR/LF apart and resolves
+  modified CSI sequences, one editable text buffer with layout-driven automatic
+  indentation and bracket pairing, and syntax highlighting — and the composite
+  widgets built on it: `ui-code`, `ui-editor`, `ui-notebook`, `ui-browser`,
+  `ui-shell`, and `ui-chat`. Each is a durable `(ui KIND …)` form whose state is
+  a `mut`. Connections live under `.io.conn` as inert records; `ui-attach!`,
+  `ui-detach!`, `ui-attached`, `ui-connection`, and `ui-connections` drive them,
+  with an SSH channel backend and a local `TTYTerminal` backend. `ns-entries`
+  and `ns-entry` list a namespace's entries for the browser. The instance owns
+  its built tree and a ticker: an evaluation runs as a background job (the frame
+  stays live and the status row names it) and keeps running — landing its result
+  in the widget's stored state — after the renderer detaches; a notebook runs all
+  its cells in order, and a standalone widget reopens with the output it last
+  drew. The status row right-aligns whole key hints, and the terminal writer
+  diffs frames, sending only the rows that changed. See `book/ui.md`.
+- [ ] **UI sessions.** Today an attach is explicit and the instance lives until
+  `ui-close!`. The intended model: an ephemeral `(ui-attach (ui …))` is lost when
+  the connection ends and the value becomes unreachable (so its repl can be
+  collected), while a widget stored in a namespace is durable and can be
+  reattached; the default UI for an SSH login is a namespace browser and a
+  notebook opened in `$`; and a `current-ui` value is always set for anything
+  reached through the UI. Cleanup of an unreachable ephemeral UI's evaluation
+  context belongs to this work.
+- [ ] **HUI follow-ups.**
+  - *Editing:* in-buffer search, go-to-line, bracket match/jump, and a
+    comment toggle.
+  - *Notebook:* per-cell timing.
+  - *Shell:* reattach automatically after an SSH reconnect, and tab reorder /
+    close-all.
+  - *Browser:* a filter/search line.
+  - *Chat:* an unread marker for messages that arrived while scrolled away.
+  - *Evaluation:* preemption. Ctrl-C raises `:ctrl-c` and the job keeps running;
+    aborting a running evaluation needs a cancellable task or a structured
+    shutdown checklist on the Air side (propose it, do not build it here).
+  - *Automation:* the SSH test is skipped when OpenSSH_jll is unavailable, and
+    the local backend is tested over pipes rather than a real pty.
+  - *Diagnosis only:* six `test/ref_forms.jl` actor tests fail against the
+    current AirDB; some are timing-sensitive and some observationally could be
+    the deferred actor-network work on the AirDB side. Diagnose and propose a
+    fix; never edit AirDB.
+- [ ] **Agent-user-interface (AUI) layer.** Chat and form tools that an agent
+  drives over a text protocol. Deliberately deferred: the human interface comes
+  first, and the two share the widget runtime underneath.
+- [ ] **More UI renderers.** A web renderer (and mouse support) would exercise
+  the abstract layer; it implements the same attach/draw/event contract as the
+  two terminal backends.
 - [ ] **Incremental UI updates.** `ui-update!` re-instantiates the whole tree;
   an incremental subtree update would avoid rebuilding and re-evaluating every
   parameter for a dashboard-style redraw.

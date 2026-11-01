@@ -228,6 +228,54 @@
   alternate-buffer terminal renderer over an SSH session (alternate screen,
   reverse-video focus, validation on a status line, Esc to dismiss, Ctrl-C to
   abort with `(error :ctrl-c)`).
+* The human-interface (HUI) layer: styled lines with a role-based theme
+  (`ui-theme`, `ui-theme!`, `ui-style`, and a per-widget `theme=` map installed
+  for that widget's own draw, whose entries are a foreground color or a map of
+  style fields; ANSI-16, 256-color, and RGB colors). `ui-theme` prints a role as
+  a bare color when only its foreground departs from plain text and as a field
+  map otherwise, and `ui-theme!` also accepts a whole saved palette as an
+  optional positional theme map, so `(ui-theme! reset=true (ui-theme))`
+  round-trips; a repeated field and an entry that names no field are errors. A
+  status row right-aligns whole key hints (long and short spellings; short only
+  when it fits strictly more). The
+  terminal key model keeps CR and LF apart (so Ctrl-J is distinct from
+  Enter), resolves `ESC`-prefixed and modifier CSI sequences, times out a lone
+  Esc after 25 ms, and delivers bracketed paste as one event; and one editable
+  text buffer with layout-driven automatic indentation (the printer's own
+  `layout` declarations, so a replayed pretty form reproduces its indentation),
+  bracket pairing that respects strings, raw strings, regex literals, and nested
+  block comments, undo/redo, and kill/yank.
+* Composite widgets, each a durable `(ui KIND …)` form whose state is a `mut`
+  created by its constructor (`ui-code`, `ui-editor`, `ui-notebook`,
+  `ui-browser`, `ui-shell`, `ui-chat`): a code block that refuses to run
+  unclosed input and dims stale output; a definition editor that saves from
+  stored source and re-evaluates `def`/`val` forms; a notebook of paired
+  input/output cells with `Ctrl-J` run, `Ctrl-R` run-all (sequential, in
+  document order), `Ctrl-O`/`Alt-O` clear-output, `Ctrl-G`/`Alt-G` insert,
+  continuous document navigation, collapse-and-scroll for long cells, and
+  stale-output marking; a `ns-entries` namespace tree whose `Ctrl-J` opens the
+  editor for a definition and a notebook for a `val`; a tabbed shell with a
+  browser and a scratch notebook by default (opened when a renderer starts it,
+  so a headless render creates nothing), Tab/Shift-Tab tab switching,
+  `Alt-1`…`Alt-9` selection, and an Esc that pops one layer and asks before
+  discarding edits;
+  and a chat over a caller-supplied stream pair, with message cells tinted by
+  direction, a polled receive pump, and code mode — a draft beginning with `(`
+  is evaluated locally and only its value is sent.
+* Connections: `.io.conn` records each live endpoint as inert data
+  (`id=`, `kind=`, `user=`, `since=`, `attached=`, `closed=`), readable by
+  everyone and writable by its owner; `(ui-attach! [conn] widget)`,
+  `(ui-detach! [conn])`, `(ui-attached)`, `(ui-connection)`, and
+  `(ui-connections)` drive them. `ui-show` attaches the caller's own connection,
+  one widget per connection, and a widget instance and its muts survive a
+  detach. The instance owns its built tree and a ticker, so an evaluation or a
+  notebook run-all continues with no renderer attached and its result is stored
+  in the widget's state; detaching flushes the on-screen state, and only
+  `ui-close!` tears the tree down. Both the SSH channel backend and a local
+  `TTYTerminal` backend exist.
+* `ns-entries` and `ns-entry` list a namespace's entries as data
+  (`name=` as a keyword, `kind=`, `owner=`, `doc=`, and `src=` on request),
+  omitting unreadable and hidden entries exactly as `using` and `doc` do.
 * Printing and layouts: `air_string` is the flat spelling and
   `air_pretty_string(x; width=80)` the greedy line-broken one, with
   `(form->string x pretty=true width=n)` in air; the REPL reads its width from
@@ -323,6 +371,11 @@
   is buffered and committed as one `bytes` val at `CLOSE` (correct and atomic,
   but not streamed), and `ssh host command` is not served, so only the REPL and
   the SFTP subsystem are available.
+* The agent-user-interface (AUI) level: chat and form tools that an agent drives
+  over a text protocol. Only the human-interface level is built.
+* Renderer follow-ups: a web renderer, mouse support, and preemptible
+  evaluation (a running cell is evaluated on its own task, so the frame stays
+  live, but it cannot be cancelled — the same limitation as the REPL).
 
 **Spec notes**
 

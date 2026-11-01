@@ -1785,3 +1785,182 @@ function _ns_value(env::Env, v::Form)
     _check_ns!(env, ns, :read)
     return ns.vf
 end
+
+# ---- listing a namespace for the UI -----------------------------------------
+#
+# `(ns-entries [target] src=false)` and `(ns-entry [target] name src=false)`
+# expose what a namespace contains as plain data, so a browser or an editor can
+# read it without depending on the internal marker forms. The permission rules
+# are the ones `doc`, `using`, and printing already apply: a hidden entry is
+# absent, and an entry whose volatile the caller may not read is absent.
+
+# The public kind of an entry, or `nothing` for an entry the UI does not list.
+function _ns_public_kind(e::Form)
+    h = _entry_head(e)
+    h === _DEF_HEAD && return :def
+    h === _VAL_HEAD && return :val
+    h === NS_PROXY && return :proxy
+    h === NS_PROXY_APPLY && return :proxy
+    h === NS_ALIAS && return :alias
+    h === NS_SUB && return :sub
+    h === NS_SUB_LINK && return :sub
+    return nothing
+end
+
+# The docstring an entry carries, or "".
+function _ns_entry_doc(e::Form)
+    b = _entry_body(e)
+    b isa FormContainer || return ""
+    haskey(b.map, _DOC_KEY) || return ""
+    l = _leafof(to_form(b.map[_DOC_KEY]))
+    return l isa AbstractString ? String(l) : ""
+end
+
+# The stored source frame of an entry (`src=(name line col text)`), or `nothing`.
+function _ns_entry_srcframe(e::Form)
+    b = _entry_body(e)
+    b isa FormContainer || return nothing
+    haskey(b.map, _SRC_KEY) || return nothing
+    s = to_form(b.map[_SRC_KEY])
+    return s isa FormContainer ? s : nothing
+end
+
+# The stored source text of an entry, or `nothing`.
+function _ns_entry_src(e::Form)
+    s = _ns_entry_srcframe(e)
+    s === nothing && return nothing
+    key = Symbol(":text")
+    haskey(s.map, key) || return nothing
+    l = _leafof(to_form(s.map[key]))
+    return l isa AbstractString ? String(l) : nothing
+end
+
+# The entry form the UI sees. `nsvf` is the volatile of the namespace holding
+# `e` (a plain subnamespace marker has no volatile of its own, so it inherits
+# the namespace's owner). Returns `nothing` when the caller may not read it.
+function _ns_entry_form(env::Env, e::Form, nsvf::VolatileForm; src::Bool = false,
+                        path::Union{Nothing,Vector{Symbol}} = nothing)
+    e isa VolatileForm && (_meta_hidden(e) || !_can(env, e, :read)) && return nothing
+    kind = _ns_public_kind(e)
+    kind === nothing && return nothing
+    # A subnamespace marker is plain data, so it carries no ACL of its own; the
+    # namespace it names does, and an unreadable namespace is absent from the
+    # listing exactly as an unreadable definition is.
+    if kind === :sub
+        p = _sub_entry_path(e, path)
+        child = p === nothing ? nothing : _ns_lookup(env, p)
+        (child === nothing || !_can(env, child.vf, :read)) && return nothing
+    end
+    name = _entry_export_name(e)
+    name === nothing && return nothing
+    owner = e isa VolatileForm ? _meta_owner(e) : _meta_owner(nsvf)
+    # The name is a keyword, not a bare symbol: a bare symbol would be reduced
+    # on the way out (an entry named after a definition would come back as that
+    # definition's value), while a keyword is inert data like `kind`/`owner`.
+    map = Pair{Symbol,Form}[
+        Symbol(":name") => _keyword_form(name),
+        Symbol(":kind") => _keyword_form(kind),
+        Symbol(":owner") => _keyword_form(owner)]
+    doc = _ns_entry_doc(e)
+    isempty(doc) || push!(map, Symbol(":doc") => Form(doc))
+    if src
+        s = _ns_entry_src(e)
+        s === nothing || push!(map, Symbol(":src") => Form(s))
+    end
+    return _ns_form(Form[Form(:entry)], map)
+end
+
+# The absolute path a subnamespace entry names. The marker is either a relative
+# name — `(ns-sub util)` inside `.main` is `.main.util` — or, for an imported
+# subnamespace, the absolute path form.
+function _sub_entry_path(e::Form, parent::Union{Nothing,Vector{Symbol}})
+    p = _ns_path_of_marker(e)
+    p === nothing || return p
+    name = head_symbol(_entry_body(e)) === NS_SUB_LINK ? nothing :
+           (b = _entry_body(e); b isa FormContainer && length(b.seq) >= 2 ?
+            _ns_sub_name(b) : nothing)
+    (name === nothing || parent === nothing) && return nothing
+    return vcat(parent, [name])
+end
+
+# The namespace a listing targets: the call's argument, or the current one.
+function _ns_listing_ns(env::Env, scope::Scope, call::FormContainer,
+                        name::AbstractString)
+    if length(call.seq) >= 2
+        path = _ns_target_path(env, scope, to_form(call.seq[2]))
+        ns = _ns_lookup(env, path)
+        ns === nothing &&
+            throw(AirEvalError("$name: no namespace $(_ns_display(path))"))
+        return ns
+    end
+    return _context(env).ns
+end
+
+# The `src=true` option, defaulting to false.
+function _ns_src_opt(env::Env, scope::Scope, call::FormContainer)
+    key = Symbol(":src")
+    haskey(call.map, key) || return false
+    l = _leafof(air_reduce(env, scope, to_form(call.map[key])))
+    l isa Bool || throw(AirEvalError("src= must be true or false"))
+    return l
+end
+
+# `(ns-entries [target] src=false)` — the readable entries of a namespace, in
+# append order (later definitions of a name therefore appear later).
+function _bi_ns_entries(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "ns-entries", (Symbol(":src"),))
+    length(call.seq) <= 2 ||
+        throw(AirEvalError("ns-entries takes at most one namespace"))
+    ns = _ns_listing_ns(env, scope, call, "ns-entries")
+    _check_ns!(env, ns, :read)
+    want = _ns_src_opt(env, scope, call)
+    out = Form[]
+    for e in _ns_entries_of(ns.vf)
+        f = _ns_entry_form(env, e, ns.vf; src = want, path = ns.path)
+        f === nothing || push!(out, f)
+    end
+    return _ui_seq_form(out)
+end
+special!(Symbol("ns-entries"), _bi_ns_entries)
+
+# The entry a name denotes in `ns`: a definition, `val`, or proxy by its own
+# name, else any entry (a subnamespace or alias) that exports it.
+function _ns_named_entry(env::Env, ns::Namespace, name::Symbol)
+    e = _ns_entry_for(env, ns, name)
+    e === nothing || return e
+    for x in Iterators.reverse(_ns_entries_of(ns.vf))
+        _entry_export_name(x) === name && return x
+    end
+    return nothing
+end
+
+# `(ns-entry [target] name src=false)` — one entry, or `naught` when it is
+# absent or unreadable.
+function _bi_ns_entry(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "ns-entry", (Symbol(":src"),))
+    (2 <= length(call.seq) <= 3) ||
+        throw(AirEvalError("ns-entry takes an optional namespace and a name"))
+    local ns::Namespace
+    local nameform::Form
+    if length(call.seq) == 2
+        ns = _context(env).ns
+        nameform = to_form(call.seq[2])
+    else
+        path = _ns_target_path(env, scope, to_form(call.seq[2]))
+        ns = _ns_lookup(env, path)
+        ns === nothing &&
+            throw(AirEvalError("ns-entry: no namespace $(_ns_display(path))"))
+        nameform = to_form(call.seq[3])
+    end
+    l = _leafof(air_reduce(env, scope, nameform))
+    (l isa Symbol || l isa AbstractString) ||
+        throw(AirEvalError("ns-entry: the name must be a symbol or string"))
+    s = String(l)
+    startswith(s, ":") && (s = s[2:end])
+    e = _ns_named_entry(env, ns, Symbol(s))
+    e === nothing && return naught
+    f = _ns_entry_form(env, e, ns.vf; src = _ns_src_opt(env, scope, call),
+                        path = ns.path)
+    return f === nothing ? naught : f
+end
+special!(Symbol("ns-entry"), _bi_ns_entry)

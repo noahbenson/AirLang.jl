@@ -19,7 +19,23 @@ events (`(:set id value)`, `(:click id)`, `(:dismiss)`) through
 """
 abstract type _UiRenderer end
 
+include("ui/style.jl")
 include("ui/widgets.jl")
 include("ui/core.jl")
 include("ui/render.jl")
+include("ui/keys.jl")
+include("ui/term.jl")
+include("ui/theme.jl")
+include("ui/text.jl")
+include("ui/code.jl")
+include("ui/highlight.jl")
+include("ui/components.jl")
+include("ui/codeblock.jl")
+include("ui/notebook.jl")
+include("ui/browser.jl")
+include("ui/shell.jl")
+include("ui/chat.jl")
+include("ui/constructors.jl")
 include("ui/terminal.jl")
+include("ui/local.jl")
+include("ui/connection.jl")
