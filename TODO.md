@@ -114,25 +114,50 @@ extern with `[…]` literals and `{…}` reservations, `(exit)`, and the CLI.
   task's stack, so it is collected when the session ends unless the user stores
   it; `ui=false`/`ui=naught` in `$.config.ssh` (or the `ssh` val of
   `$.config`) opts out, and a non-pty session never gets one.
+- [x] **A Jupyter-familiar notebook.** The editing keys a Jupyter user reaches
+  for: `Ctrl-N`/`Ctrl-P` move by line and cross cells at their edges, `Ctrl-D`
+  deletes forward, and `Ctrl-Shift-J` (`Alt-Enter` where a terminal cannot send
+  it) runs the cell and advances, inserting one below at the end. Editing
+  reindents the lines below the edit from the layout's canonical indents
+  (strings and comments untouched), and the cursor's innermost form is tinted
+  with `form_bg`. `println` is captured into the output area instead of landing
+  at the terminal cursor, and the output is whatever was printed followed by
+  only the last top-level form's value (a final `naught` contributes nothing,
+  though the ruler and timing still show). Esc now layers edit → select →
+  shell: `:select` is a Jupyter command mode (`j`/`k`, `Home`/`End`, Enter,
+  `a`/`b`, `d,d` delete, `z` restore, `i,i` interrupt, Ctrl-J run), with chords
+  shown in the status row. The key model decodes CSI-u and `modifyOtherKeys` so
+  modified keys such as `Ctrl-Shift-J` arrive distinctly (`test/ui_keys.jl`).
 - [ ] **HUI follow-ups.**
-  - *Editing:* in-buffer search, go-to-line, bracket match/jump, and a
+  - [x] *Editing:* in-buffer search, go-to-line, bracket match/jump, and a
     comment toggle.
-  - *Notebook:* per-cell timing.
-  - *Shell:* reattach automatically after an SSH reconnect, and tab reorder /
-    close-all.
-  - *Browser:* a filter/search line.
-  - *Chat:* an unread marker for messages that arrived while scrolled away.
-  - *Evaluation:* preemption — done. Ctrl-C cancels the evaluation the widget
-    has in flight (the reducer polls a cancellation token); a call into Julia
-    still runs to completion. Esc still leaves work running on purpose.
-  - *Automation:* the SSH test needs the test target's OpenSSH_jll, so it runs
-    under `Pkg.test` and is skipped otherwise; the local backend is unit-tested
-    over pipes, and its pty path was verified once by hand with a pty driver,
-    not by the suite.
-  - *Diagnosis only:* six `test/ref_forms.jl` actor tests fail against the
-    current AirDB; some are timing-sensitive and some observationally could be
-    the deferred actor-network work on the AirDB side. Diagnose and propose a
-    fix; never edit AirDB.
+  - [x] *Notebook:* per-cell timing (measured on the job's task, shown in the
+    output ruler and the status row, and stored with the cell).
+  - [x] *Shell:* reattach automatically after an SSH reconnect (the default UI
+    is a named instance keyed by user, so a reconnect returns to the same
+    shell), and tab reorder / close-all (`Alt-←`/`Alt-→`, `Alt-W`).
+  - [x] *Browser:* a filter line (`Ctrl-S`): live, case-insensitive narrowing by
+    name across every subnamespace (shown flat with its path), Enter accepts and
+    stores it, Esc cancels then clears it, and Enter on a matching subnamespace
+    makes it the root.
+  - [x] *Chat:* an unread marker — messages that arrive while the log is
+    scrolled away from its newest entry are counted in the status row and
+    marked by a `── n new ──` rule where they begin.
+  - *Evaluation:* preemption — done. Ctrl-C, and a notebook's `i,i`, cancel the
+    evaluation the widget has in flight: the reducer polls a cancellation token
+    every 64 steps and the whole-tree verbs every 1024 elements. A call into
+    Julia still runs to completion. Esc still leaves work running on purpose.
+  - [x] *Automation:* the SSH test needs the test target's OpenSSH_jll, so it
+    runs under `Pkg.test` and is skipped otherwise; the local backend is
+    unit-tested over pipes, and its pty path was verified once by hand with a
+    pty driver, not by the suite.
+  - [x] *Diagnosis only (resolved by observation):* the six `test/ref_forms.jl`
+    actor tests reported against the "current AirDB" no longer reproduce —
+    four consecutive runs of the file (77/77) and the intervening full suites
+    all pass. `../AirDB.jl` has uncommitted work in `src/externs.jl` and
+    `test/externs.jl` (another agent's), so the earlier failures were most
+    likely a transient against a half-updated checkout. Nothing here touches
+    AirDB; if they return, reproduce against a clean AirDB checkout first.
 - [ ] **Agent-user-interface (AUI) layer.** Chat and form tools that an agent
   drives over a text protocol. Deliberately deferred: the human interface comes
   first, and the two share the widget runtime underneath.
@@ -186,10 +211,10 @@ extern with `[…]` literals and `{…}` reservations, `(exit)`, and the CLI.
   1024 elements; `Cancelled` is control flow (`except`/`trace`/`test` never
   swallow it) and it aborts a transaction's writes. A job's running attempt is
   cancelled by `cancel-task`/`cancel-event`, and a UI widget cancels its in-flight
-  evaluation on Ctrl-C. A long Julia call (an extern, a tensor operation, a
-  database round trip) and work spawned on another task still run to completion.
-  The SSH session's own `Ctrl-C` remains an interrupt delivered when the running
-  form finishes — a separate mechanism.
+  evaluation on Ctrl-C (and on a notebook `i,i`). A long Julia call (an extern,
+  a tensor operation, a database round trip) and work spawned on another task
+  still run to completion. The SSH session's own `Ctrl-C` remains an interrupt
+  delivered when the running form finishes — a separate mechanism.
 - [x] **Data formats** — `decode`/`encode` (with `format=`) and
   `read-data`/`write-data` (with extension inference) convert JSON, YAML, TOML,
   CSV, TSV, and `.env` to and from plain air data: an object becomes a map form,

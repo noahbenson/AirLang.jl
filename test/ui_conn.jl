@@ -40,6 +40,7 @@
             envw = Env(db = MemoryDatabase())
             (h0, q0) = scripted(:air; e = envw)
             push!(q0, ESC)
+            push!(q0, ESC)
             @test air_string(air_eval(envw,
                 read_air("(ui-attach! $(conn(h0)) (ui-notebook))"))) == "naught"
             B._conn_close!(envw, h0)
@@ -158,6 +159,7 @@
             # Esc dismisses the notebook; the attach returns, the record clears,
             # and the controller is gone while the element itself still exists.
             push!(queue, ESC)
+            push!(queue, ESC)
             @test wait_for(() -> istaskdone(t))
             @test txt(evd("(ui-attached $w)")) == "naught"
             @test field(record(B._conn_state(env, h.path), h.id), :attached) == "naught"
@@ -201,6 +203,7 @@
             @test occursin(":ui-attached",
                            errmsg(() -> ev("(ui-attach! $(conn(h2)) :busy)")))
             push!(q1, ESC)
+            push!(q1, ESC)
             @test wait_for(() -> istaskdone(t))
             @test ev("(ui-close! :busy)") == "naught"
         end
@@ -227,6 +230,7 @@
             t = @async evd("(ui-attach! :$(h.id) (ui-notebook))")
             @test wait_for(() -> h.inst !== nothing)
             push!(queue, ESC)
+            push!(queue, ESC)
             @test wait_for(() -> istaskdone(t))
 
             # A dotted string names a connection too.
@@ -235,11 +239,13 @@
             t2 = @async evd("(ui-attach! \"$(w2[2:end])\" (ui-notebook))")
             @test wait_for(() -> h2.inst !== nothing)
             push!(queue2, ESC)
+            push!(queue2, ESC)
             @test wait_for(() -> istaskdone(t2))
 
             # The mutable itself is a connection argument too.
             t3 = @async evd("(ui-attach! $w2 (ui-notebook))")
             @test wait_for(() -> h2.inst !== nothing)
+            push!(queue2, ESC)
             push!(queue2, ESC)
             wait_for(() -> istaskdone(t3))
         end

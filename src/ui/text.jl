@@ -377,6 +377,55 @@ function _tb_word_right!(b::_TextBuffer; select::Bool = false)
     return nothing
 end
 
+# ---- searching ---------------------------------------------------------------
+
+# Every occurrence of `q` in one line, as 0-based start columns. The match is
+# literal and case-sensitive, and never spans a line: a buffer search is a line
+# search, so a match is always something the reader could have told you about
+# within one row.
+function _tb_line_find_all(line::Vector{Char}, q::Vector{Char})
+    out = Int[]
+    m = length(q)
+    m == 0 && return out
+    for i in 0:(length(line) - m)
+        ok = true
+        for j in 1:m
+            if line[i + j] != q[j]
+                ok = false
+                break
+            end
+        end
+        ok && push!(out, i)
+    end
+    return out
+end
+
+# Every occurrence of `q` in the buffer, in document order, as `(row, col)`
+# pairs with a 0-based column.
+function _tb_matches(b::_TextBuffer, q::AbstractString)
+    out = Tuple{Int,Int}[]
+    isempty(q) && return out
+    qc = collect(q)
+    for (r, line) in enumerate(b.lines)
+        for c in _tb_line_find_all(line, qc)
+            push!(out, (r, c))
+        end
+    end
+    return out
+end
+
+# Put the cursor at `(row, col)` and, when `len > 0`, select the run of `len`
+# characters that starts there (the cursor sits after it).
+function _tb_place!(b::_TextBuffer, row::Int, col::Int, len::Int = 0)
+    b.row = clamp(row, 1, length(b.lines))
+    col = clamp(col, 0, length(b.lines[b.row]))
+    b.col = col
+    b.anchor = len > 0 ? (b.row, col) : nothing
+    b.col = min(col + len, length(b.lines[b.row]))
+    b.goal = -1
+    return nothing
+end
+
 # ---- kill and yank -----------------------------------------------------------
 
 function _tb_kill!(b::_TextBuffer, s::String)
@@ -438,10 +487,13 @@ end
 
 # ---- indentation of a whole line --------------------------------------------
 
-# Set the current line's leading whitespace to exactly `n` spaces, keeping the
-# cursor on the same character where possible.
-function _tb_reindent!(b::_TextBuffer, n::Int)
-    line = b.lines[b.row]
+# Set a line's leading whitespace to exactly `n` spaces, keeping the cursor and
+# the selection anchor on the same character where possible. This is the raw
+# form used by automatic reindentation (which is part of an edit that already
+# took its undo snapshot).
+function _tb_set_indent!(b::_TextBuffer, row::Int, n::Int)
+    (1 <= row <= length(b.lines)) || return false
+    line = b.lines[row]
     k = 0
     while k < length(line) && (line[k + 1] == ' ' || line[k + 1] == '\t')
         k += 1
@@ -449,11 +501,19 @@ function _tb_reindent!(b::_TextBuffer, n::Int)
     n = max(n, 0)
     k == n && return false
     body = line[k+1:end]
-    b.lines[b.row] = vcat(Char[' ' for _ in 1:n], body)
-    b.col = clamp(b.col - k + n, 0, length(b.lines[b.row]))
-    b.goal = -1
+    b.lines[row] = vcat(Char[' ' for _ in 1:n], body)
+    shift = n - k
+    b.row == row && (b.col = clamp(b.col + shift, 0, length(b.lines[row])))
+    if b.anchor !== nothing && b.anchor[1] == row
+        b.anchor = (row, clamp(b.anchor[2] + shift, 0, length(b.lines[row])))
+    end
+    b.row == row && (b.goal = -1)
     return true
 end
+
+# Set the current line's leading whitespace to exactly `n` spaces, keeping the
+# cursor on the same character where possible.
+_tb_reindent!(b::_TextBuffer, n::Int) = _tb_set_indent!(b, b.row, n)
 
 _tb_leading_spaces(b::_TextBuffer, row::Int = b.row) =
     (line = b.lines[row]; k = 0;

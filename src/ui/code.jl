@@ -277,6 +277,51 @@ function _ui_indent_at(s::AbstractString)
     return _lo_inner(spec, col, _lo_aligncol(col, heads))
 end
 
+# The canonical indentation of every line of `text`, by the same rule a newline
+# uses: the innermost open form decides. A line whose first non-blank character
+# is a closer instead takes the innermost opener's column, which is where that
+# closer belongs. Line 1 is always column 0.
+function _ui_indent_lines(text::AbstractString)
+    lines = split(String(text), '\n'; keepempty = true)
+    out = Int[0]
+    prefix = String(lines[1])
+    for i in 2:length(lines)
+        line = lines[i]
+        k = 1
+        while k <= length(line) && (line[k] == ' ' || line[k] == '\t')
+            k += 1
+        end
+        if k <= length(line) && line[k] == ')'
+            col = _ui_opener_col(prefix)
+            push!(out, col === nothing ? 0 : col)
+        else
+            push!(out, _ui_indent_at(prefix))
+        end
+        prefix = prefix * "\n" * line
+    end
+    return out
+end
+
+# The lines of `text` whose leading text is inside a string or block comment.
+# Reindentation must not touch these: their whitespace is content, not layout.
+function _ui_protected_lines(text::AbstractString)
+    cs = collect(String(text))
+    n = 0
+    for c in cs
+        c == '\n' && (n += 1)
+    end
+    protected = falses(n + 1)
+    for t in _code_scan_cs(cs)
+        (t.kind === :string || t.kind === :comment) || continue
+        (r0, _) = _code_rowcol(cs, t.start)
+        (r1, _) = _code_rowcol(cs, min(t.stop, length(cs)))
+        for r in r0:r1
+            protected[r] = true
+        end
+    end
+    return protected
+end
+
 # The innermost unclosed opener's column, for dedenting a typed closer.
 function _ui_opener_col(s::AbstractString)
     cs = collect(s)
@@ -304,6 +349,159 @@ function _ui_at_context(s::AbstractString, pos::Int)
         end
     end
     return nothing
+end
+
+# ---- bracket matching --------------------------------------------------------
+
+"""
+    _ui_bracket_match(text, idx) -> Union{Nothing,Tuple{Symbol,Int}}
+
+The bracket token at 1-based character index `idx` of `text` and the index of
+the token that matches it: `(:open, i)` for an opener (the closer is at `i`),
+`(:close, i)` for a closer (the opener is at `i`), or `nothing` when `idx` is
+not a bracket or the bracket has no partner. Only real parens count — one in a
+string or a comment is text, not structure.
+"""
+function _ui_bracket_match(text::AbstractString, idx::Int)
+    cs = collect(String(text))
+    (1 <= idx <= length(cs)) || return nothing
+    (cs[idx] == '(' || cs[idx] == ')') || return nothing
+    toks = _code_scan_cs(cs)
+    ti = findfirst(t -> (t.kind === :open || t.kind === :close) &&
+                        t.start == idx, toks)
+    ti === nothing && return nothing
+    t = toks[ti]
+    if t.kind === :open
+        for j in (ti + 1):length(toks)
+            if toks[j].kind === :close && toks[j].depth == t.depth
+                return (:open, toks[j].start)
+            end
+        end
+    else
+        for j in (ti - 1):-1:1
+            if toks[j].kind === :open && toks[j].depth == t.depth
+                return (:close, toks[j].start)
+            end
+        end
+    end
+    return nothing
+end
+
+# ---- the form around the cursor ----------------------------------------------
+
+"""
+    _ui_form_span(text, pos) -> Union{Nothing,Tuple{Int,Int}}
+
+The character span of the innermost form that contains character position
+`pos` (1-based, the cursor's position in `_tb_text`): the opener's index through
+its matching closer's index, or through the end of the text when the form is
+unterminated. `nothing` when the cursor is not inside a form.
+"""
+function _ui_form_span(text::AbstractString, pos::Int)
+    cs = collect(String(text))
+    pos = clamp(pos, 1, length(cs) + 1)
+    toks = _code_scan_cs(cs)
+    stack = Int[]
+    for (i, t) in enumerate(toks)
+        t.start >= pos && break
+        if t.kind === :open
+            push!(stack, i)
+        elseif t.kind === :close && !isempty(stack)
+            pop!(stack)
+        end
+    end
+    isempty(stack) && return nothing
+    oi = stack[end]
+    o = toks[oi]
+    stopidx = length(cs)
+    for j in (oi + 1):length(toks)
+        t = toks[j]
+        if t.kind === :close && t.depth == o.depth
+            stopidx = t.start
+            break
+        end
+    end
+    return (o.start, stopidx)
+end
+
+"""
+    _ui_form_segments(text, span) -> Vector{Tuple{Int,Int,Int}}
+
+The parts of a form span on each line it touches, as `(row, startcol, stopcol)`
+with 0-based display columns and an exclusive stop. Empty when the span is
+empty.
+"""
+function _ui_form_segments(text::AbstractString, span::Tuple{Int,Int})
+    cs = collect(String(text))
+    starts = Int[1]
+    for (i, c) in enumerate(cs)
+        c == '\n' && push!(starts, i + 1)
+    end
+    (a, b) = span
+    segs = Tuple{Int,Int,Int}[]
+    for ln in 1:length(starts)
+        lo = starts[ln]
+        hi = ln < length(starts) ? starts[ln + 1] - 2 : length(cs)
+        hi < lo && continue
+        s = max(a, lo)
+        e = min(b, hi)
+        s > e && continue
+        c0 = textwidth(String(cs[lo:(s - 1)]))
+        c1 = textwidth(String(cs[lo:e]))
+        push!(segs, (ln, c0, c1))
+    end
+    return segs
+end
+
+# ---- line comments -----------------------------------------------------------
+
+# The 0-based column of the `#` that starts a line comment (the first non-blank
+# character is `#`, and it does not open a `#| … |#` block), or `nothing`.
+function _ui_line_comment_col(line::Vector{Char})
+    k = 0
+    while k < length(line) && (line[k + 1] == ' ' || line[k + 1] == '\t')
+        k += 1
+    end
+    k < length(line) || return nothing
+    line[k + 1] == '#' || return nothing
+    (k + 2 <= length(line) && line[k + 2] == '|') && return nothing
+    return k
+end
+
+# Comment or uncomment every non-blank line in `rows`, keeping the cursor and
+# selection on the character they were on. Returns `(commented, n)`: whether the
+# lines are now commented, and how many were changed.
+function _ui_toggle_comment!(b::_TextBuffer, rows::UnitRange{Int})
+    content = [r for r in rows if !_tb_line_blank(b, r)]
+    isempty(content) && return (false, 0)
+    commented = all(r -> _ui_line_comment_col(b.lines[r]) !== nothing, content)
+    _tb_snapshot!(b)
+    for r in content
+        line = b.lines[r]
+        k = _ui_line_comment_col(line)
+        if commented
+            # Drop the marker and the space a toggle normally leaves after it.
+            n = (k + 2 <= length(line) && line[k + 2] == ' ') ? 2 : 1
+            deleteat!(line, (k + 1):(k + n))
+            shift = c -> c <= k ? c : max(k, c - n)
+        else
+            k = 0
+            while k < length(line) && (line[k + 1] == ' ' || line[k + 1] == '\t')
+                k += 1
+            end
+            insert!(line, k + 1, ' ')
+            insert!(line, k + 1, '#')
+            shift = c -> c <= k ? c : c + 2
+        end
+        if r == b.row
+            b.col = shift(b.col)
+        end
+        if b.anchor !== nothing && b.anchor[1] == r
+            b.anchor = (r, shift(b.anchor[2]))
+        end
+    end
+    b.goal = -1
+    return (commented, length(content))
 end
 
 # ---- closure -----------------------------------------------------------------

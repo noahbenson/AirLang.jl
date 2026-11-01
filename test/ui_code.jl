@@ -118,6 +118,26 @@
         end
     end
 
+    @testset "canonical indents and the form around the cursor" begin
+        # Every line's canonical indent, from the same rule a newline uses.
+        @test B._ui_indent_lines("(do\n(f 1)\n)") == [0, 2, 0]
+        @test B._ui_indent_lines("(def (f ?x)\n(g x))") == [0, 2]
+        @test B._ui_indent_lines("(do\n  (f 1\n  )") == [0, 2, 2]
+        @test B._ui_indent_lines("a\nb") == [0, 0]
+        # A string's contents are not layout, and a block comment is not either.
+        @test B._ui_protected_lines("#|a\nb|#\n(f 1)") ==
+              [true, true, false]
+        @test B._ui_protected_lines("(f \"\"\"a\nb\"\"\")") == [true, true]
+        text = "(do\n  (+ 1 2)\n)"
+        @test B._ui_form_span(text, 9) == (7, 13)     # inside the inner form
+        @test B._ui_form_span(text, 2) == (1, 15)     # inside only the outer one
+        @test B._ui_form_span("a (f 1) b", 1) === nothing
+        @test B._ui_form_span("(f 1", 3) == (1, 4)    # unterminated
+        @test B._ui_form_segments(text, (7, 13)) == [(2, 2, 9)]
+        @test B._ui_form_segments(text, (1, 15)) ==
+              [(1, 0, 3), (2, 0, 9), (3, 0, 1)]
+    end
+
     @testset "highlighting" begin
         hl = B._hl_lines("(def (f x)\n  1)")
         @test length(hl) == 2

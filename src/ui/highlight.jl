@@ -89,3 +89,15 @@ end
 
 # The flat text of a span run.
 _hl_text(spans::Vector{_UiSpan}) = _ui_spans_text(spans)
+
+# `spans` with the background role `:form_bg` applied to display columns
+# `a`…`b` (exclusive stop), leaving every span's foreground and weights alone.
+function _hl_tint(spans::Vector{_UiSpan}, a::Int, b::Int)
+    b <= a && return spans
+    (head, rest) = _ui_span_split(spans, max(a, 0))
+    (mid, tail) = _ui_span_split(rest, b - a)
+    isempty(mid) && return spans
+    bg = _ui_role(:form_bg).bg
+    tinted = [_UiSpan(s.text, _ui_style_with(s.style; bg = bg)) for s in mid]
+    return vcat(head, tinted, tail)
+end

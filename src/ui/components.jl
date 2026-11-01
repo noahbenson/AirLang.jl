@@ -46,8 +46,14 @@ gone.
 mutable struct _UiJob
     chan::Channel{Any}
     label::String                   # shown while the job runs
-    token::CancelToken              # cancels the job's evaluation
+    elapsed::Float64                # seconds `f` took (0 until it returns)
+    token::Union{Nothing,CancelToken}  # cancels the job's evaluation
 end
+
+_UiJob(chan::Channel{Any}, label::AbstractString) =
+    _UiJob(chan, String(label), 0.0, nothing)
+_UiJob(chan::Channel{Any}, label::AbstractString, token::CancelToken) =
+    _UiJob(chan, String(label), 0.0, token)
 
 """
     _CompBase
@@ -80,6 +86,10 @@ _comp_lines(c::_Comp, inst::_UiInstance, width::Int) = _UiLine[]
 _comp_cursor(c::_Comp, inst::_UiInstance) = nothing
 _comp_status(c::_Comp, inst::_UiInstance) = c.base.status
 _comp_dirty(c::_Comp, inst::_UiInstance) = false
+# A transient input line (a search or a line number) that outranks the status
+# message while it is open; a container delegates to the child that owns it.
+_comp_prompt(c::_Comp, inst::_UiInstance) = nothing
+_comp_prompt_hints(c::_Comp) = _comp_hints(c)
 _comp_key!(c::_Comp, inst::_UiInstance, k::_UiKey) = :bubble
 
 # Copy the widget's on-screen state into its durable `mut`. The renderer flushes
@@ -91,6 +101,11 @@ _comp_close!(c::_Comp, inst::_UiInstance) = nothing
 # Start anything the widget owns once it is alive (a chat pump). Called when the
 # instance's tree is built, never by a headless view.
 _comp_start!(c::_Comp, inst::_UiInstance) = nothing
+
+# A renderer attached to the tree. Called on every attach, including a second
+# session onto an instance that outlived the first; the widget may use it to
+# make itself usable again (a shell with no tabs opens its defaults).
+_comp_attach!(c::_Comp, inst::_UiInstance) = nothing
 
 # ---- background work ---------------------------------------------------------
 
@@ -111,7 +126,9 @@ its own, so it cancels its children's. Returns the number of jobs cancelled.
 function _comp_cancel_jobs!(c::_Comp)
     j = c.base.job
     j === nothing && return 0
-    Air.cancel!(j.token, "ctrl-c")
+    tok = j.token
+    tok === nothing && return 0
+    iscancelled(tok) || Air.cancel!(tok, "ctrl-c")
     return 1
 end
 
@@ -129,18 +146,26 @@ function _comp_start_job!(c::_Comp, inst::_UiInstance, f::Function;
     _comp_running(c) && return false
     chan = Channel{Any}(1)
     tok = CancelToken()
-    c.base.job = _UiJob(chan, String(label), tok)
+    job = _UiJob(chan, String(label), tok)
+    c.base.job = job
     Threads.@spawn begin
         # Block scopes do not cross a task boundary; this is the same start a
         # `(task …)` makes. The token is installed after the reset, since the
         # reset clears the spawned task's storage.
         _reset_block_scopes!()
+        # Every blocking Air primitive in `f` reads this task's token, so a
+        # `_comp_cancel_job!` wakes it; `_comp_eval` also polls it between
+        # top-level forms.
+        setcancaltoken!(tok)
+        t0 = time()
         res = try
             (:ok, _with_cancel_token(f; token = tok))
         catch e
             e isa InterruptException && rethrow()
-            (:error, sprint(showerror, e))
+            e isa Cancelled ? (:cancelled, sprint(showerror, e)) :
+                (:error, sprint(showerror, e))
         end
+        job.elapsed = time() - t0
         try
             put!(chan, res)
         catch
@@ -150,9 +175,55 @@ function _comp_start_job!(c::_Comp, inst::_UiInstance, f::Function;
     return true
 end
 
+# Cancel the widget's running job. The job applies its own `:cancelled` result
+# on the instance's ticker; this only asks it to stop.
+function _comp_cancel_job!(c::_Comp)
+    j = c.base.job
+    j === nothing && return false
+    tok = j.token
+    tok === nothing && return false
+    iscancelled(tok) || cancel!(tok)
+    return true
+end
+
 # Apply a finished job's result. The component decides what it means; the
-# result is `(:ok, value)` or `(:error, message)`.
+# result is `(:ok, value)` or `(:error, message)`. `elapsed` is how long `f`
+# took, measured on the job's own task; a component that shows timing takes the
+# four-argument method.
 _comp_job_done!(c::_Comp, inst::_UiInstance, res) = nothing
+_comp_job_done!(c::_Comp, inst::_UiInstance, res, elapsed::Float64) =
+    _comp_job_done!(c, inst, res)
+
+# A duration as the status row spells it: microseconds below a millisecond,
+# milliseconds below a second, seconds above.
+function _ui_duration(secs::Real)
+    s = Float64(secs)
+    if s < 1e-3
+        return string(round(Int, s * 1e6), " µs")
+    elseif s < 1
+        return string(round(s * 1e3; digits = 1), " ms")
+    end
+    return string(round(s; digits = 2), " s")
+end
+
+# A status message with the duration appended when one was measured.
+_ui_join_took(msg::AbstractString, elapsed::Union{Nothing,Float64}) =
+    elapsed === nothing ? String(msg) : string(msg, "  ·  ", _ui_duration(elapsed))
+
+# The ruler above a run's output, `avail` columns wide: a plain rule, or — once
+# a duration is known — the rule with the time set into it. `stale` dims the
+# tag along with the output it labels, since both describe an earlier run.
+function _ui_ruler(avail::Int, elapsed::Union{Nothing,Float64};
+                   stale::Bool = false)
+    n = max(avail, 8)
+    elapsed === nothing && return _ui_styled([_UiSpan(repeat("─", n),
+                                                      _ui_role(:border))])
+    tag = string(" ", _ui_duration(elapsed), " ")
+    dashes = max(n - 2 - textwidth(tag), 6)
+    return _ui_styled([_UiSpan("──", _ui_role(:border)),
+                       _UiSpan(tag, _ui_role(stale ? :muted : :border)),
+                       _UiSpan(repeat("─", dashes), _ui_role(:border))])
+end
 
 """
     _comp_tick!(c, inst) -> Bool
@@ -168,7 +239,7 @@ function _comp_tick!(c::_Comp, inst::_UiInstance)
     res = take!(j.chan)
     c.base.job = nothing
     try
-        _comp_job_done!(c, inst, res)
+        _comp_job_done!(c, inst, res, j.elapsed)
     catch e
         e isa AirError || rethrow()
         c.base.status = "error: " * sprint(showerror, e)
@@ -318,6 +389,14 @@ function _state_flag(v::Form, key::Symbol)
     return f !== nothing && _leafof(f) === true
 end
 
+# A stored number, or `nothing` when the field is absent or not a number.
+function _state_number(v::Form, key::Symbol)
+    f = _state_field(v, key)
+    f === nothing && return nothing
+    l = _leafof(f)
+    return l isa Real ? Float64(l) : nothing
+end
+
 # The canonicalized value of a widget's state mut, or `nothing` when the form
 # names no mut.
 function _comp_state_value(inst::_UiInstance,
@@ -343,20 +422,28 @@ function _comp_context(c::_Comp, inst::_UiInstance, ns::Union{Nothing,Namespace}
 end
 
 # Evaluate `text` in the component's namespace, returning
-# `(:ok, [values])` or `(:error, message)`.
+# `(status, payload, printed)`: `:ok` with the top-level values, `:error` with
+# the message, or `:cancelled` with the message. `printed` is everything the
+# evaluation wrote with `(print …)`/`(println …)`, captured from a sink of its
+# own so it lands in the widget's output instead of the ambient terminal.
 function _comp_eval(c::_Comp, inst::_UiInstance, text::AbstractString)
     status, forms = _read_complete(text)
     if status === :error
-        return (:error, sprint(showerror, forms))
+        return (:error, sprint(showerror, forms), "")
     end
     values = Form[]
     env = inst.env
     ns = _comp_ns(c, inst)
-    ctx = _comp_context(c, inst, ns)
+    ctx0 = _comp_context(c, inst, ns)
+    buf = IOBuffer()
+    ctx = TaskContext(ctx0.user, ctx0.ns, ctx0.dbroot, ctx0.env, buf)
     try
         _with_context(env, ctx, () -> Air.setvars(() -> Base.ScopedValues.with(
             () -> begin
                 for f in forms
+                    # Job cancellation is cooperative outside Air's blocking
+                    # primitives: check between top-level forms.
+                    checkcancel(canceltoken())
                     # The namespace's layers are re-read per form, so a `def`
                     # earlier in the buffer is visible to a later form.
                     scope = ns === nothing ? inst.lscope :
@@ -365,10 +452,13 @@ function _comp_eval(c::_Comp, inst::_UiInstance, text::AbstractString)
                 end
             end, _UI_CURRENT => inst.widget), inst.bindings))
     catch e
+        if e isa Cancelled
+            return (:cancelled, sprint(showerror, e), String(take!(buf)))
+        end
         e isa AirError || rethrow()
-        return (:error, sprint(showerror, e))
+        return (:error, sprint(showerror, e), String(take!(buf)))
     end
-    return (:ok, values)
+    return (:ok, values, String(take!(buf)))
 end
 
 # ---- building ----------------------------------------------------------------
@@ -536,10 +626,13 @@ function _comp_status_line(c::_Comp, inst::_UiInstance, width::Int)
     if !isempty(c.base.nspath)
         push!(parts, _ns_display(c.base.nspath))
     end
-    msg = _comp_running(c) ? _comp_job_label(c) : _comp_status(c, inst)
+    prompt = _comp_prompt(c, inst)
+    msg = prompt !== nothing ? prompt :
+          _comp_running(c) ? _comp_job_label(c) : _comp_status(c, inst)
     isempty(msg) || push!(parts, msg)
     left = join(parts, "  ·  ")
-    return _ui_fit_hints(left, _comp_hints(c), width)
+    hints = prompt !== nothing ? _comp_prompt_hints(c) : _comp_hints(c)
+    return _ui_fit_hints(left, hints, width)
 end
 
 # The key hints a component offers, each as `(long, short)`. The status row shows

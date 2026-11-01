@@ -155,7 +155,7 @@
         @test B._comp_running(c)
         @test B._comp_cancel_jobs!(c) == 1
         @test ui_wait_for(() -> (B._comp_tick!(c, inst); !B._comp_running(c)))
-        @test any(l -> occursin("cancelled: ctrl-c", l.text), c.out)
+        @test any(l -> occursin("interrupted", l.text), c.out)
         ev("(ui-close! :canc1)")
     end
 
@@ -171,7 +171,7 @@
         @test res[1] === :err
         @test air_string(res[2].form) == "(error :ctrl-c)"
         @test ui_wait_for(() -> (B._comp_tick!(c, inst); !B._comp_running(c)))
-        @test any(l -> occursin("cancelled: ctrl-c", l.text), c.out)
+        @test any(l -> occursin("interrupted", l.text), c.out)
         ev("(ui-close! :canc2)")
     end
 end

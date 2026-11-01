@@ -240,12 +240,13 @@ _ssh_sftp_cmd(port::Integer, key::AbstractString, batchfile::AbstractString,
             # ---- the default login UI ---------------------------------------
             # An interactive login opens a tab shell (a browser and a notebook
             # in the user's home) before the REPL. Esc pops one layer at a time:
-            # two presses close the two tabs, and the second dismisses the shell.
-            # `(current-ui)` still names it afterwards, so storing the form keeps
-            # the widget and its state across the session.
+            # the first closes the browser, the next enters the notebook's
+            # select mode, and the last closes the notebook, dismissing the
+            # shell. `(current-ui)` still names it afterwards, so storing the
+            # form keeps the widget and its state across the session.
             out, err, rc = _ssh_run(_ssh_client_cmd(port, danakey, "dana";
                                                     tty = true);
-                chunks = ["\033", "\033",
+                chunks = ["\033", "\033", "\033",
                           "(val myshell (current-ui))\n(exit)\n"])
             @test rc == 0
             @test occursin("\e[?1049h", out)      # the shell took the screen
@@ -258,7 +259,7 @@ _ssh_sftp_cmd(port::Integer, key::AbstractString, batchfile::AbstractString,
             # followed by the start of an Alt sequence to the key parser.)
             out, err, rc = _ssh_run(_ssh_client_cmd(port, danakey, "dana";
                                                     tty = true);
-                input = "\033\000\033\000(val myshell2 (current-ui))\n(exit)\n")
+                input = "\033\000\033\000\033\000(val myshell2 (current-ui))\n(exit)\n")
             @test rc == 0
             @test occursin("(ui shell", ev(".sys.user.dana.home.myshell2"))
             # A non-interactive login never opens one.

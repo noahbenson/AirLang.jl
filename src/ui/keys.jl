@@ -115,6 +115,22 @@ function _ui_kp_byte(b::UInt8)
     return nothing
 end
 
+# A Unicode code point as a key, for the CSI-u and modifyOtherKeys encodings.
+# Control characters keep their ordinary names, and a Ctrl-modified letter is
+# lowercased because terminals disagree about reporting the shifted spelling.
+function _ui_kp_code_key(code::Int, shift::Bool, alt::Bool, ctrl::Bool)
+    if code == 8 || code == 127
+        return _ui_key(:backspace; shift = shift, alt = alt, ctrl = ctrl)
+    end
+    code == 9 && return _ui_key(:tab; shift = shift, alt = alt, ctrl = ctrl)
+    code == 13 && return _ui_key(:enter; shift = shift, alt = alt, ctrl = ctrl)
+    code == 27 && return _ui_key(:esc; shift = shift, alt = alt, ctrl = ctrl)
+    (0 < code <= 0x10ffff) || return nothing
+    ch = Char(code)
+    ctrl && (ch = lowercase(ch))
+    return _ui_key(:char; char = ch, shift = shift, alt = alt, ctrl = ctrl)
+end
+
 # Final byte of a CSI sequence and its parameter string.
 function _ui_kp_csi(seq::AbstractString, final::Char)
     params = split(seq, ';')
@@ -126,6 +142,11 @@ function _ui_kp_csi(seq::AbstractString, final::Char)
     ctrl = (m & 4) != 0
     function named(n)
         return _ui_key(n; shift = shift, alt = alt, ctrl = ctrl)
+    end
+    if final == 'u'
+        # CSI-u: `code ; modifiers [; text] u`.
+        k = _ui_kp_code_key(num(1, 0), shift, alt, ctrl)
+        return k === nothing ? _UiKey[] : [k]
     end
     if final == 'A'
         return [named(:up)]
@@ -143,6 +164,11 @@ function _ui_kp_csi(seq::AbstractString, final::Char)
         return [_ui_key(:tab; shift = true)]
     elseif final == '~'
         n = num(1, 0)
+        if n == 27 && length(params) >= 3
+            # modifyOtherKeys: `CSI 27 ; modifiers ; code ~`.
+            k = _ui_kp_code_key(num(3, 0), shift, alt, ctrl)
+            return k === nothing ? _UiKey[] : [k]
+        end
         n == 1 || n == 7 ? [named(:home)] :
         n == 4 || n == 8 ? [named(:end)] :
         n == 2 ? [named(:insert)] :

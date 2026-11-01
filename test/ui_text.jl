@@ -145,5 +145,20 @@
         @test !B._tb_reindent!(b, 2)
         @test B._tb_line_blank(B._TextBuffer("   "))
         @test !B._tb_line_blank(B._TextBuffer("  x "))
+        # Any row can be set, not just the cursor's; the cursor only moves when
+        # it is on that row, and a selection anchor moves with it.
+        b = B._TextBuffer("(do\n  x\n\n y)")
+        B._tb_place!(b, 4, 1)
+        @test B._tb_set_indent!(b, 2, 4)
+        @test String(b.lines[2]) == "    x"
+        @test B._tb_set_indent!(b, 1, 3)
+        @test String(b.lines[1]) == "   (do"
+        @test b.row == 4 && b.col == 1
+        B._tb_place!(b, 2, 2)
+        B._tb_anchor!(b, true)
+        B._tb_move_h!(b, 1; select = true)
+        @test B._tb_set_indent!(b, 2, 2)
+        @test B._tb_selection(b) == ((2, 0), (2, 1))
+        @test !B._tb_set_indent!(b, 9, 1)
     end
 end

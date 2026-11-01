@@ -370,6 +370,7 @@ bracketed paste arrives as one paste event.
 | key | meaning |
 | --- | --- |
 | `Ctrl-J` | run the cell, save the buffer, send the chat draft |
+| `Ctrl-Shift-J`, `Alt-Enter` | run the notebook cell and move to the next one, inserting a cell below at the end |
 | `Ctrl-R` | run every notebook cell, in document order |
 | `Ctrl-O`, `Alt-O` | clear the active cell's output, or every cell's |
 | `Ctrl-G`, `Alt-G` | insert a notebook cell below, above |
@@ -377,15 +378,43 @@ bracketed paste arrives as one paste event.
 | `PageUp`, `PageDown` | page the document, the log, or the current cell |
 | `Tab`, `Shift-Tab` | switch tabs — never indentation |
 | `Alt-1` … `Alt-9` | select a tab directly |
-| `Esc` | pop one layer: a scroll view, then the tab, then the UI |
+| `Alt-←`, `Alt-→` | move the active tab left, right |
+| `Alt-W` | close every tab (asking once when edits would be lost) |
+| `Esc` | pop one layer: a prompt, a scroll view, or a filter, then a notebook's select mode, then the tab, then the UI |
 | `Enter` | a newline in a text buffer; activation in a browser |
+| `Ctrl-N`, `Ctrl-P` | next, previous line — crossing notebook cells at their edges |
 | `Ctrl-A`/`Ctrl-E`, `Ctrl-B`/`Ctrl-F`, `Alt-B`/`Alt-F` | line start/end, character and word motion |
+| `Ctrl-D` | delete the character or selection forward |
 | `Ctrl-K`, `Ctrl-U`, `Ctrl-W`, `Ctrl-Y` | kill to end, to start, a word; yank |
 | `Ctrl-Z`, `Alt-Z` | undo, redo |
 | `Ctrl-L` | re-indent the buffer from its layout |
+| `Ctrl-S` | find in the buffer; again for the next match — in a browser, the filter line |
+| `Alt-L` | go to a line number |
+| `Alt-]` | jump to the bracket matching the one at the cursor |
+| `Alt-;` | comment or uncomment the current line, or every selected line |
 
 There is deliberately **no indent key**: Tab always switches tabs, and
-indentation is enforced automatically on every newline.
+indentation is enforced automatically on every newline. `Ctrl-Shift-J` reaches
+the renderer as a distinct key on terminals that speak CSI-u or
+`modifyOtherKeys`; `Alt-Enter` is its portable alias, and a terminal that
+collapses it onto `Ctrl-J`'s byte simply runs the cell in place.
+
+A **prompt** is a transient input line in place of the status message, and it
+owns every key until it closes. `Ctrl-S` opens an incremental search seeded with
+the previous query; the match is selected as you type and the row shows `n/total`
+(or `no match`), `Ctrl-S`/`Down` and `Up` step through matches with wrapping,
+Enter keeps the cursor at the match, and Esc restores the cursor to where the
+search began. `Alt-L` collects a line number and Enter jumps there. Search is
+literal, case-sensitive, and line-local. The browser's filter line is a prompt
+in the same sense, and the shell leaves its keys to it the same way. Both
+buffer prompts work inside a notebook
+cell, where they take precedence over the notebook's own `Ctrl-J`/`Ctrl-G`/…
+bindings; inside a shell, Esc reaches the prompt before it can close the tab.
+`Alt-]` selects the matching parenthesis, so pressing it again comes back, and
+a bracket inside a string or comment is text, not structure. `Alt-;` toggles a
+`#` line comment on each non-blank line the selection touches (a selection that
+ends at column 0 does not include that line), and a `#| … |#` opener is left
+alone rather than mistaken for a line comment.
 
 The status row shows the title, the namespace, the closure verdict or the
 running job, and then right-aligns **whole key hints**. Each hint has a long and
@@ -408,6 +437,16 @@ re-indents that line to its opener's column. The printer and the editor agree by
 construction: feeding a pretty-printed form back line by line reproduces exactly
 its own leading spaces.
 
+Editing does not only indent the new line: every edit recomputes the canonical
+indent of every line and shifts the lines *below* the edit by however much that
+indent changed — typing an opener pushes the rest of the form right, a closer
+pulls it back. A line that sits at or past its old canonical indent keeps the
+extra spaces the user added, and a deliberately reduced indent stays reduced;
+blank lines and lines whose first non-blank character is a closer simply take
+the new canonical. Strings and comments are never re-indented, because their
+contents are not layout. The form containing the cursor is tinted with the
+`form_bg` role, so the innermost form being edited is visible at a glance.
+
 `(`, `[`, and `{` insert their closer; typing a closer that already sits at the
 cursor steps over it; Backspace inside an auto-paired empty pair removes both;
 Enter inside one opens three lines with the closer at the opener's column. `"`
@@ -429,12 +468,27 @@ cannot run.
 One buffer with an output area. `Ctrl-J` checks the closure verdict and refuses
 with an inline reason (`unclosed input: …`, `parse error: …`); otherwise it
 evaluates every top-level form in the widget's namespace under its captured
-context and prints each result beneath the buffer with the permission-aware
-pretty printer. Errors are drawn in the error role. The text that produced the
+context and shows the result beneath the buffer. What the forms printed comes
+first — `println` and its kin are captured into the output area instead of
+leaking to the terminal at the cursor — and then only the **last** form's value
+appears, rendered with the permission-aware pretty printer. The earlier forms
+still run and still have their effects (a `def` defines, a `set!` sets); it is
+only their *values* that are omitted, because the last one is the result.
+A last value of `naught` contributes no lines at all, so a form run for its
+side effects alone shows just what it printed, or a bare ruler and timing when
+it printed nothing. Errors are drawn in the error role, and an interrupted run
+reports `interrupted`. The text that produced the
 current output is remembered, so editing the text without re-running leaves the
 old output visible and muted rather than pretending it is current. The output
 itself lives in the widget's state alongside the buffer, so a widget that is
 closed and reopened shows its last result still under its text.
+
+Each run is timed on the job's own task, and the duration is set into the ruler
+above the output and appended to the status message (`3 forms · 0.8 ms`); the
+ruler is drawn even when the run produced no output lines, so a `naught` result
+still shows how long it took. The time is stored with the output, so it survives
+a reopen. `_ui_duration` spells a duration in microseconds, milliseconds, or
+seconds, whichever reads best.
 
 ### `editor`
 
@@ -451,19 +505,27 @@ The editor edits *source text*, not live forms.
 ### `notebook`
 
 A column of paired cells: each has an input buffer and its output, and output is
-never editable. The document is continuous — Up at the first line of a cell
-moves to the last line of the previous cell, Down at the last line moves to the
-next — and `Ctrl-V`/`Alt-V` jump a whole cell.
+never editable. The document is continuous — Up at the first line of a cell,
+and `Ctrl-P` likewise, move to the last line of the previous cell; Down and
+`Ctrl-N` at the last line move to the next — and `Ctrl-V`/`Alt-V` jump a whole
+cell.
 
-`Ctrl-J` evaluates the active cell in place. `Ctrl-G` inserts an empty cell
-below and `Alt-G` above, moving the cursor there; they insert only and never
-run. A cell longer than `collapse-lines=` (default 20) shows that window plus
-`… N more`; Enter opens it as a scrolling, editable view and Esc returns to the
-collapsed document. `PageUp`/`PageDown` move ten lines inside a cell.
+`Ctrl-J` evaluates the active cell in place, under the same output rules as a
+[`code-block`](#code-block): what it printed comes first, then only the last
+form's value, and a final `naught` shows nothing but a ruler and the timing.
+`Ctrl-G` inserts an empty cell below and `Alt-G` above, moving the cursor there;
+they insert only and never run. A cell longer than `collapse-lines=` (default
+20) shows that window plus `… N more`; Enter opens it as a scrolling, editable
+view and Esc returns to the collapsed document. `PageUp`/`PageDown` move ten
+lines inside a cell.
 
 Each cell records the exact input text that produced its output. When the input
 changes, the output stays on screen rendered muted, so it is visibly stale;
-re-running replaces it, and reverting the text clears the mark.
+re-running replaces it, and reverting the text clears the mark. Each cell also
+records how long its last run took, shown in the ruler above its output (and
+dimmed with the output when stale) and in the status row while it is active; the
+time is stored with the cell, so a reopened notebook still shows it, and
+clearing the output clears the time with it.
 
 `Ctrl-R` runs the whole document: the non-empty cells are queued in order and
 run one at a time, each starting only after the previous result has landed, so
@@ -472,6 +534,49 @@ being run. The queue stops at a cell that refuses to run (unclosed input), and
 `Ctrl-J`/`Ctrl-R` are refused while a cell is in flight. `Ctrl-O` clears the
 active cell's output and `Alt-O` clears every cell's, leaving the inputs and
 their saved text alone.
+
+Running and moving are separate so that a long run is not retyped: `Ctrl-Shift-J`
+(or `Alt-Enter`) runs the active cell and then opens the next one for editing,
+inserting a fresh cell below when the active cell is the last. It refuses while
+any cell is already running, exactly as `Ctrl-J` does.
+
+The notebook has two modes, as a Jupyter user expects. `:nav` is the editing
+mode described so far, with the cursor in the buffer. A single Esc leaves it for
+`:select`, a command mode in which the cursor is hidden and the active cell is
+marked in the gutter and tinted with the `form_bg` role. In `:select` a bare key
+is a command, not text:
+
+| key | action |
+| --- | --- |
+| `Up`/`k`/`Ctrl-P`, `Down`/`j`/`Ctrl-N` | select the previous, next cell |
+| `Home`, `End` | select the first, last cell |
+| `Enter` | edit the selected cell (`:nav`) |
+| `a`, `b` | insert a cell above, below and edit it |
+| `d`,`d` | delete the selected cell |
+| `z` | restore the cell deleted last |
+| `i`,`i` | interrupt |
+| `Ctrl-J`, `Ctrl-Shift-J`/`Alt-Enter` | run in place, run and advance |
+| `Ctrl-R`, `Ctrl-O`/`Alt-O` | run all, clear the active/every output |
+| `Ctrl-G`/`Alt-G`, `Ctrl-V`/`Alt-V`, `PageUp`/`PageDown` | insert, jump, page |
+| `Esc` | bubble: the shell closes the tab (asking if it is dirty), then the UI |
+
+The two doubled commands are **chords**: `d` and `i` are prefixes, not actions,
+so a stray `d` cannot destroy a cell. While a chord is pending the status row
+says so (`d… (d: delete)`), and any second key that is not the expected one is
+swallowed and clears the chord. Esc in `:select` does not return to editing; it
+bubbles outward, so from a notebook tab the sequence is edit → select → shell
+(the shell asks before discarding a dirty cell) → UI.
+
+Deleting keeps the removed cell, and `z` re-inserts it at the position it held;
+a second delete replaces what `z` would restore. Deleting the only cell clears
+it instead of leaving an empty document. `i,i` interrupts: the run-all queue is
+emptied and every running cell's job is cancelled, the cell draws `interrupted`,
+and the status row says `interrupting…` (or `nothing to interrupt`). Cancellation
+is cooperative: the reducer checks the job's token every 64 reduction steps and
+the whole-tree verbs every 1024 elements, and the forms that block (a stream
+`fetch`, an `await`) honor it too, so a long computation stops promptly. A call
+into Julia itself (an extern, a tensor operation, a database round trip) still
+runs to completion.
 
 ### `browser`
 
@@ -486,6 +591,19 @@ it opens a notebook tab in that val's namespace, seeded with the val's name, so
 data can be explored without editing anything. `Alt-J` on a `val` opens the
 editor for its definition instead.
 
+`Ctrl-S` opens a **filter line**. Typing narrows the tree live to the entries
+whose names contain the text, case-insensitively; the walk goes through every
+subnamespace, so a match is found however deeply it sits and whether or not its
+parents are expanded. Each match is shown flat with its namespace for context
+(`main.util.· printer`), Up/Down move through the matches, and the status row
+reads `n of N entries` (or `no match`). Enter accepts the text and closes the
+line — the narrowing stays, and it is stored with the browser's view — while
+Esc cancels back to what was accepted. A second Esc clears the accepted filter,
+and only a third leaves the browser. A matching subnamespace is a jump: Enter on
+it makes it the root and drops the filter. Filtering reads names only, never
+docs, and a keystroke is bounded (it stops after a few thousand entries or a
+few hundred matches), so a large database cannot stall the frame.
+
 ### `shell`
 
 A tab bar over widget forms. A fresh shell starts with two tabs: a browser of
@@ -494,7 +612,14 @@ the current namespace and a scratch notebook in it. `Tab`/`Shift-Tab` cycle and
 starts the shell, not when the form is built, so `(ui-render …)` of a fresh
 shell shows `(no tabs)` and creates nothing.
 
-`Esc` pops one layer: with a scroll view open it closes the view; otherwise it
+`Alt-Left`/`Alt-Right` move the active tab one place left or right (it stops at
+the ends rather than wrapping), and `Alt-W` closes every tab: it asks once when
+any tab has unsaved edits, then dismisses the shell. Both defer to a prompt
+inside the active tab, which owns every key while it is open. The tab switches
+(`Tab`, `Shift-Tab`, `Alt-1`…`Alt-9`) stay available even then.
+
+`Esc` pops one layer: with a scroll view open it closes the view; in a notebook
+it leaves editing for select mode (see [`notebook`](#notebook)); otherwise it
 closes the active tab, first asking `y: discard` / `n: cancel` when the tab is
 dirty (an edited buffer, or a notebook cell whose text differs from what
 produced its output). Closing the last tab dismisses the shell — with no tabs
@@ -526,6 +651,13 @@ side, `peer_bg` for the other), so a glance distinguishes them.
 The input is a full code block, so it gets the same indentation, pairing, and
 highlighting as any other buffer, and it grows to five rows before scrolling.
 `Ctrl-V`/`Alt-V` move one message and `PageUp`/`PageDown` one page.
+
+Messages that arrive while the log is scrolled away from its newest entry are
+**unread**: the status row counts them (`2 new · peer: alice`), the hint row
+offers `Ctrl-V` with the count, and the log draws a rule (`── 2 new ───`) where
+the unseen messages begin. Scrolling back to the bottom, sending, or receiving
+while already there clears the count, and it is not stored — a reopened chat
+starts with its whole log read.
 
 **Code mode.** When the draft begins with `(`, it is code. On send, the source
 is appended to *this side's* log only, evaluated in the chat's namespace under
@@ -599,8 +731,10 @@ tree is built once, and a ticker applies finished jobs and writes the result
 into the widget's durable state. So **detaching never waits for or stops an
 evaluation**: a notebook's running cell and its run-all queue, a code block's
 run, and a chat's evaluation all continue with no renderer attached, and their
-results are in the state when the widget is reattached. Detaching flushes the
-widget's on-screen state (text, output, cursor) into its `mut`; a projection is
+results are in the state when the widget is reattached. Only an explicit
+interrupt (the notebook's `i,i`) cancels one, and it does so cooperatively.
+Detaching flushes the widget's on-screen state (text, output, cursor) into its
+`mut`; a projection is
 retracted by the ticker only once no renderer and no job remain, so a running
 job's result is written before the projection goes away. Only `ui-close!`
 tears a named instance down and releases connection-era resources such as
@@ -735,8 +869,8 @@ There are two ways out, deliberately different:
 - **Ctrl-C** aborts: the screen is restored, every evaluation the widget has in
   flight is cancelled, and `ui-show` raises `(error :ctrl-c)`, exactly as Ctrl-C
   at the REPL prompt raises `:ctrl-c`, so a surrounding `except` (or the REPL)
-  handles it like any other error. A cancelled run records
-  `error: cancelled: ctrl-c` in the widget.
+  handles it like any other error. A cancelled run draws `interrupted` in the
+  widget, the same marker a notebook's `i,i` leaves.
 
 A `Done` button that calls `(ui-dismiss! :k)` is the same graceful path.
 Validation failures appear on the status line, and the display keeps the last
@@ -810,8 +944,9 @@ Afterwards the selections are ordinary facts, so a rule can use
   the job, and Ctrl-C cancels it: the reducer checks the token every 64 steps
   and the whole-tree verbs every 1024 elements. A call into Julia (an extern, a
   tensor operation, a database round trip, a blocking stream `fetch` or promise
-  `await`) still runs to completion, and work the evaluation spawned on another task is not
-  reached. Esc is different: dismissing neither waits for nor stops a job, so
-  it finishes in the background and its result is stored for the next attach.
+  `await`) still runs to completion, and work the evaluation spawned on another
+  task is not reached. Esc is different: dismissing neither waits for nor stops
+  a job, so it finishes in the background and its result is stored for the next
+  attach.
 - **Passwords are obscured, not protected.** A `password-input` value is an
   ordinary form, readable with `ui-values` and assertable like any other.

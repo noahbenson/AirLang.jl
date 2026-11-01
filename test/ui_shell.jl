@@ -97,9 +97,103 @@
         @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
         @test titles(c) == ["scratch"]            # the active tab closes
         @test c.active == 1
-        # With one tab left, Esc dismisses the whole shell.
+        @test c.tabs[1].comp.mode === :nav
+        # With one tab left, the first Esc enters the notebook's select mode
+        # and the next dismisses the whole shell.
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test c.tabs[1].comp.mode === :select
         @test B._comp_key!(c, inst, B._ui_key(:esc)) === :dismiss
         ev("(ui-close! :shx)")
+    end
+
+    @testset "esc pops a prompt inside the active tab first" begin
+        (c, inst) = shell_of(evd("(ui-shell)"))
+        B._comp_key!(c, inst, B._ui_key(:tab))       # the scratch notebook
+        nb = c.tabs[2].comp
+        B._comp_key!(c, inst, B._ui_key(:char; char = 's', ctrl = true))
+        @test nb.cells[1].prompt !== nothing
+        @test occursin("search:", B._comp_prompt(c, inst))
+        # Esc cancels the prompt and the tab stays. The next Esc enters the
+        # notebook's select mode, and the one after that closes the tab.
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test nb.cells[1].prompt === nothing
+        @test titles(c) == ["browser", "scratch"]
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test nb.mode === :select
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test titles(c) == ["browser"]
+        ev("(ui-close! :shx)")
+    end
+
+    @testset "moving tabs" begin
+        (c, inst) = shell_of(evd("(ui-shell)"))
+        B._comp_key!(c, inst, B._ui_key(:tab))       # the scratch notebook
+        @test c.active == 2
+        # Alt-Left moves the active tab one place left, and it stays active.
+        B._comp_key!(c, inst, B._ui_key(:left; alt = true))
+        @test titles(c) == ["scratch", "browser"]
+        @test c.active == 1
+        @test occursin("moved \"scratch\" left", B._comp_status(c, inst))
+        B._comp_key!(c, inst, B._ui_key(:right; alt = true))
+        @test titles(c) == ["browser", "scratch"]
+        @test c.active == 2
+        # There is no wrap at either edge.
+        B._comp_key!(c, inst, B._ui_key(:right; alt = true))
+        @test titles(c) == ["browser", "scratch"]
+        ev("(ui-close! :shx)")
+    end
+
+    @testset "closing every tab" begin
+        (c, inst) = shell_of(evd("(ui-shell)"))
+        # Nothing is dirty, so Alt-W closes everything at once and dismisses.
+        @test B._comp_key!(c, inst, B._ui_key(:char; char = 'w', alt = true)) ===
+              :dismiss
+        @test isempty(c.tabs)
+        # The instance outlives the connection, so a reattach onto the empty
+        # shell opens the defaults again rather than stranding the user in a
+        # shell with no way to open a tab.
+        B._comp_attach!(c, inst)
+        @test titles(c) == ["browser", "scratch"]
+        ev("(ui-close! :shx)")
+        # With an edit anywhere, it asks once first.
+        (c, inst) = shell_of(evd("(ui-shell)"))
+        B._comp_key!(c, inst, B._ui_key(:tab))
+        B._comp_key!(c.tabs[2].comp, inst, B._ui_key(:char; char = 'x'))
+        @test B._comp_key!(c, inst, B._ui_key(:char; char = 'w', alt = true)) ===
+              :handled
+        @test c.confirm === :close_all
+        @test occursin("discard changes in 2 tabs", B._comp_status(c, inst))
+        B._comp_key!(c, inst, B._ui_key(:char; char = 'n'))
+        @test c.confirm === :none
+        @test titles(c) == ["browser", "scratch"]
+        B._comp_key!(c, inst, B._ui_key(:char; char = 'w', alt = true))
+        @test B._comp_key!(c, inst, B._ui_key(:char; char = 'y')) === :dismiss
+        @test isempty(c.tabs)
+        ev("(ui-close! :shx)")
+    end
+
+    @testset "the login UI is a named instance a reconnect reuses" begin
+        db = MemoryDatabase()
+        envc = Env(db = db)
+        (kf, form) = B._ssh_login_ui(envc, :air)
+        key = B._ui_key(kf)
+        @test key == B._ssh_ui_key(:air)
+        inst = B._ui_lookup(envc, kf)
+        @test inst.key === key
+        @test !inst.ephemeral
+        @test inst.widget === form
+        # A second login finds the same shell — tabs and all — rather than a
+        # fresh one.
+        (kf2, form2) = B._ssh_login_ui(envc, :air)
+        @test B._ui_lookup(envc, kf2) === inst
+        @test form2 === form
+        # Closing it is how a user asks for a fresh UI next time.
+        air_eval(envc, read_air("(ui-close! " * air_string(kf) * ")"))
+        @test_throws B.AirEvalError B._ui_lookup(envc, kf)
+        (kf3, form3) = B._ssh_login_ui(envc, :air)
+        @test B._ui_lookup(envc, kf3) !== inst
+        @test form3 !== form
+        air_eval(envc, read_air("(ui-close! " * air_string(kf3) * ")"))
     end
 
     @testset "closing a dirty tab asks first" begin
@@ -111,7 +205,9 @@
         B._comp_key!(nb, inst, B._ui_key(:char; char = 'x'))
         @test B._comp_dirty(c, inst)
         @test occursin("discard", B._comp_status(c, inst)) == false
-        # Esc asks; anything but `y` keeps the tab.
+        # Esc enters select mode; the next asks. Anything but `y` keeps the tab.
+        @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
+        @test nb.mode === :select
         @test B._comp_key!(c, inst, B._ui_key(:esc)) === :handled
         @test c.confirm === :close
         @test occursin("discard", B._comp_status(c, inst))
@@ -143,9 +239,10 @@
     @testset "the terminal renderer" begin
         w = evd("(ui-shell)")
         open_form!(:sh1, w)
-        # Tab to the scratch notebook, then Esc twice: the first closes the
-        # scratch tab, the second closes the browser and dismisses.
-        (res, out) = term_run(:sh1, [TAB, ESC, ESC])
+        # Tab to the scratch notebook, then Esc three times: the first enters
+        # the notebook's select mode, the second closes the scratch tab, and the
+        # third closes the browser and dismisses.
+        (res, out) = term_run(:sh1, [TAB, ESC, ESC, ESC])
         @test res[1] === :ok
         @test occursin("browser", out)
         ev("(ui-close! :sh1)")

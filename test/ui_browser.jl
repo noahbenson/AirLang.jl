@@ -109,6 +109,102 @@
         ev("(ui-close! :brx)")
     end
 
+    @testset "the filter line" begin
+        ev("(def (alpha ?x) (+ x 1))")
+        ev("(val beta 42)")
+        ev("(namespace .main.util (def (printer ?x) (* x 2)))")
+        w = evd("(ui-browser .main)")
+        (c, inst) = browser_of(w)
+        full = length(c.rows)
+        ctrl_s = B._ui_key(:char; char = 's', ctrl = true)
+        type!(s) = for ch in s
+            B._comp_key!(c, inst, B._ui_key(:char; char = ch))
+        end
+        # Ctrl-S opens the line; it is a prompt, so the shell shows it and its
+        # keys stay here.
+        @test B._comp_prompt(c, inst) === nothing
+        @test B._comp_key!(c, inst, ctrl_s) === :handled
+        @test B._comp_prompt(c, inst) !== nothing
+        @test B._comp_prompt_hints(c) ==
+              ["enter: accept" => "enter", "esc: cancel" => "esc"]
+        # Typing narrows live, across collapsed namespaces, and shows the path.
+        type!("print")
+        @test names(c) == [:printer]
+        @test c.rows[1].path == [:main, :util]
+        @test c.cursor == 1
+        st = B._comp_status(c, inst)
+        @test startswith(st, "filter: print")
+        @test occursin("1 of", st)
+        lines = [l.text for l in B._comp_lines(c, inst, 60)]
+        @test any(l -> startswith(l, "main.util.· printer"), lines)
+        # The line owns every key while it is open, so Ctrl-J is not the tree's.
+        @test B._comp_key!(c, inst, ctrl_j) === :handled
+        # Enter accepts the text and closes the line; the rows stay narrowed.
+        B._comp_key!(c, inst, B._ui_key(:enter))
+        @test c.prompt === nothing
+        @test c.filter == "print"
+        @test names(c) == [:printer]
+        @test occursin("filter: print", B._comp_status(c, inst))
+        @test B._comp_prompt(c, inst) === nothing
+        # A match opens exactly as it would in the tree.
+        res = B._comp_key!(c, inst, ctrl_j)
+        @test res isa Tuple && res[1] === :open
+        @test occursin("printer", air_string(res[3]))
+        # The accepted filter is part of the view, so it is stored and restored.
+        @test B._state_string(state_value(w), :filter) == "print"
+        ev("(ui-close! :brx)")
+        (c2, inst2) = browser_of(w)
+        @test c2.filter == "print"
+        @test names(c2) == [:printer]
+        # Esc clears the narrowing; only a second Esc leaves the browser.
+        @test B._comp_key!(c2, inst2, B._ui_key(:esc)) === :handled
+        @test isempty(c2.filter)
+        @test length(c2.rows) == full
+        @test B._comp_key!(c2, inst2, B._ui_key(:esc)) === :bubble
+        type2!(s) = for ch in s
+            B._comp_key!(c2, inst2, B._ui_key(:char; char = ch))
+        end
+        # A query with no match says so, and Backspace brings the matches back.
+        B._comp_key!(c2, inst2, B._ui_key(:char; char = 's', ctrl = true))
+        type2!("prinz")
+        @test isempty(c2.rows)
+        @test occursin("no match", B._comp_status(c2, inst2))
+        @test [l.text for l in B._comp_lines(c2, inst2, 40)] == ["(no match)"]
+        B._comp_key!(c2, inst2, B._ui_key(:backspace))
+        @test names(c2) == [:printer]
+        # Up/Down move through the matches while the line stays open.
+        @test B._comp_key!(c2, inst2, B._ui_key(:esc)) === :handled
+        @test c2.prompt === nothing
+        B._comp_key!(c2, inst2, B._ui_key(:char; char = 's', ctrl = true))
+        type2!("a")
+        n = length(c2.rows)
+        @test n >= 2
+        B._comp_key!(c2, inst2, B._ui_key(:down))
+        @test c2.cursor == 2
+        B._comp_key!(c2, inst2, B._ui_key(:up))
+        @test c2.cursor == 1
+        # Esc cancels the line, restoring the tree and the accepted filter.
+        @test B._comp_key!(c2, inst2, B._ui_key(:esc)) === :handled
+        @test c2.prompt === nothing
+        @test isempty(c2.filter)
+        @test length(c2.rows) == full
+        # A matching subnamespace is a jump: it becomes the root and the
+        # narrowing drops away.
+        B._comp_key!(c2, inst2, B._ui_key(:char; char = 's', ctrl = true))
+        type2!("util")
+        @test names(c2) == [:util]
+        @test c2.rows[1].kind === :sub
+        # Enter accepts the line first; the next Enter acts on the row.
+        B._comp_key!(c2, inst2, B._ui_key(:enter))
+        @test c2.prompt === nothing
+        @test names(c2) == [:util]
+        @test B._comp_key!(c2, inst2, B._ui_key(:enter)) === :handled
+        @test c2.root == [:main, :util]
+        @test isempty(c2.filter) && c2.prompt === nothing
+        @test names(c2) == [:k, :printer]
+        ev("(ui-close! :brx)")
+    end
+
     @testset "unreadable entries are absent" begin
         ev("(create-user :bob)")
         ev("(namespace .secret (def (s ?x) x))")

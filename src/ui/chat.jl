@@ -65,6 +65,7 @@ mutable struct _Chat <: _Comp
     stick::Bool                     # pin the log to its newest message
     scroll::Int                     # first message in view when not stuck
     log_rows::Int                   # the log's height, from the last draw
+    unread::Int                     # messages that arrived while scrolled away
 end
 
 _comp_title(c::_Chat) = "chat"
@@ -113,12 +114,12 @@ function _comp_chat(inst::_UiInstance, node::_UiNode)
     # owns no state of its own: the chat persists the draft with the log.
     input = _CodeBlock(_CompBase(node; state = nothing, nspath = nspath),
                        _TextBuffer(""), "", :code, nothing, _UiLine[], "", false,
-                       nothing, 80)
+                       nothing, nothing, 80, nothing, "")
     c = _Chat(base, input, _ChatMsg[], ReentrantLock(),
               peer === nothing ? "" : _chat_leaf_text(peer),
               inbox isa StreamForm ? inbox : nothing,
               outbox isa StreamForm ? outbox : nothing,
-              nothing, false, 80, true, 1, 1)
+              nothing, false, 80, true, 1, 1, 0)
     if state !== nothing
         v = _ui_in_context(inst) do
             canonicalize(state[])
@@ -252,22 +253,31 @@ function _chat_send!(c::_Chat, inst::_UiInstance)
     _chat_append!(c, :me, :text, text)
     _chat_post!(c, inst, Form(text))
     _chat_clear_draft!(c)
-    c.stick = true
+    _chat_stick!(c)
     _chat_store!(c, inst)
     return nothing
 end
 
-# Apply a finished code send: log the results, then post each value.
+# Apply a finished code send: log what the evaluation printed, then the
+# results, then post each value. Printing is a sender-side side effect, like an
+# error — the peer receives what the code returned, not what it said along the
+# way. An interrupted evaluation reads as an error to the sender and posts
+# nothing.
 function _comp_job_done!(c::_Chat, inst::_UiInstance, res)
     tag, value = res
     if tag !== :ok
-        _chat_append!(c, :me, :error, "error: " * value)
-        c.base.status = "error"
+        msg = tag === :cancelled ? "interrupted" : "error: " * value
+        _chat_append!(c, :me, :error, msg)
+        c.base.status = tag === :cancelled ? "interrupted" : "error"
     else
-        status, result = value
+        status, result, printed = value
+        isempty(printed) || _chat_append!(c, :me, :result, chomp(printed))
         if status === :error
             _chat_append!(c, :me, :error, "error: " * result)
             c.base.status = "error"
+        elseif status === :cancelled
+            _chat_append!(c, :me, :error, result)
+            c.base.status = "interrupted"
         else
             width = max(c.width - 2, 8)
             for v in result
@@ -278,7 +288,7 @@ function _comp_job_done!(c::_Chat, inst::_UiInstance, res)
             c.base.status = ""
         end
     end
-    c.stick = true
+    _chat_stick!(c)
     _chat_store!(c, inst)
     return nothing
 end
@@ -290,7 +300,10 @@ _chat_dirty!(inst::_UiInstance) = lock(inst.lock) do
     inst.dirty = true
 end
 
-# Append one received value: a string is text, everything else is source.
+# Append one received value: a string is text, everything else is source. A
+# message that lands while the reader is looking at the newest one is read
+# immediately; one that lands while they are scrolled away is counted, so the
+# status row and the log can say how much they have not seen.
 function _chat_receive!(c::_Chat, inst::_UiInstance, v::Form)
     s = _ui_string(v)
     if s === nothing
@@ -299,6 +312,7 @@ function _chat_receive!(c::_Chat, inst::_UiInstance, v::Form)
     else
         _chat_append!(c, :peer, :text, s)
     end
+    c.unread = c.stick ? 0 : c.unread + 1
     _chat_store!(c, inst)
     _chat_dirty!(inst)
     return nothing
@@ -406,6 +420,16 @@ function _chat_msg_height(c::_Chat, i::Int)
     return length(_chat_msg_lines(c, c.msgs[i], max(c.width - 1, 8)))
 end
 
+# The line that separates what the reader has seen from what arrived while they
+# were scrolled away.
+function _chat_unread_line(c::_Chat, width::Int)
+    tag = string(" ", c.unread, " new ")
+    dashes = max(width - 2 - textwidth(tag), 4)
+    return _ui_styled([_UiSpan("──", _ui_role(:border)),
+                       _UiSpan(tag, _ui_role(:accent)),
+                       _UiSpan(repeat("─", dashes), _ui_role(:border))])
+end
+
 # The window of message lines to draw, anchored at the bottom when stuck and at
 # `scroll` otherwise. A single message taller than the window shows its tail (at
 # the bottom) or its head (while anchored).
@@ -439,11 +463,17 @@ function _chat_window(c::_Chat, width::Int, rows::Int)
     end
     total = 0
     j = clamp(c.scroll, 1, n)
+    first_unread = n - c.unread + 1
     while j <= n
         blk = _chat_msg_lines(c, c.msgs[j], width)
-        if total + length(blk) > rows
+        divider = c.unread > 0 && j == first_unread
+        if total + length(blk) + (divider ? 1 : 0) > rows
             isempty(blocks) && push!(blocks, blk)
             break
+        end
+        if divider
+            push!(blocks, [_chat_unread_line(c, width)])
+            total += 1
         end
         push!(blocks, blk)
         total += length(blk)
@@ -467,20 +497,36 @@ _comp_cursor(c::_Chat, inst::_UiInstance) =
 _comp_dirty(c::_Chat, inst::_UiInstance) = !isempty(strip(_tb_text(c.input.buf)))
 
 function _comp_status(c::_Chat, inst::_UiInstance)
-    isempty(c.base.status) || return c.base.status
-    if _chat_code_mode(c)
+    s = if !isempty(c.base.status)
+        c.base.status
+    elseif _chat_code_mode(c)
         v = _ui_closure(_tb_text(c.input.buf))
-        return v[1] === :ok ? "code · closed" :
-               v[1] === :incomplete ? "code · unclosed" : "code · error"
+        v[1] === :ok ? "code · closed" :
+        v[1] === :incomplete ? "code · unclosed" : "code · error"
+    else
+        isempty(c.peer) ? "" : "peer: " * c.peer
     end
-    return isempty(c.peer) ? "" : "peer: " * c.peer
+    c.unread > 0 || return s
+    n = string(c.unread, " new")
+    return isempty(s) ? n : n * "  ·  " * s
 end
 
 _comp_hints(c::_Chat) =
+    c.unread > 0 ?
+    ["ctrl-j: send" => "^J send",
+     string("ctrl-v: ", c.unread, " new") => "^V new",
+     "esc: done" => "esc"] :
     ["ctrl-j: send" => "^J send", "ctrl-v: scroll" => "^V scroll",
      "esc: done" => "esc"]
 
 # ---- scrolling ---------------------------------------------------------------
+
+# Pin the view to the newest message; everything below it has been seen.
+function _chat_stick!(c::_Chat)
+    c.stick = true
+    c.unread = 0
+    return nothing
+end
 
 # Move the view by `d` messages, positive toward the newest.
 function _chat_scroll_msg!(c::_Chat, d::Int)
@@ -489,7 +535,7 @@ function _chat_scroll_msg!(c::_Chat, d::Int)
     (d > 0 && c.stick) && return nothing
     c.stick = false
     c.scroll = clamp(c.scroll + d, 1, n)
-    c.scroll >= n && (c.stick = true)
+    c.scroll >= n && _chat_stick!(c)
     return nothing
 end
 
@@ -506,7 +552,7 @@ function _chat_scroll_page!(c::_Chat, dir::Int)
             i += 1
         end
         c.scroll = clamp(i, 1, n)
-        c.scroll >= n && (c.stick = true)
+        c.scroll >= n && _chat_stick!(c)
     else
         while i > 1 && acc < c.log_rows
             i -= 1
@@ -537,6 +583,12 @@ function _comp_key!(c::_Chat, inst::_UiInstance, k::_UiKey)
     elseif k.name === :pagedown && c.log_rows > 0
         _chat_scroll_page!(c, 1)
         return :handled
+    elseif k.name === :char && k.alt && k.char in ('l', ']', ';')
+        # The buffer's editor extras (go to line, bracket match, comment toggle)
+        # have nowhere to show their prompts here; the draft is a few lines.
+        return :bubble
+    elseif k.name === :char && k.ctrl && !k.alt && k.char == 's'
+        return :bubble
     end
     c.base.status = ""
     res = _comp_key!(c.input, inst, k)

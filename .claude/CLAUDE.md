@@ -733,30 +733,59 @@ Enter, LF is Ctrl-J,
 `ESC [`-sequences are editing keys, `ESC` plus a printable is Alt-`c`, bracketed
 paste is one event), and one text buffer with layout-driven automatic
 indentation, bracket pairing, and syntax highlighting. Keys never indent: Tab /
-Shift-Tab switch tabs, Alt-1…9 select one, Ctrl-J runs/saves/sends, Ctrl-R runs
+Shift-Tab switch tabs, Alt-1…9 select one, Alt-←/→ move the active tab and Alt-W
+closes them all (asking once if any is dirty), Ctrl-J runs/saves/sends,
+Ctrl-Shift-J and Alt-Enter run the active notebook cell and advance to the next
+(inserting one below at the end), Ctrl-R runs
 every notebook cell in order (one at a time; refused while a cell is in flight),
 Ctrl-O/Alt-O clear the active cell's/all cells' output, Ctrl-G and Alt-G insert a
 notebook cell below/above, Ctrl-V and Alt-V jump a cell or message,
-PageUp/PageDown page, and Esc pops exactly one layer (a scroll view, then the
-tab — confirming when it would discard edits — then the UI). A notebook cell
+Ctrl-N/Ctrl-P move a line down/up (crossing notebook cells at their edges),
+Ctrl-D deletes forward,
+PageUp/PageDown page, Ctrl-S finds in the buffer (again for the next match;
+an incremental prompt that owns every key until Enter keeps the match or Esc
+cancels and restores the cursor), Alt-L goes to a line number, Alt-] jumps to
+the matching bracket, Alt-; comments/uncomments the current or selected lines,
+and Esc pops exactly one layer (a prompt, then a scroll view, then a notebook's
+select mode, then the tab — confirming when it would discard edits — then the
+UI). The notebook is Jupyter-familiar: Esc from editing enters `:select`, a
+command mode with the cursor hidden and the active cell tinted, where j/k or the
+arrows move, Home/End jump, Enter edits, a/b insert, d,d deletes (z restores the
+last one), i,i interrupts (emptying the run-all queue and cancelling the running
+job — the reducer polls its token every 64 steps, so even a long non-blocking
+form stops promptly), and Esc bubbles outward. Evaluation output
+is captured: `println` lands in the output area, not at the terminal cursor; the
+output shows whatever was printed and then only the last top-level form's value,
+a final `naught` contributing nothing (though the ruler and timing still show).
+A notebook cell
 records the input text that produced its output, so an edited cell shows its
 output muted (stale) until re-run, and a code widget stores its output with its
-text so it reopens showing it; a code buffer will not run unless the reader
-reports it closed. A fresh shell opens its default tabs only when a renderer
+text so it reopens showing it; both record how long the run took (timed on the
+job's task) in the ruler above the output and in the status row, and store it
+with the output; a code buffer will not run unless the reader reports it
+closed. Editing reindents the lines below the edit as their canonical indents
+change (strings and comments are never touched), and the form containing the
+cursor is tinted with the `:form_bg` role. A fresh shell opens its default tabs only when a renderer
 starts it, so a headless render shows none. The browser's Ctrl-J opens the editor for a `def` and
 a notebook (seeded with its name) for a `val`; Alt-J opens a `val`'s definition.
+Its Ctrl-S opens a filter line that narrows the tree live to the entries whose
+names contain the text, descending through every subnamespace and showing each
+match flat with its path; Enter accepts and stores the filter, Esc cancels then
+clears it, and Enter on a matching subnamespace makes it the root.
 A **chat** takes a *pair* of streams the caller wires (`in=` receives, `out=`
 posts, both required). Messages render as cells with `user_bg`/`peer_bg`
 tints; Enter inserts a newline and Ctrl-J sends; a draft beginning with `(` is
 **code mode** — it is logged on the sender's side only, evaluated in the chat's
 namespace, and only the result is logged on both sides and posted. A pump task
 fetches `in=` with a short timeout from the widget's first build until it is
-closed (not on attach/detach). An evaluation runs as a background job — the
+closed (not on attach/detach), and a message that arrives while the log is
+scrolled away from its newest entry is counted as unread — the status row and a
+`── n new ──` rule in the log say so, and reaching the bottom clears it. An evaluation runs as a background job — the
 frame stays live, the status row names it, and the instance's own ticker applies
 the result with no renderer attached, storing it in the widget's state;
 dismissing neither waits for nor stops the job, while Ctrl-C cancels the jobs
-the widget has in flight before it raises `:ctrl-c` (a cancelled run stores
-`error: cancelled: ctrl-c`). The status row right-aligns whole key hints only (each has
+the widget has in flight before it raises `:ctrl-c` (a cancelled run draws
+`interrupted`, like a notebook `i,i`). The status row right-aligns whole key hints only (each has
 a long and a short spelling; short is used only when it fits strictly more),
 and the terminal writer remembers the last frame and sends only the rows whose
 text changed. Connections are
@@ -773,10 +802,11 @@ renderer and no job remain, so a running job's result is written first — while
 `ui-open`'s named instance survives; `(ui-attached)` returns the form for a
 projection and the key for an instance. `(current-ui)` is bound to the
 instance's form around every evaluation it runs. An interactive SSH pty login
-opens a default `(ui-shell)` (browser and notebook in `$`) held on the session
-task, so it is collected when the session ends unless the user stores the form;
-`ui=false` (or `ui=naught`) in `$.config.ssh`, or in the `ssh` val of
-`$.config`, opts out, and a non-pty session never gets one. `ns-entries` and
+opens a default `(ui-shell)` (browser and notebook in `$`) as a named instance,
+`ssh-ui-<length>_<user>`; it outlives the socket, so a reconnect reattaches the
+same shell with its tabs and buffers, and `(ui-close! that-key)` makes the next
+login open a fresh one; `ui=false` (or `ui=naught`) in `$.config.ssh`, or in the
+`ssh` val of `$.config`, opts out, and a non-pty session never gets one. `ns-entries` and
 `ns-entry` list namespace entries as
 `(entry name=:sym kind=:def|:val|:sub|:proxy|:alias owner= doc= src=)`, omitting
 unreadable and hidden entries.

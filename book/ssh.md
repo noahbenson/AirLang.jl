@@ -139,8 +139,9 @@ the prompt and results redrawn over the terminal width the client reports.
 
 * An incomplete form continues on the next line under a `...> ` prompt.
 * `Ctrl-C` evaluates `(raise :ctrl-c)`: the line being edited is discarded and
-  the error is printed, and the session continues. Evaluation is not
-  preemptible, so a byte sent while a form runs is read when that form finishes.
+  the error is printed, and the session continues. The session does not cancel
+  the form it is running, so a byte sent while a form runs is read when that
+  form finishes.
 * `Ctrl-D` on an empty line, a channel EOF, and `(exit)` all end the session.
   `(exit value)` delivers `value` to the session task and prints nothing.
 
@@ -161,7 +162,7 @@ closed afterwards, so the record outlives the socket. `(ui-connections)` lists
 the caller's live connections, and `(ui-attached)` names the widget on one.
 
 **An interactive login opens the default UI.** Before the REPL starts, the
-session attaches a fresh `(ui-shell)` — a tab shell with a browser and a scratch
+session attaches a `(ui-shell)` — a tab shell with a browser and a scratch
 notebook in the user's home namespace — so the client lands on a tabbed UI
 rather than a bare prompt. `Esc` pops one layer at a time (a scroll view, then
 the active tab, then the UI); once the shell is dismissed the REPL takes over,
@@ -172,11 +173,22 @@ and everything typed after the dismissing key is read as ordinary input.
 (val myshell (current-ui))
 ```
 
-at the prompt keeps the widget (and its state) after the session ends. The shell
-is held on the session's task, so if nothing stores it, it is collected when the
-session ends. Opt out with `ui=false` (or `ui=naught`) in `$.config.ssh`, or in
-the `ssh` val of `$.config`; a non-interactive session (no pty, so `-T`, sftp,
-scp) never opens a UI either way:
+at the prompt keeps the widget (and its state) as a value of its own.
+
+The default UI is a **named instance**, `ssh-ui-<length>_<user>` (colons in a
+user id become underscores, so `:air:bob` is `ssh-ui-7_air_bob`). Because the
+instance outlives the socket, an SSH reconnect attaches the very shell the last
+session left — same tabs, same buffers, same scroll position, with any
+evaluation that was in flight already applied — instead of a new one. The key
+is the handle: `(ui-close! :ssh-ui-7_air_bob)` discards it, and the next login
+then opens a fresh shell under that name, which is how a user asks for a clean
+start. A second simultaneous login by the same user finds the shell already
+attached to the first connection and falls back to the plain REPL rather than
+take it over.
+
+Opt out with `ui=false` (or `ui=naught`) in `$.config.ssh`, or in the `ssh` val
+of `$.config`; a non-interactive session (no pty, so `-T`, sftp, scp) never
+opens a UI either way:
 
 ```air
 (namespace $.config.ssh
@@ -238,7 +250,8 @@ the legacy protocol (`scp -O`, which asks the server to run a command) does not.
   not incremental.
 * **No exec, no recursive delete.** There is no command channel and `RMDIR`
   requires an empty namespace.
-* **Ctrl-C is not preemptive.** It is delivered when the running form finishes.
+* **Ctrl-C does not cancel the running form.** It is delivered when the running
+  form finishes.
 * **Listening is opt-in per address.** A server binds `127.0.0.1` unless told
   otherwise; there is no host-key exchange with an external `sshd` and no
   password or certificate authentication.

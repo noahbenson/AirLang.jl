@@ -28,7 +28,18 @@ mutable struct _Browser <: _Comp
     width::Int
     cur_row::Int
     cur_col::Int
+    filter::String                      # the accepted narrowing ("" = none)
+    prompt::Union{Nothing,String}       # the filter line while it is being typed
+    narrowed::Bool                      # the rows came from a narrowing walk
+    scanned::Int                        # entries the last narrowing walk considered
+    truncated::Bool                     # the walk hit a bound before finishing
 end
+
+# A narrowing walk is bounded: a large database can hold thousands of entries,
+# and a keystroke must stay cheap.
+const _BR_SEARCH_MAX_ROWS = 400
+const _BR_SEARCH_MAX_SCAN = 4000
+const _BR_SEARCH_MAX_DEPTH = 8
 
 _comp_title(c::_Browser) = "browser"
 
@@ -91,6 +102,10 @@ function _br_list(env::Env, path::Vector{Symbol})
     return sort(collect(values(byname)); by = t -> String(t[1]))
 end
 
+# The query the rows are narrowed by: the filter line while it is open, else the
+# accepted filter.
+_br_query(c::_Browser) = c.prompt === nothing ? c.filter : c.prompt
+
 # Recompute the visible rows from the root and the expansion set.
 function _br_refresh!(c::_Browser, env::Env)
     # A stored root can outlive its namespace; fall back to the tree's top.
@@ -99,10 +114,46 @@ function _br_refresh!(c::_Browser, env::Env)
         empty!(c.expanded)
     end
     rows = _BrRow[]
-    _br_walk!(rows, env, c.root, 0, c.expanded)
+    c.scanned = 0
+    c.truncated = false
+    q = strip(_br_query(c))
+    c.narrowed = !isempty(q)
+    if c.narrowed
+        _br_search!(c, rows, env, c.root, 0, lowercase(q))
+    else
+        _br_walk!(rows, env, c.root, 0, c.expanded)
+    end
     c.rows = rows
     isempty(c.rows) && (c.cursor = 0)
     c.cursor = clamp(c.cursor, 0, length(c.rows))
+    return nothing
+end
+
+# Every non-subnamespace entry below `path` whose name contains `q`, with the
+# namespaces in between as context in the row's path. The walk descends into
+# every subnamespace — expansion is a tree-view notion, and a search should not
+# be blinded by what happens to be collapsed — but it is bounded so a keystroke
+# never turns into a scan of a whole database.
+function _br_search!(c::_Browser, rows::Vector{_BrRow}, env::Env,
+                     path::Vector{Symbol}, depth::Int, q::AbstractString)
+    depth > _BR_SEARCH_MAX_DEPTH && return nothing
+    for (name, kind, doc) in _br_list(env, path)
+        if length(rows) >= _BR_SEARCH_MAX_ROWS ||
+           c.scanned >= _BR_SEARCH_MAX_SCAN
+            c.truncated = true
+            return nothing
+        end
+        child = vcat(path, [name])
+        if kind === :sub
+            occursin(q, lowercase(String(name))) &&
+                push!(rows, _BrRow(path, name, kind, 0, doc))
+            _br_search!(c, rows, env, child, depth + 1, q)
+            continue
+        end
+        c.scanned += 1
+        occursin(q, lowercase(String(name))) &&
+            push!(rows, _BrRow(path, name, kind, 0, doc))
+    end
     return nothing
 end
 
@@ -133,7 +184,8 @@ function _comp_browser(inst::_UiInstance, node::_UiNode)
         p === nothing || (path = p)
     end
     base = _CompBase(node; state = state, nspath = path)
-    c = _Browser(base, path, Vector{Symbol}[], 0, _BrRow[], 80, 0, 0)
+    c = _Browser(base, path, Vector{Symbol}[], 0, _BrRow[], 80, 0, 0, "",
+                 nothing, false, 0, false)
     if state !== nothing
         v = _ui_in_context(inst) do
             canonicalize(state[])
@@ -155,6 +207,9 @@ function _comp_browser(inst::_UiInstance, node::_UiNode)
             l = _leafof(cur)
             l isa Real && (c.cursor = Int(l))
         end
+        # An accepted filter is part of the view the user left behind, so a
+        # reopened browser comes back narrowed; the line being typed is not.
+        c.filter = _state_string(v, Symbol(":filter"))
     end
     c.base.nspath = c.root
     _ui_in_context(inst) do
@@ -168,10 +223,12 @@ end
 function _br_state_form(c::_Browser)
     expanded = FormContainer(FormSeq(FormValue[
         _store_form(_br_path_form(p)) for p in c.expanded]), FormMap())
-    return _ns_form(Form[], Pair{Symbol,Form}[
+    entries = Pair{Symbol,Form}[
         Symbol(":root") => _br_path_form(c.root),
         Symbol(":expanded") => expanded,
-        Symbol(":cursor") => Form(c.cursor)])
+        Symbol(":cursor") => Form(c.cursor)]
+    isempty(c.filter) || push!(entries, Symbol(":filter") => Form(c.filter))
+    return _ns_form(Form[], entries)
 end
 
 function _br_store!(c::_Browser, inst::_UiInstance)
@@ -192,11 +249,27 @@ function _comp_lines(c::_Browser, inst::_UiInstance, width::Int)
     c.cur_col = 0
     for (i, r) in enumerate(c.rows)
         active = i == c.cursor
-        ind = repeat("  ", r.depth)
-        mark = r.kind === :sub ? (_br_open(c, r) ? "▾ " : "▸ ") : "· "
-        label = ind * mark * String(r.name)
+        spans = _UiSpan[]
+        label = ""
+        if c.narrowed
+            # A match is shown flat with its namespace for context, because the
+            # tree above it is not what the user is looking at.
+            if !isempty(r.path)
+                p = join(String.(r.path), ".") * "."
+                push!(spans, _UiSpan(p, _ui_role(:muted)))
+                label *= p
+            end
+            mark = r.kind === :sub ? "▸ " : "· "
+            label *= mark * String(r.name)
+            push!(spans, _UiSpan(mark * String(r.name),
+                                 _ui_role(active ? :accent : :text)))
+        else
+            ind = repeat("  ", r.depth)
+            mark = r.kind === :sub ? (_br_open(c, r) ? "▾ " : "▸ ") : "· "
+            label = ind * mark * String(r.name)
+            push!(spans, _UiSpan(label, _ui_role(active ? :accent : :text)))
+        end
         kindtag = r.kind === :sub ? "" : string("  ", r.kind)
-        spans = _UiSpan[_UiSpan(label, _ui_role(active ? :accent : :text))]
         if !isempty(kindtag)
             push!(spans, _UiSpan(kindtag, _ui_role(:muted)))
         end
@@ -208,18 +281,50 @@ function _comp_lines(c::_Browser, inst::_UiInstance, width::Int)
         active && (c.cur_row = i; c.cur_col = 0)
         push!(lines, _ui_styled(spans))
     end
-    isempty(lines) && push!(lines, _ui_styled([_UiSpan("(no entries)", _ui_role(:muted))]))
+    isempty(lines) &&
+        push!(lines, _ui_styled([_UiSpan(c.narrowed ? "(no match)" : "(no entries)",
+                                         _ui_role(:muted))]))
     return lines
 end
 
 _comp_cursor(c::_Browser, inst::_UiInstance) = (c.cur_row, c.cur_col)
 
-function _comp_status(c::_Browser, inst::_UiInstance)
-    isempty(c.base.status) || return c.base.status
-    return string(length(c.rows), " entr", length(c.rows) == 1 ? "y" : "ies")
+# The filter line, shown in place of the status while the prompt is open.
+function _br_filter_line(c::_Browser)
+    s = string("filter: ", c.prompt)
+    isempty(strip(c.prompt)) && return s
+    n = length(c.rows)
+    n == 0 && return s * "  ·  no match"
+    s *= string("  ·  ", n, " of ", c.scanned, " entr", c.scanned == 1 ? "y" : "ies")
+    c.truncated && (s *= "  ·  first " * string(_BR_SEARCH_MAX_ROWS))
+    return s
 end
 
-_comp_hints(c::_Browser) = ["ctrl-j: open" => "^J open", "enter: expand" => "enter"]
+function _comp_status(c::_Browser, inst::_UiInstance)
+    c.prompt !== nothing && return _br_filter_line(c)
+    isempty(c.base.status) || return c.base.status
+    n = length(c.rows)
+    s = string(n, " entr", n == 1 ? "y" : "ies")
+    isempty(c.filter) ||
+        (s = string(n, " of ", c.scanned, " entr", c.scanned == 1 ? "y" : "ies",
+                    "  ·  filter: ", c.filter))
+    return s
+end
+
+_comp_hints(c::_Browser) =
+    !isempty(c.filter) ?
+    ["ctrl-s: filter" => "^S filter", "esc: clear filter" => "esc"] :
+    ["ctrl-j: open" => "^J open", "ctrl-s: filter" => "^S filter",
+     "enter: expand" => "enter"]
+
+# While the filter line is open it is the prompt: the shell shows it in the
+# status row and leaves its keys alone.
+_comp_prompt(c::_Browser, inst::_UiInstance) =
+    c.prompt === nothing ? nothing : _br_filter_line(c)
+
+_comp_prompt_hints(c::_Browser) =
+    c.prompt === nothing ? _comp_hints(c) :
+    ["enter: accept" => "enter", "esc: cancel" => "esc"]
 
 # ---- keys --------------------------------------------------------------------
 
@@ -247,10 +352,89 @@ function _br_toggle!(c::_Browser, inst::_UiInstance)
     return nothing
 end
 
+# ---- the filter line ---------------------------------------------------------
+
+# Ctrl-S: open the filter line seeded with the accepted filter. Typing narrows
+# the tree live; Enter accepts the text, Esc cancels back to what was accepted.
+function _br_filter_open!(c::_Browser)
+    c.prompt = c.filter
+    c.base.status = ""
+    return nothing
+end
+
+function _br_filter_changed!(c::_Browser, inst::_UiInstance)
+    _ui_in_context(inst) do
+        _br_refresh!(c, inst.env)
+    end
+    c.cursor = isempty(c.rows) ? 0 : 1
+    c.base.top = 1
+    return nothing
+end
+
+function _br_filter_accept!(c::_Browser, inst::_UiInstance)
+    c.filter = strip(c.prompt)
+    c.prompt = nothing
+    _br_filter_changed!(c, inst)
+    _br_store!(c, inst)
+    return nothing
+end
+
+function _br_filter_cancel!(c::_Browser, inst::_UiInstance)
+    c.prompt = nothing
+    _br_filter_changed!(c, inst)
+    return nothing
+end
+
+function _br_filter_clear!(c::_Browser, inst::_UiInstance)
+    c.filter = ""
+    c.prompt = nothing
+    _br_filter_changed!(c, inst)
+    _br_store!(c, inst)
+    return :handled
+end
+
+function _br_filter_key!(c::_Browser, inst::_UiInstance, k::_UiKey)
+    if k.name === :esc
+        _br_filter_cancel!(c, inst)
+    elseif k.name === :enter
+        _br_filter_accept!(c, inst)
+    elseif k.name === :backspace
+        isempty(c.prompt) || (c.prompt = chop(c.prompt; tail = 1))
+        _br_filter_changed!(c, inst)
+    elseif k.name === :up || k.name === :down
+        # The cursor moves through the matches while the line stays open.
+        n = length(c.rows)
+        c.cursor = clamp(c.cursor + (k.name === :down ? 1 : -1), 1, max(n, 1))
+    elseif k.name === :char && !k.ctrl && !k.alt && k.char !== nothing &&
+           isprint(k.char)
+        c.prompt *= string(k.char)
+        _br_filter_changed!(c, inst)
+    end
+    return :handled
+end
+
+# Entering a namespace shown by a narrowing walk: that is the whole reason the
+# subnamespace is in the list, so it becomes the root and the filter drops away.
+function _br_enter_ns!(c::_Browser, inst::_UiInstance, r::_BrRow)
+    c.root = vcat(r.path, [r.name])
+    empty!(c.expanded)
+    c.filter = ""
+    c.prompt = nothing
+    c.cursor = 1
+    c.base.status = ""
+    c.base.top = 1
+    _ui_in_context(inst) do
+        _br_refresh!(c, inst.env)
+    end
+    _br_store!(c, inst)
+    return :handled
+end
+
 # Ctrl-J on an entry: a sub expands, a definition opens the editor in its
 # namespace, a `val` opens a notebook seeded with a reference to it.
 function _br_open!(c::_Browser, inst::_UiInstance, row::_BrRow)
-    row.kind === :sub && return _br_toggle!(c, inst)
+    row.kind === :sub &&
+        return (c.narrowed ? _br_enter_ns!(c, inst, row) : _br_toggle!(c, inst))
     env = inst.env
     pathform = _br_address_form(row.path)
     if row.kind === :def || row.kind === :proxy
@@ -274,6 +458,7 @@ function _br_open!(c::_Browser, inst::_UiInstance, row::_BrRow)
 end
 
 function _comp_key!(c::_Browser, inst::_UiInstance, k::_UiKey)
+    c.prompt !== nothing && return _br_filter_key!(c, inst, k)
     n = length(c.rows)
     if k.name === :up
         c.cursor = max(c.cursor - 1, 1)
@@ -297,7 +482,7 @@ function _comp_key!(c::_Browser, inst::_UiInstance, k::_UiKey)
         (1 <= c.cursor <= n) || return :handled
         r = c.rows[c.cursor]
         if r.kind === :sub
-            _br_toggle!(c, inst)
+            _br_open!(c, inst, r)
         elseif k.name === :enter
             return _br_open!(c, inst, r)
         end
@@ -316,6 +501,13 @@ function _comp_key!(c::_Browser, inst::_UiInstance, k::_UiKey)
             end
         end
         return :handled
+    elseif k.name === :char && k.ctrl && k.char == 's'
+        _br_filter_open!(c)
+        return :handled
+    elseif k.name === :esc
+        # A narrowing is a layer: Esc clears it before the shell closes the tab.
+        isempty(c.filter) && return :bubble
+        return _br_filter_clear!(c, inst)
     elseif k.name === :char && k.ctrl && k.char == 'j'
         (1 <= c.cursor <= n) || return :handled
         return _br_open!(c, inst, c.rows[c.cursor])

@@ -52,6 +52,7 @@ using AirDB
     include("persistence.jl")
     include("users.jl")
     include("ui_help.jl")
+    include("ui_keys.jl")
     include("ui_text.jl")
     include("ui_code.jl")
     include("ui_codeblock.jl")
