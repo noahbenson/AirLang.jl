@@ -209,7 +209,7 @@ function _ssh_serve!(server::_SshServer, session::Ptr{Cvoid}, chan::Ptr{Cvoid},
     else
         out = _SshChannelIO(chan, false, session, tty, cols, rows)
         ctx = TaskContext(id, home, server.dbroot, naught, out)
-        _with_context(env, ctx) do
+        _with_context(env, ctx, () -> begin
             # Register the connection so `(ui-attach! .io.conn… widget)` has a
             # byte source to render on. Registration is best effort: a session
             # must log in even when its record cannot be written (a database
@@ -227,7 +227,7 @@ function _ssh_serve!(server::_SshServer, session::Ptr{Cvoid}, chan::Ptr{Cvoid},
             finally
                 conn === nothing || _conn_close!(env, conn)
             end
-        end
+        end)
     end
     return nothing
 end

@@ -116,8 +116,10 @@ SFTP), the immutable `bytes` extern,
   - *Evaluation:* preemption. Ctrl-C raises `:ctrl-c` and the job keeps running;
     aborting a running evaluation needs a cancellable task or a structured
     shutdown checklist on the Air side (propose it, do not build it here).
-  - *Automation:* the SSH test is skipped when OpenSSH_jll is unavailable, and
-    the local backend is tested over pipes rather than a real pty.
+  - *Automation:* the SSH test needs the test target's OpenSSH_jll, so it runs
+    under `Pkg.test` and is skipped otherwise; the local backend is unit-tested
+    over pipes, and its pty path was verified once by hand with a pty driver,
+    not by the suite.
   - *Diagnosis only:* six `test/ref_forms.jl` actor tests fail against the
     current AirDB; some are timing-sensitive and some observationally could be
     the deferred actor-network work on the AirDB side. Diagnose and propose a
