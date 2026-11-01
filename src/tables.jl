@@ -323,8 +323,15 @@ _rows_form(t::AirTable) = FormContainer(
 
 _rows_view(t::AirTable) = canonicalize(_rows_form(t))
 
-# A table becomes its rows view; anything else is unchanged.
-_rows_or(coll::Form) = (t = _table_of(coll); t === nothing ? coll : _rows_view(t))
+# A table becomes its rows view and a tensor its linear cells; anything else is
+# unchanged.
+function _rows_or(coll::Form)
+    t = _table_of(coll)
+    t === nothing || return _rows_view(t)
+    tv = _tensor_of(coll)
+    tv === nothing || return _tensor_elems_form(tv)
+    return coll
+end
 
 # `get` for a table: an integer names a row (`0` the table), a keyword names a
 # column, and any other key is looked up in the index.

@@ -42,6 +42,7 @@ using AirDB
     include("extern.jl")
     include("bytes.jl")
     include("tables.jl")
+    include("tensors.jl")
     include("ref_forms.jl")
     include("streams.jl")
     include("namespace.jl")

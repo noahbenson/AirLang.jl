@@ -87,6 +87,37 @@ The math verbs (`abs`, `sqrt`, `floor`, `round`, `sin`, …) are Julia functions
 too, so they follow the type of their argument: `(floor 7//2)` is `3//1`, and
 `(sqrt -1)` is an error rather than a complex value.
 
+## Math functions
+
+A math verb is a plain Julia function of the same name, so it promotes and
+rounds as Julia does (`(sqrt 4)` is `2.0`). None of them fails on a
+non-number: a form that does not reduce to a number stays symbolic
+(`(sinh (f x))`), which keeps algebra rules working.
+
+| group | verbs |
+|:--|:--|
+| elementary | `abs` `sign` `sqrt` `cbrt` `exp` `exp2` `exp10` `expm1` `log` `log2` `log10` `log1p` |
+| trigonometric | `sin` `cos` `tan` `asin` `acos` `atan` `sinc` `sinpi` `cospi` `deg2rad` `rad2deg` |
+| hyperbolic | `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` |
+| complex | `real` `imag` `conj` `angle` `abs2` `cis` |
+| elementwise tests | `isnan` `isinf` `isfinite` `isinteger` `iseven` `isodd` |
+| two-argument | `atan2` (`atan` with two arguments) `gcd` `lcm` `binomial` `hypot` `rem` `copysign` |
+| rounding | `round` `floor` `ceil` `truncate` |
+| other | `factorial` `div` `clamp` |
+
+`round`, `floor`, `ceil`, and `truncate` take `digits=n` to round to `n` decimal
+places, and `round` also takes `sigdigits=n`; the options survive an
+unreduced argument (`(round (f x) digits=2)`). `(clamp x lo hi)` bounds a value
+on both sides.
+
+The elementwise tests are about a **value's elements**: `(isnan 1.0)` is false
+and `(isnan nan)` is true, and on a tensor each of them yields a Boolean
+tensor. They are distinct from the value predicates in the next section
+(`nan?`, `even?`, …), which ask whether the whole value is that kind of thing
+and so are false for a tensor.
+
+The constants are `pi`, `e`, `tau`, `inf`, and `nan`.
+
 ## Predicates
 
 `number?` is true for any of the eight leaves. `int?` and `integer?` are true
@@ -127,3 +158,10 @@ precision of a `BigFloat`:
 (to-json 1//3)                         # => "#rat:1/3"
 (eq? (from-json (to-json big"1.5")) big"1.5")   # => true
 ```
+
+## Tensors
+
+For bulk numeric work air also has a mutable N-dimensional array, the
+[tensor](tensors.md). Its elements are exactly this chapter's leaves, its
+promotion is Julia's, and its arithmetic broadcasts — so `(+ [1 2] 2.5)` is a
+`Float64` tensor and `(* 3 [1 2])` scales every cell.

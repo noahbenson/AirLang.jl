@@ -151,6 +151,9 @@ function op_infix(name::Symbol, a::Form, b::Form)::Union{Nothing,Form}
     op.kind == :nident && return Form(!_identical(a, b))
     t = _time_op(name, a, b)
     t === nothing || return t
+    # A tensor operand broadcasts (`+ - / ^ mod`) or follows Julia's `*`.
+    tr = _tensor_arith(name, a, b)
+    tr === nothing || return tr
     la, lb = _leafof(a), _leafof(b)
     if la isa Number && lb isa Number
         op.kind == :arith && return to_form(_arith(name, la, lb))
@@ -199,6 +202,11 @@ function op_prefix(env::Env, scope::Scope, name::Symbol, args::Vector{Form})::Fo
         if n == 0
             return _mk_prefix(name, args)
         elseif n == 1
+            # Unary minus negates and unary `/` reciprocates elementwise.
+            if name === Symbol("-") || name === Symbol("/")
+                tv = _tensor_of(args[1])
+                tv === nothing || return _tensor_unary(name, tv)
+            end
             l = _leafof(args[1])
             if name == Symbol("-")
                 return l isa Number ? Form(-l) : _mk_prefix(name, args)

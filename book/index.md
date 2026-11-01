@@ -58,6 +58,9 @@ Facts and rules live in a namespace, which is implicitly a logic set:
   forms, and `let`.
 - **[The data model](data-model.md)** — forms and collections, scalars and
   single-element forms, quoted forms, mutables, and equality.
+- **[Tensors](tensors.md)** — mutable N-dimensional numeric arrays: `[…]`
+  literals, `get`/`set!`/`with`, arithmetic and broadcasting, linear algebra,
+  and the `{…}` reservations that guard every access.
 - **[Patterns and function definitions](patterns.md)** — pattern matching,
   `def`, lambdas, `case`, level-aware traversal, repetition, and docstrings.
 - **[Namespaces](namespaces.md)** — the namespace tree, `using`/`use`/`import`,

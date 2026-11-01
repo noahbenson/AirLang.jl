@@ -47,6 +47,23 @@ encode from one.
 
 See [Tables](book/tables.md).
 
+Numeric work uses a mutable N-dimensional array called a `tensor`:
+`[1 2; 3 4]` is a 2×2 Int64 matrix, arithmetic and the math verbs broadcast, and
+the array surface covers Julia-style `dims=` reductions, concatenation,
+flips/rolls/tiles, sort and argmax, comparison masks, cumulative operations, and
+the usual `LinearAlgebra` verbs. Because a mutable write cannot be rolled back,
+every access to an existing tensor happens in a reservation — `{t : body}` to
+read and `{t :! body}` to write.
+
+```air
+(let (t=[1 2; 3 4])
+  (let (r={t :! (set! t 1 1 9)})
+    ((get r) (get t 0))))                # => (9 #<tensor 2×2 Int64>)
+(det [1.0 2.0; 3.0 4.0])                 # => -2.0
+```
+
+See [Tensors](book/tensors.md).
+
 A running process can also serve SSH: `(ssh-server :myserver)` starts a server
 that admits the users its owner may assume, each logging in with a key from
 their own `$.config` and landing in their home namespace at a REPL. The same
@@ -96,6 +113,7 @@ The [Air book](book/index.md) is the reference. It is built with Jupyter Book 2
 | [Loading files and libraries](book/libraries.md) | `load-air`, `AIR_LIBPATH`, `init.air` |
 | [Databases](book/databases.md) | AirDB, named forms, logic sets, JSON |
 | [Tables](book/tables.md) | typed, indexed, immutable tabular data |
+| [Tensors](book/tensors.md) | mutable numeric arrays, literals, reservations, numpy-style array operations, linear algebra |
 | [Data formats](book/formats.md) | JSON, YAML, TOML, CSV, TSV, and `.env` |
 | [SSH access](book/ssh.md) | `ssh-server`, key login, the remote REPL, SFTP |
 | [User interfaces](book/ui.md) | `(ui …)` trees, widgets, assertions, the terminal renderer |

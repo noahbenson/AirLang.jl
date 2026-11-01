@@ -197,6 +197,8 @@ builtin!(:length, (env, scope, args) -> begin
     c = _arg(args, 1, "length")
     t = _table_of(c)
     t === nothing || return Form(t.nrows)
+    tv = _tensor_of(c)
+    tv === nothing || return Form(length(tv.data))
     return Form(length(c))
 end)
 
@@ -234,32 +236,40 @@ function _bi_get(env::Env, scope::Scope, call::FormContainer, is_hold_fn::Bool =
             form = form[]
         end
         v = canonicalize(_force_ref_form(env, form))
+        r = _reservation_of(v)
+        r === nothing || (v = _reservation_await(env, r))
         return held ? _ensure_hold(v) : v
     end
     n >= 3 || throw(AirEvalError("get needs a form and a key"))
     default = haskey(call.map, Symbol(":default")) ?
         to_form(call.map[Symbol(":default")]) : nothing
     strip, held = _hold_mode(call, is_hold_fn)
-    form0 = call.seq[2]
     path = _sx(call.seq, 3:length(call.seq))
+    # The base is evaluated exactly once, so a tensor (which needs its whole
+    # per-axis path at once) and the ordinary paths can share it.
+    form = air_reduce(env, scope, to_form(call.seq[2]))
+    strip && (form = _strip_hold(form))
+    rv = _reservation_of(form)
+    if rv !== nothing
+        form = _strip_hold(_reservation_await(env, rv))
+    end
+    tv = _tensor_of(form)
+    tv === nothing || return _tensor_get(env, scope, tv, path, default, held)
     if any(p -> _symbolof(to_form(p)) === COLON, path)
         # A wildcard step selects a whole level and maps the rest of the path
         # over each element, which the nested-`get` rewrite cannot express.
-        form = air_reduce(env, scope, to_form(form0))
-        strip && (form = _strip_hold(form))
         return _get_wild(env, scope, form, path, default, held)
     end
     if length(path) > 1 && !strip
         # Plain `get`: a path is nested lookups — `(get f a b)` is
         # `(get (get f a) b)` — so a user rule can override `get` for a subform.
-        inner = Form(PVector{Any}([Form(Symbol("get")), form0, path[1]]), PDict{Symbol,Any}())
+        inner = Form(PVector{Any}([Form(Symbol("get")), form, path[1]]), PDict{Symbol,Any}())
         mp = Pair{Symbol,Any}[]
         default === nothing || push!(mp, Symbol(":default") => default)
         rest = Form(PVector{Any}([Form(Symbol("get")), inner, path[2:end]...]),
                     PDict{Symbol,Any}(mp...))
         return air_reduce(env, scope, rest)
     end
-    form = air_reduce(env, scope, to_form(form0))
     if strip
         # The form's root hold is transparent: the path indexes the held
         # *content*, the walk does not reduce intermediate values, and the
@@ -294,6 +304,9 @@ function _get_one(env::Env, scope::Scope, form::Form, key::Form, default, held::
     # other key with an index lookup.
     t = _table_of(form)
     t === nothing || return _table_get(env, scope, form, t, k, key, default, held)
+    # A tensor key is one axis specification, so a single key names a slice.
+    tv = _tensor_of(form)
+    tv === nothing || return _tensor_get(env, scope, tv, Form[key], default, held)
     # A missing name under `.lib` may be an unloaded library; the loader triggers
     # on the namespace object, so recover it from the volatile we were handed.
     if k isa Symbol && !(form isa FormContainer && haskey(form, k)) &&
@@ -418,6 +431,12 @@ builtin!(:in, (env, scope, args) -> begin
             isequal(x, _table_row(t, i)) && return Form(true)
         end
         return Form(false)
+    end
+    tv = _tensor_of(c)
+    if tv !== nothing
+        return Form(_tensor_read(tv) do d
+            x isa FormScalar && any(v -> isequal(to_form(v), x), d)
+        end)
     end
     if c isa FormContainer
         any(v -> isequal(to_form(v), x), c.seq) && return Form(true)

@@ -85,6 +85,12 @@ function _walk_storable!(db::AirDB.AbstractDatabase, x::Form)
     elseif x isa DelayForm
         # The delay itself is inline; the cell it names must live here.
         _walk_storable!(db, x.form)
+    elseif x isa FormExtern
+        # A tensor and a reservation are process-local identities with no
+        # serialization; a database namespace may not hold one (use
+        # `tensor->form` for a portable spelling).
+        d = value(x)
+        (d isa AirTensor || d isa AirReservation) && throw(AirUnstorable(x))
     elseif x isa FormContainer
         for a in x.seq
             _walk_storable!(db, to_form(a))

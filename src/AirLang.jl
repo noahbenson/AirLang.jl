@@ -20,6 +20,7 @@ import Dates   # only qualified: `Dates` exports names (`now`, `day`, …) that
                # would shadow air's own
 import TOML    # only qualified, for the TOML data format
 import Downloads  # only qualified, for the agent HTTP transport
+import LinearAlgebra   # only qualified, for the tensor linear-algebra surface
 
 # Types and helpers, then the engine, then the builtin library (which registers
 # itself at load time), then the public surface.
@@ -43,6 +44,8 @@ include("builtins_collection.jl")
 include("externs.jl")
 include("bytes.jl")
 include("tables.jl")
+include("tensors.jl")
+include("tensor_ops.jl")
 include("builtins_string.jl")
 include("builtins_io.jl")
 include("formats.jl")
@@ -83,6 +86,7 @@ export read_air, read_all_air, air_eval, air_repl, air_main, air_string,
     air_match, check_anchor, params_of, raw_symbols, head_symbol,
     is_keyword, is_wildcard, is_raw_symbol,
     air_register_extern!, AirPromise, AirFuture, AirRegex, AirBytes,
+    AirTensor, AirReservation,
     open_airdb!, close_airdb!
 
 end # module AirLang
