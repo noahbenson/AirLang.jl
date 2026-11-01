@@ -659,6 +659,10 @@ with the output; a code buffer will not run unless the reader reports it
 closed. A fresh shell opens its default tabs only when a renderer
 starts it, so a headless render shows none. The browser's Ctrl-J opens the editor for a `def` and
 a notebook (seeded with its name) for a `val`; Alt-J opens a `val`'s definition.
+Its Ctrl-S opens a filter line that narrows the tree live to the entries whose
+names contain the text, descending through every subnamespace and showing each
+match flat with its path; Enter accepts and stores the filter, Esc cancels then
+clears it, and Enter on a matching subnamespace makes it the root.
 A **chat** takes a *pair* of streams the caller wires (`in=` receives, `out=`
 posts, both required). Messages render as cells with `user_bg`/`peer_bg`
 tints; Enter inserts a newline and Ctrl-J sends; a draft beginning with `(` is

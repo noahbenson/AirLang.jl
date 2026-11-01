@@ -119,7 +119,10 @@ SFTP), the immutable `bytes` extern,
   - [x] *Shell:* reattach automatically after an SSH reconnect (the default UI
     is a named instance keyed by user, so a reconnect returns to the same
     shell), and tab reorder / close-all (`Alt-←`/`Alt-→`, `Alt-W`).
-  - *Browser:* a filter/search line.
+  - [x] *Browser:* a filter line (`Ctrl-S`): live, case-insensitive narrowing by
+    name across every subnamespace (shown flat with its path), Enter accepts and
+    stores it, Esc cancels then clears it, and Enter on a matching subnamespace
+    makes it the root.
   - *Chat:* an unread marker for messages that arrived while scrolled away.
   - *Evaluation:* preemption. Ctrl-C raises `:ctrl-c` and the job keeps running;
     aborting a running evaluation needs a cancellable task or a structured

@@ -379,13 +379,13 @@ bracketed paste arrives as one paste event.
 | `Alt-1` … `Alt-9` | select a tab directly |
 | `Alt-←`, `Alt-→` | move the active tab left, right |
 | `Alt-W` | close every tab (asking once when edits would be lost) |
-| `Esc` | pop one layer: a prompt or scroll view, then the tab, then the UI |
+| `Esc` | pop one layer: a prompt, scroll view, or filter, then the tab, then the UI |
 | `Enter` | a newline in a text buffer; activation in a browser |
 | `Ctrl-A`/`Ctrl-E`, `Ctrl-B`/`Ctrl-F`, `Alt-B`/`Alt-F` | line start/end, character and word motion |
 | `Ctrl-K`, `Ctrl-U`, `Ctrl-W`, `Ctrl-Y` | kill to end, to start, a word; yank |
 | `Ctrl-Z`, `Alt-Z` | undo, redo |
 | `Ctrl-L` | re-indent the buffer from its layout |
-| `Ctrl-S` | find in the buffer; again for the next match |
+| `Ctrl-S` | find in the buffer; again for the next match — in a browser, the filter line |
 | `Alt-L` | go to a line number |
 | `Alt-]` | jump to the bracket matching the one at the cursor |
 | `Alt-;` | comment or uncomment the current line, or every selected line |
@@ -399,7 +399,9 @@ the previous query; the match is selected as you type and the row shows `n/total
 (or `no match`), `Ctrl-S`/`Down` and `Up` step through matches with wrapping,
 Enter keeps the cursor at the match, and Esc restores the cursor to where the
 search began. `Alt-L` collects a line number and Enter jumps there. Search is
-literal, case-sensitive, and line-local. Both prompts work inside a notebook
+literal, case-sensitive, and line-local. The browser's filter line is a prompt
+in the same sense, and the shell leaves its keys to it the same way. Both
+buffer prompts work inside a notebook
 cell, where they take precedence over the notebook's own `Ctrl-J`/`Ctrl-G`/…
 bindings; inside a shell, Esc reaches the prompt before it can close the tab.
 `Alt-]` selects the matching parenthesis, so pressing it again comes back, and
@@ -515,6 +517,19 @@ toggles a subnamespace or opens an entry.
 it opens a notebook tab in that val's namespace, seeded with the val's name, so
 data can be explored without editing anything. `Alt-J` on a `val` opens the
 editor for its definition instead.
+
+`Ctrl-S` opens a **filter line**. Typing narrows the tree live to the entries
+whose names contain the text, case-insensitively; the walk goes through every
+subnamespace, so a match is found however deeply it sits and whether or not its
+parents are expanded. Each match is shown flat with its namespace for context
+(`main.util.· printer`), Up/Down move through the matches, and the status row
+reads `n of N entries` (or `no match`). Enter accepts the text and closes the
+line — the narrowing stays, and it is stored with the browser's view — while
+Esc cancels back to what was accepted. A second Esc clears the accepted filter,
+and only a third leaves the browser. A matching subnamespace is a jump: Enter on
+it makes it the root and drops the filter. Filtering reads names only, never
+docs, and a keystroke is bounded (it stops after a few thousand entries or a
+few hundred matches), so a large database cannot stall the frame.
 
 ### `shell`
 
