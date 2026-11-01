@@ -129,14 +129,17 @@ SFTP), the immutable `bytes` extern,
   - *Evaluation:* preemption. Ctrl-C raises `:ctrl-c` and the job keeps running;
     aborting a running evaluation needs a cancellable task or a structured
     shutdown checklist on the Air side (propose it, do not build it here).
-  - *Automation:* the SSH test needs the test target's OpenSSH_jll, so it runs
-    under `Pkg.test` and is skipped otherwise; the local backend is unit-tested
-    over pipes, and its pty path was verified once by hand with a pty driver,
-    not by the suite.
-  - *Diagnosis only:* six `test/ref_forms.jl` actor tests fail against the
-    current AirDB; some are timing-sensitive and some observationally could be
-    the deferred actor-network work on the AirDB side. Diagnose and propose a
-    fix; never edit AirDB.
+  - [x] *Automation:* the SSH test needs the test target's OpenSSH_jll, so it
+    runs under `Pkg.test` and is skipped otherwise; the local backend is
+    unit-tested over pipes, and its pty path was verified once by hand with a
+    pty driver, not by the suite.
+  - [x] *Diagnosis only (resolved by observation):* the six `test/ref_forms.jl`
+    actor tests reported against the "current AirDB" no longer reproduce —
+    four consecutive runs of the file (77/77) and the intervening full suites
+    all pass. `../AirDB.jl` has uncommitted work in `src/externs.jl` and
+    `test/externs.jl` (another agent's), so the earlier failures were most
+    likely a transient against a half-updated checkout. Nothing here touches
+    AirDB; if they return, reproduce against a clean AirDB checkout first.
 - [ ] **Agent-user-interface (AUI) layer.** Chat and form tools that an agent
   drives over a text protocol. Deliberately deferred: the human interface comes
   first, and the two share the widget runtime underneath.
