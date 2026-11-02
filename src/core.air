@@ -1,0 +1,2099 @@
+# core.air
+#
+# The documentation catalogue for the Air builtin library. Each form declares
+# the documentation for one name, or for a family of names that share a
+# description:
+#
+#     (docdef :category name…  "docstring")
+#
+# The category is an optional keyword; every name before the first string is a
+# raw symbol (or a form of them); the remaining elements are strings, joined
+# with newlines and deindented like a `def` docstring. The first line of a
+# docstring is conventionally the call's spelling, and the rest is prose.
+#
+# The file is read when AirLang loads and installed in `BUILTIN_DOCS`
+# (src/builtins_docs.jl). `(doc NAME)` shows one entry, `(doc .air)` shows the
+# whole index, and `(help)` prints an introduction to the language. Names are
+# checked against the registry by test/doc.jl, so every builtin, special form,
+# and operator must appear here.
+#
+# This file is data, not a program: `docdef` registers documentation and
+# returns `naught`, so loading it is harmless but unnecessary.
+
+# ---- core: forms, values, and access -----------------------------------------
+
+(docdef :core form?
+  "(form? x)
+   Whether x is a form at all -- always true, since every air value is a form.
+   Provided so that user code can be polymorphic-looking and explicit.")
+
+(docdef :core (coll? seq? map? associative? counted?)
+  "(coll? x), (seq? x), (map? x), (associative? x), (counted? x)
+   Shape predicates. A collection is a form with elements; a sequence is a
+   collection whose elements are ordered; a map is a collection with map
+   entries; an associative collection can be indexed by key; a counted
+   collection reports a length. A scalar is not a collection, and naught is
+   the empty collection.")
+
+(docdef :core (atom? imm? mut?)
+  "(atom? x), (imm? x), (mut? x)
+   Whether x is a scalar (atom), an immutable form, or a mutable (a `mut`
+   volatile). Almost everything in air is immutable; a mutable is the one
+   value that changes in place.")
+
+(docdef :core (empty? naught? present? blank?)
+  "(empty? x), (naught? x), (present? x), (blank? x)
+   Emptiness tests. naught is the empty form, `()`; empty? also holds of an
+   empty string or an empty container; present? is its negation over naught
+   and the empty string; blank? is present? over the empty string too.")
+
+(docdef :core (bool? true? false?)
+  "(bool? x), (true? x), (false? x)
+   Whether x is a Boolean, and whether it is true or false. Only true is
+   truthy in a condition; every other value -- including 0, an empty string,
+   and :false -- is falsy.")
+
+(docdef :core (int? integer? float? complex? number?)
+  "(int? x), (integer? x), (float? x), (complex? x), (number? x)
+   Numeric-type predicates. Integers are Int64 or BigInt; integer? accepts the
+   rationals and floats whose value is integral; float? is Float64 or
+   BigFloat; complex? is ComplexF64 or Complex{BigFloat}; number? accepts any
+   leaf of the numeric tower.")
+
+(docdef :core (string? symbol? keyword? wildcard?)
+  "(string? x), (symbol? x), (keyword? x), (wildcard? x)
+   Scalar-kind predicates: a string, a symbol (f), a keyword (:f), or a
+   wildcard (?f, ?&rest, ?*kwargs, ??).")
+
+(docdef :core (zero? even? odd? positive? negative? nan? infinite?)
+  "(zero? x), (even? x), (odd? x), (positive? x), (negative? x), (nan? x),
+   (infinite? x)
+   Value predicates; each is false on a non-number rather than an error, so
+   they compose with pattern guards. The elementwise tests that a tensor needs
+   are the separate verbs isnan, isinf, iseven, and isodd.")
+
+(docdef :core (same? eq?)
+  "(same? a b), (eq? a b)
+   Identity and equivalence. same? is identity; eq? is equivalence: scalars
+   match by value and type (so (eq? 1 1.0) is false), map order is irrelevant,
+   and a mutable matches only itself. Content equality is the == operator,
+   which is numeric-friendly ((== 1 1.0) is true) and, like Julia, false for
+   NaN against itself. hash follows eq?.")
+
+(docdef :core (contains? member?)
+  "(contains? coll x), (member? coll x)
+   Whether x is an element of the collection (or, for a map, a value), under
+   eq?.")
+
+(docdef :core all?
+  "(all? pred coll)
+   True when (pred x) is truthy for every element of coll, and for an empty
+   collection.")
+
+(docdef :core any?
+  "(any? pred coll)
+   True when (pred x) is truthy for at least one element of coll.")
+
+(docdef :core none?
+  "(none? pred coll)
+   True when (pred x) is falsy for every element of coll.")
+
+(docdef :core (starts-with? ends-with?)
+  "(starts-with? s prefix), (ends-with? s suffix)
+   String-prefix and string-suffix tests; false on a non-string.")
+
+(docdef :core inc
+  "(inc x)
+   x plus one; stays symbolic on a non-number.")
+
+(docdef :core dec
+  "(dec x)
+   x minus one; stays symbolic on a non-number.")
+
+(docdef :core value
+  "(value x)
+   Dereference a mutable (or force a delay or read a promise); for any other
+   form, the form itself, since every value is a form.")
+
+(docdef :core seqpart
+  "(seqpart x)
+   The sequence part of a form, with its map entries dropped.")
+
+(docdef :core mappart
+  "(mappart x)
+   The map part of a form, with its sequence elements dropped.")
+
+(docdef :core push
+  "(push coll x…)
+   A copy of coll with x… appended; a table appends rows from positional
+   mappings and columns from map entries. Pure: the argument is unchanged.")
+
+(docdef :core pop
+  "(pop coll)
+   A copy of coll without its last sequence element (or, for a table, its
+   last row).")
+
+(docdef :core drop
+  "(drop coll key)
+   A copy of coll without the entry at key; a lone : drops every entry of the
+   level. For a table, drop removes a row, a column, or sets a cell to NA.")
+
+(docdef :core length
+  "(length x)
+   The number of entries in a form: sequence elements plus map entries. A
+   table reports its row count, a tensor its element count, and a scalar 1.")
+
+(docdef :core haskey
+  "(haskey coll key)
+   Whether the collection has an entry at key.")
+
+(docdef :core get
+  "(get coll key…; hold=false)
+   The single accessor. An integer key indexes a sequence (1-based; a
+   negative key counts from the end; 0 is the whole form; n + 1 appends in a
+   setter); a keyword -- or a bare symbol, read as a keyword -- names a map
+   entry; a lone : selects every entry of a level; and a sequence key is a
+   nested path. A scalar is its own sole element, so (get 5 1) is 5. On a
+   held form, index 1 is the ' head; hold=true makes a root hold transparent,
+   walks the content without reducing, and holds the result. A table keeps
+   its own path grammar (row, column, index key). get is overridable: a user
+   rule may take precedence, which is how a namespace or a custom value
+   defines its own access.")
+
+(docdef :core hold-get
+  "(hold-get coll key…; hold=false)
+   get with a root hold made transparent: the path is walked over the content
+   and the result is held. hold=false returns it unheld instead.")
+
+(docdef :core with
+  "(with coll key… value; hold=false)
+   A copy of coll with the subform at the path replaced by value. With a : key
+   a scalar broadcasts to every entry and a container supplies one value per
+   entry (sequence elements first, then map values, in canonical order). On a
+   table it replaces a column, updates a row's cells, or sets one cell.")
+
+(docdef :core wout
+  "(wout coll key…)
+   with-out: a copy of coll with the entry (or every entry, for a : key) at
+   the path removed, the structure above it rebuilt.")
+
+(docdef :core nth
+  "(nth coll i)
+   The i-th sequence element, 1-based, like get with an integer key.")
+
+(docdef :core join
+  "(join coll…)
+   The arguments concatenated: sequences join elementwise and maps merge,
+   left to right.")
+
+(docdef :core join-in
+  "(join-in coll key… value)
+   join applied at the subform named by the path: the value is joined onto
+   that subform.")
+
+(docdef :core push-in
+  "(push-in coll key… value…)
+   push applied at the subform named by the path.")
+
+(docdef :core update
+  "(update coll key f)
+   A copy of coll with the entry at key replaced by (f old).")
+
+(docdef :core update-in
+  "(update-in coll key… f)
+   The deep update: (update-in coll k1 … kn f) replaces the subform at the
+   path with (f old), and a missing key is naught to f.")
+
+(docdef :core in
+  "(in x coll)
+   Whether x is an element of coll, as member? with the arguments reversed for
+   pipeline use.")
+
+(docdef :core merge
+  "(merge coll…)
+   The maps merged left to right, later entries winning; sequence elements
+   are concatenated, as join.")
+
+(docdef :core compare
+  "(compare a b)
+   -1, 0, or 1, ordering two forms by the canonical order (numbers, strings,
+   and symbols by value; containers elementwise).")
+
+(docdef :core hash
+  "(hash x)
+   An integer hash consistent with eq?: equivalent forms hash alike, and a
+   mutable contributes only its identity.")
+
+(docdef :core keyword
+  "(keyword x)
+   A keyword from a string or symbol: (keyword \"host\") is :host.")
+
+(docdef :core symbol
+  "(symbol x)
+   A symbol from a string or symbol: (symbol \"x\") is x. The text is not
+   validated, so (symbol \"?y\") is the wildcard ?y.")
+
+(docdef :core name
+  "(name x)
+   The text of a keyword, symbol, or wildcard without its marker:
+   (name :host) is \"host\" and (name ?x) is \"x\".")
+
+# ---- holds --------------------------------------------------------------------
+
+(docdef :hold hold
+  "(hold e… key=value…)
+   The reserved alias for the hold head: it returns the canonical hold
+   (' e…) of its arguments, exactly as written. A hold is a container whose
+   head is the symbol ' and it is data, not code.")
+
+(docdef :hold unhold
+  "(unhold x)
+   Remove one hold and evaluate what it held. A bound symbol is resolved
+   first, so (unhold a) evaluates the value bound to a -- e.g. a held
+   parameter of a def.")
+
+(docdef :hold preval
+  "(preval x), or the reader sugar ~x
+   The eager hole: it evaluates x wherever it appears. Inside a held form the
+   hold's expansion fills a preval in recursively at every depth.")
+
+(docdef :hold lift
+  "(lift form)
+   Build a held form explicitly: literal leaves become quoted ('a) and
+   evaluated elements are written plainly. (lift (' 'a x 'b)) is
+   (' a <value-of-x> b).")
+
+(docdef :hold lower
+  "(lower form), (lower form n)
+   Push holds toward the leaves, n levels deep (default 1). A structural,
+   non-evaluating rewrite; lift is its inverse at the root.")
+
+(docdef :hold (held? hold-held?)
+  "(held? x), (held? form subindices…)
+   Whether x is a held form, or whether the subpart at a path is held.
+   hold-held? is the hold- form: it makes the root hold transparent first.")
+
+(docdef :hold (hold-nth hold-with hold-wout hold-push hold-push-in hold-join
+               hold-join-in hold-update hold-update-in)
+  "(hold-nth coll i), (hold-with coll key… value), (hold-wout coll key…),
+   (hold-push coll x…), (hold-push-in coll key… value…),
+   (hold-join coll…), (hold-join-in coll key… value),
+   (hold-update coll key f), (hold-update-in coll key… f)
+   The hold- family: each operation treats a root hold as transparent (it
+   operates on the content), treats inserted held values as their content,
+   and returns the result held. The plain version accepts hold=true for the
+   same treatment, and hold=false on the hold- version unholds the result.")
+
+# ---- control ------------------------------------------------------------------
+
+(docdef :control (if cond)
+  "(if c1 v1 c2 v2 … else)
+   The conditional. Evaluate the conditions in order and yield the value paired
+   with the first truthy one; a trailing unpaired form is the else value, and
+   with no match the result is naught. The selected value is reduced in tail
+   position. cond is a synonym.")
+
+(docdef :control let
+  "(let (x=1 y=2) body…), (let ((a=1) (b=(a + 1))) body…;
+   hold=(…), bind=(…))
+   Evaluate the bindings, then substitute each name by its value in the body
+   *before* evaluating it. let introduces no scope of its own and its
+   substitution is textual, so it reaches inside a held form. One mapping's
+   bindings are parallel; a sequence of mappings feeds one into the next. A
+   name in hold=(…) is inserted exactly as written instead of evaluated, and a
+   name in bind=(…) is installed as a lexical binding instead of substituted.")
+
+(docdef :control do
+  "(do options… body… (except pattern body…)… (handle pattern body…)…
+   (finally body…))
+   The block form. Evaluate the body forms in order and yield the last value;
+   the trailing clauses catch errors (except) and signals (handle), and finally
+   always runs. Options are let= (a lexical scope around the body), catch=true
+   or catch=:tag for (throw …), and :let markers inside the body. A :let
+   marker is a nested textual let, invisible to the clauses.")
+
+(docdef :control not
+  "(not x)
+   The Boolean negation: true when x is falsy, false when it is truthful.")
+
+(docdef :control xor
+  "(xor e…)
+   True when an odd number of the arguments is truthy.")
+
+(docdef :control case
+  "(case subject clause… default?)
+   Dispatch by pattern. Each clause is a replacement rule (pattern ->
+   replacement);
+   the first whose pattern matches the subject wins, and its replacement may use
+   _ for the whole subject. A trailing non-rule form is the default, and no match
+   at all yields naught. select is a synonym.")
+
+(docdef :control select
+  "(select subject clause… default?)
+   A synonym for case.")
+
+(docdef :control (when unless)
+  "(when cond body…), (unless cond body…)
+   Evaluate the body forms when cond is truthy (when) or falsy (unless), and
+   yield the last value; otherwise naught.")
+
+(docdef :control map
+  "(map f coll depth=n)
+   Apply f to every node at depth n (default 1: the collection's elements --
+   both sequence elements and map values), rebuilding the structure around the
+   results. depth=0 applies f to coll itself. A scalar is its own sole element,
+   so (map f 3) is (f 3).")
+
+(docdef :control filter
+  "(filter pred coll)
+   The elements for which (pred x) is truthy, in order; a table filters rows
+   and a tensor its elements.")
+
+(docdef :control remove
+  "(remove pred coll)
+   The elements for which (pred x) is falsy.")
+
+(docdef :control reduce
+  "(reduce f init coll)
+   The left fold of f over the sequence elements, starting from init. fold is a
+   synonym.")
+
+(docdef :control fold
+  "(fold f init coll)
+   A synonym for reduce.")
+
+(docdef :control mapcat
+  "(mapcat f coll)
+   Map f over the elements and join the results, one level deep.")
+
+(docdef :control each
+  "(each f coll)
+   Apply f to every value for its effect, in order; returns naught. Works on
+   sequences, tables (by row), and tensors.")
+
+(docdef :control apply
+  "(apply f args-form)
+   Build and reduce the call (f a b …) from the elements of args-form.")
+
+(docdef :control for
+  "(for (x coll … :if cond :let name val) body…)
+   A comprehension. The bindings are processed left to right and nest; :if skips
+   an iteration when its condition is falsy and :let binds a name for the rest of
+   the binding form. The result is the list of body values.")
+
+(docdef :control doseq
+  "(doseq (x coll …) body…)
+   Run the body for each iteration of the bindings, for effect; returns naught.")
+
+(docdef :control dotimes
+  "(dotimes (i n) body…)
+   Run the body with i bound to 0 … n-1; returns naught.")
+
+(docdef :control loop
+  "(loop (a 0 b 1 …) body…)
+   Bind the name/value pairs, evaluate the body, and if it reaches a (recur …),
+   rebind and re-enter. recur in tail position runs in constant stack.")
+
+(docdef :control recur
+  "(recur value…)
+   Re-enter the enclosing loop with new bindings. It is control flow, not an
+   error: no error clause catches it.")
+
+(docdef :control while
+  "(while cond body…)
+   Evaluate the body while cond is truthy; the result is naught.")
+
+(docdef :control exit
+  "(exit [value])
+   End the current task with value (default naught). The nearest boundary -- a
+   task, a REPL, a loaded file, or an SSH session -- turns it into that
+   boundary's result. It is control flow, so no error clause catches it.")
+
+(docdef :control thread
+  "(thread form; hold=false)
+   Mathematica-style threading: distribute the form over its sequential
+   container elements. (thread (f (1 2 3))) is ((f 1) (f 2) (f 3)). The head is
+   not special, so (thread (f (' a b))) is ((f ') (f a) (f b)).")
+
+(docdef :control hold-thread
+  "(hold-thread form; hold=true)
+   thread after stripping the argument's root hold; the result is held again:
+   (hold-thread (' f (1 2 3))) is (' (f 1) (f 2) (f 3)).")
+
+(docdef :control >>
+  "(>> x step…), or the infix spelling (x >> step…)
+   The pipeline. Evaluate x, substitute the result textually for every _ in the
+   raw first step, substitute that form into the next step, and reduce only the
+   final form. A step must contain a _.")
+
+(docdef :control part
+  "(part f a b …)
+   A partially applied call: the arguments are held, and applying the result to
+   more arguments appends them: ((part f a b) c d) is (f a b c d). A ~arg is
+   evaluated first, so its value is captured.")
+
+(docdef :control comp
+  "(comp f g …)
+   Function composition, right to left: ((comp f g) x) is (f (g x)). The
+   arguments are held, as for part.")
+
+(docdef :control juxt
+  "(juxt f g …)
+   Apply every function to the same arguments and return the results as a list:
+   ((juxt inc dec) 3) is (4 2).")
+
+(docdef :control complement
+  "(complement f)
+   The negation of a predicate: ((complement even?) 3) is true.")
+
+(docdef :control memoize
+  "(memoize f)
+   A callable that returns the cached result of (f args…). The cache belongs to
+   the environment and is keyed by the function and the argument forms, so it is
+   not transactional; a def can also be memoized directly with memoize=true.")
+
+(docdef :control memoized
+  "(memoized f args-container)
+   The internal form (memoize f) applies; not normally called directly.")
+
+(docdef :control eval
+  "(eval form)
+   Evaluate form as data, in the global scope (no local bindings). A held form
+   is unheld first, so (eval (' 1 + 2)) is 3.")
+
+# ---- rules and definitions ----------------------------------------------------
+
+(docdef :rules def
+  "(def pattern body…; doc=…, hold=(…), memoize=…, tx=…, let=…,
+        catch=…)
+   Register a reduction rule: a form matching pattern is replaced by body. At
+   the top level the rule is global; inside a (namespace …) block it is appended
+   to that namespace. A literal string at the head of the body is the docstring.
+   With no body the rule is implicit -- it reproduces its matched form, with its
+   arguments reduced -- so the form is a fixed point. The pattern must contain at
+   least one raw-symbol anchor, and a raw-symbol head may not name a builtin.")
+
+(docdef :rules val
+  "(val pattern form…; doc=…, tx=…, let=…, catch=…)
+   Like def, but evaluate form once at definition time and install the value as a
+   thread-local constant, backed by an Air Var. A reference to the name yields the
+   value; the zero-argument call (.ns.name) is a one-element form containing it.
+   bind can shadow the value for a dynamic extent.")
+
+(docdef :rules doc
+  "(doc), (doc name), (doc (form …))
+   (doc name) lists the builtin catalogue entry for name and every documented
+   rule whose pattern uses it; (doc (form …)) holds the argument and lists the
+   documented rules whose pattern matches it; (doc) returns the index of
+   documented names; (doc .air) is the same index and (doc .air.name) documents
+   one builtin. With no argument, see also (help).")
+
+(docdef :rules definitions
+  "(definitions name), (definitions (form …))
+   The matching def forms as quoted data, with each docstring moved into a doc=
+   map entry. It accepts the same argument as doc.")
+
+(docdef :rules match?
+  "(match? pattern subject)
+   Whether the pattern matches the reduced subject.")
+
+(docdef :rules matches
+  "(matches pattern subject)
+   The bindings of the match as a mapping, or naught when the pattern does not
+   match.")
+
+(docdef :rules replace
+  "(replace coll clause… depth=0)
+   Apply the replacement rules to the nodes at depth n (default 0: the subject
+   itself), rebuilding the structure. Each clause is (pattern -> replacement);
+   the first matching clause wins, and _ in a replacement is the whole matched
+   subject.")
+
+(docdef :rules replace-all
+  "(replace-all coll clause…)
+   Apply the replacement rules at every depth of the tree, bottom-up; with
+   depth=n, only at that level.")
+
+(docdef :rules rreplace
+  "(rreplace coll clause… depth=0)
+   replace applied to a held subject: the root hold is transparent and the
+   result is held.")
+
+(docdef :rules rreplace-all
+  "(rreplace-all coll clause…)
+   replace-all applied to a held subject; the result is held.")
+
+# ---- documentation ------------------------------------------------------------
+
+(docdef :docs docdef
+  "(docdef [category] name… \"text\"…)
+   Declare documentation for one or more builtin names, as this catalogue does.
+   The category is an optional keyword; the names are raw symbols or a form of
+   them; the strings are joined and deindented. The first entry for a name
+   fixes its category and place in the index; a later entry amends it, its text
+   appended as a further paragraph. A docdef is a process-global registration,
+   like layout -- sandbox and transactions do not undo one.")
+
+(docdef :docs help
+  "(help), (help name), (help :category)
+   (help) prints an introduction to the Air language. (help name) prints the
+   documentation for a name, as (doc name) returns it, and (help :category) or
+   (help :all) prints the index of documented names.")
+
+# ---- collections --------------------------------------------------------------
+
+(docdef :collection (first second third last rest)
+  "(first coll), (second coll), (third coll), (last coll), (rest coll)
+   Positional access to the sequence elements. A scalar is a singleton, so
+   (first 5) is 5, and (rest x) is the form without its first element. These are
+   hold-blind: on a held form, (first …) is the ' head.")
+
+(docdef :collection count
+  "(count coll)
+   The number of sequence elements. A scalar is a singleton (so (count ?g) is 1
+   for a one-element group), naught is 0, a table reports its rows, a tensor its
+   elements, and a stream its queued deliveries.")
+
+(docdef :collection (take drop-first take-last drop-last)
+  "(take coll n), (drop-first coll n), (take-last coll n), (drop-last coll n)
+   The first n elements, the form without its first n, the last n, and the form
+   without its last n.")
+
+(docdef :collection (take-while drop-while)
+  "(take-while pred coll), (drop-while pred coll)
+   The leading elements for which pred is truthy, and the elements after that
+   prefix.")
+
+(docdef :collection insert
+  "(insert coll i x)
+   A copy of coll with x inserted before position i (1-based; i = n + 1
+   appends). with only appends, so this is the arbitrary-index case.")
+
+(docdef :collection split-at
+  "(split-at coll i)
+   The pair of the first i elements and the rest: (split-at (a b c d) 2) is
+   ((a b) (c d)).")
+
+(docdef :collection partition
+  "(partition coll n)
+   The elements in groups of n; a final short group is kept.")
+
+(docdef :collection partition-by
+  "(partition-by f coll)
+   Group ADJACENT elements by the key (f x); a new group begins whenever the
+   key changes: (partition-by odd? (1 3 2 4 5)) is ((1 3) (2 4) (5)). split-by
+   is a synonym.")
+
+(docdef :collection split-by
+  "(split-by f coll)
+   A synonym for partition-by.")
+
+(docdef :collection gather-by
+  "(gather-by f coll)
+   Group ALL elements whose keys (f x) are equal, in the order the keys first
+   appear: (gather-by odd? (1 2 3 4)) is ((1 3) (2 4)). Compare partition-by,
+   which groups only adjacent elements, and group-by, which returns a map.")
+
+(docdef :collection group-by
+  "(group-by f coll)
+   A map from each printed key (f x) to the elements that produced it.")
+
+(docdef :collection frequencies
+  "(frequencies coll)
+   A map from each element, as a keyword, to the number of times it occurs.")
+
+(docdef :collection (distinct dedupe count-distinct)
+  "(distinct coll), (dedupe coll), (count-distinct coll)
+   distinct drops repeated elements anywhere; dedupe drops only adjacent
+   repeats; count-distinct is the number of distinct elements. All three compare
+   with eq?.")
+
+(docdef :collection shuffle
+  "(shuffle coll)
+   The sequence elements in a random order; map entries are kept.")
+
+(docdef :collection reverse
+  "(reverse coll)
+   The elements in reverse order; for a tensor, a reversed copy along the axes or,
+   with dims=, along the named ones.")
+
+(docdef :collection sort
+  "(sort coll; key=…, reverse=…)
+   A sorted copy of the sequence elements; key= extracts a comparison key, and
+   reverse=true sorts descending. A tensor sorts linearly, or along dims=.")
+
+(docdef :collection sort-by
+  "(sort-by f coll)
+   Sorted by the key (f x), ascending.")
+
+(docdef :collection (keys vals)
+  "(keys coll), (vals coll)
+   The map's keys (as keywords) and its values (as a sequence).")
+
+(docdef :collection invert
+  "(invert coll)
+   The map with its keys and values exchanged.")
+
+(docdef :collection zipmap
+  "(zipmap ks vs)
+   A map pairing each key of ks with the value at the same position in vs.")
+
+(docdef :collection (union intersect difference)
+  "(union a b …), (intersect a b …), (difference a b …)
+   Set operations over the sequence elements, comparing with eq?. union keeps
+   the elements of every argument once, in first-seen order; intersect keeps the
+   elements common to all; difference keeps a's elements that are in no later
+   argument. A scalar is a singleton.")
+
+(docdef :collection (subset? superset?)
+  "(subset? a b), (superset? a b)
+   Whether every element of a is an element of b, and the reverse.")
+
+(docdef :collection (flatten)
+  "(flatten coll)
+   A sequence with the nesting stripped: every nested sequence is spliced in
+   place, recursively. Map entries are kept.")
+
+(docdef :collection transpose
+  "(transpose rows; perm=…)
+   The columns of the rows, stopping at the shortest:
+   (transpose ((1 2 3) (4 5 6))) is ((1 4) (2 5) (3 6)). A tensor transposes its
+   axes -- a vector becomes a one-row matrix -- and perm= selects the order
+   explicitly.")
+
+(docdef :collection (zip)
+  "(zip coll …)
+   A sequence of argument tuples, stopping at the shortest input:
+   (zip (1 2) (3 4)) is ((1 3) (2 4)).")
+
+(docdef :collection interleave
+  "(interleave coll …)
+   The elements of each input in turn, stopping at the shortest:
+   (interleave (1 2) (a b)) is (1 a 2 b).")
+
+(docdef :collection (prepend)
+  "(prepend coll x …)
+   The sequence elements of coll with x… in front: (prepend (3 4) 1 2) is
+   (1 2 3 4).")
+
+(docdef :collection (riffle)
+  "(riffle coll sep)
+   Insert sep between the elements: (riffle (1 3 5) 0) is (1 0 3 0 5). When sep
+   is a collection its elements are used in turn and cycle.")
+
+(docdef :collection (tuples)
+  "(tuples lists), (tuples coll n)
+   The Cartesian product: (tuples ((a b) (1 2))) is ((a 1) (a 2) (b 1) (b 2)).
+   With an integer second argument, the n-fold product of one collection.")
+
+(docdef :collection (outer)
+  "(outer f coll …)
+   The outer product: f applied to every combination, nested one level per
+   collection: (outer * (1 2) (3 4)) is ((3 4) (6 8)).")
+
+(docdef :collection (map-thread)
+  "(map-thread f coll …)
+   f applied to the i-th element of each collection, stopping at the shortest:
+   (map-thread + (1 2) (3 4)) is (4 6).")
+
+(docdef :collection (array)
+  "(array f n), (array f n start)
+   (f start) … (f (start + n - 1)), counting from start (default 1):
+   (array (?x -> (* x x)) 4) is (1 4 9 16).")
+
+(docdef :collection (range)
+  "(range n), (range start stop), (range start step stop)
+   The integers from 0 to n - 1, from start to stop - 1, or from start by step up
+   to stop - 1.")
+
+(docdef :collection (repeat)
+  "(repeat n x)
+   A sequence of n copies of x.")
+
+(docdef :collection (subdivide)
+  "(subdivide n), (subdivide max n), (subdivide min max n)
+   n + 1 evenly spaced floats from min (default 0) to max (default 1):
+   (subdivide 4) is (0.0 0.25 0.5 0.75 1.0).")
+
+(docdef :collection (sum product)
+  "(sum coll), (product coll; dims=…, drop=…)
+   The numeric sum (or product) of the collection's elements. On a tensor the
+   reduction is Julia's, with dims= and drop= selecting and removing axes;
+   non-numeric input is left symbolic.")
+
+(docdef :collection (mean median variance std)
+  "(mean coll; dims=…, drop=…), (median coll; dims=…, drop=…),
+   (variance coll ddof=1; dims=…, drop=…),
+   (std coll ddof=1; dims=…, drop=…)
+   Descriptive statistics of the numeric elements, with sample variance by
+   default (denominator n - ddof). On a tensor they reduce along dims= and drop=
+   applies. A result with no defined value is naught.")
+
+(docdef :collection cases
+  "(cases coll clause… depth=1)
+   Every element at depth n that matches a clause, in encounter order. A bare
+   pattern keeps the element as it is; a replacement rule replaces it. There is
+   no default clause, since a bare pattern is indistinguishable from one.")
+
+(docdef :collection drop-cases
+  "(drop-cases coll clause… depth=1)
+   The elements at depth n that match NO clause, with the structure above them
+   rebuilt; a clause may be a bare pattern or a replacement rule.")
+
+(docdef :collection matches-any?
+  "(matches-any? subject clause…)
+   True when the subject itself or any subpart anywhere in the tree matches a
+   clause -- a bare pattern with an optional rule-level guard, or a replacement
+   rule, of which only the pattern and guard matter.")
+
+(docdef :collection where
+  "(where coll obj depth=d)
+   The locations of every element of coll equal to obj. With no depth the depth
+   is 1 and the result is the bare keys in encounter order -- (where (:a :b :b)
+   :b) is (2 3); with an integer depth it is one path per occurrence -- (where
+   ((1 2) (3 2)) 2 depth=2) is ((1 2) (2 2)); depth=:all reports every depth,
+   each path of its own length. Depth 0 names the subject itself, whose sole key
+   is 0. No match is (). Paths splice into get, with, and update-in.")
+
+(docdef :collection where-all
+  "(where-all coll obj)
+   Removed. Write (where coll obj depth=:all); calling it raises an error that
+   says so.")
+
+(docdef :collection deep-map
+  "(deep-map f x)
+   f applied to every node of the tree, bottom-up.")
+
+(docdef :collection map-keys
+  "(map-keys f m)
+   Rebuild m with each key k replaced by (f k); f receives a keyword and must
+   return a symbol.")
+
+(docdef :collection trampoline
+  "(trampoline f arg…)
+   Call f with the arguments; while the result is a function (a replacement
+   rule), call that with no arguments. Mutually tail-recursive steps can bounce
+   through the trampoline instead of growing the stack.")
+
+# ---- strings ------------------------------------------------------------------
+
+(docdef :string regex
+  "(regex source), (regex source flags)
+   A compiled pattern value. Every string verb that takes a pattern accepts
+   either a literal string (matched literally) or this value (matched as a
+   regular expression). The reader's r\"…\"flags literal builds the same
+   value.")
+
+(docdef :string regex?
+  "(regex? x)
+   Whether x is a compiled regular expression.")
+
+(docdef :string string-length
+  "(string-length s)
+   The number of characters in s.")
+
+(docdef :string string-join
+  "(string-join coll sep)
+   The printed elements joined by sep.")
+
+(docdef :string string-append
+  "(string-append s …)
+   The arguments concatenated as text.")
+
+(docdef :string substring
+  "(substring s start end)
+   1-based and inclusive, as Julia's s[start:end].")
+
+(docdef :string string-replace
+  "(string-replace s pat rep)
+   Replace every match of pat in s with rep; a regex rep expands $0, $1, $name,
+   and $$.")
+
+(docdef :string string-split
+  "(string-split s pat)
+   The pieces of s between matches of pat.")
+
+(docdef :string (string-upper upcase string-lower downcase)
+  "(string-upper s), (upcase s), (string-lower s), (downcase s)
+   Upper- and lower-cased copies of s.")
+
+(docdef :string (string-trim string-trim-left string-trim-right)
+  "(string-trim s), (string-trim-left s), (string-trim-right s)
+   s with whitespace removed from both ends, the left, or the right.")
+
+(docdef :string (string-take string-drop)
+  "(string-take s n), (string-drop s n)
+   The first n characters of s, and the rest; n is clamped to the length.")
+
+(docdef :string string-capitalize
+  "(string-capitalize s)
+   The first character upper-cased and the rest lower-cased.")
+
+(docdef :string (string-starts-with? string-ends-with?)
+  "(string-starts-with? s p), (string-ends-with? s p)
+   Whether s begins or ends with the text p.")
+
+(docdef :string string-contains?
+  "(string-contains? s p)
+   Whether p occurs in s; p is literal text.")
+
+(docdef :string string-match?
+  "(string-match? s pat)
+   The pattern-aware spelling of string-contains?: true when pat matches
+   somewhere in s.")
+
+(docdef :string string-index-of
+  "(string-index-of s p)
+   The 1-based index of the first occurrence of p in s, or naught.")
+
+(docdef :string string-find
+  "(string-find s pat)
+   The first match as (match=… index=… groups=…), or naught. The pattern is
+   literal text or a regex value.")
+
+(docdef :string string-find-all
+  "(string-find-all s pat)
+   Every non-overlapping match, in order, each as
+   (match=… index=… groups=…).")
+
+(docdef :string string-reverse
+  "(string-reverse s)
+   The characters of s in reverse order.")
+
+(docdef :string string-repeat
+  "(string-repeat s n)
+   s repeated n times.")
+
+(docdef :string (string-pad-left string-pad-right)
+  "(string-pad-left s n), (string-pad-right s n)
+   s padded with spaces to length n, on the left or the right.")
+
+(docdef :string string-chars
+  "(string-chars s)
+   The characters of s as a sequence of one-character strings.")
+
+(docdef :string string-lines
+  "(string-lines s)
+   The lines of s as a sequence of strings.")
+
+(docdef :string form->string
+  "(form->string x pretty=true width=n)
+   The source text of a form. The default is the flat spelling; pretty=true
+   breaks it across lines to fit width (80 by default).")
+
+(docdef :string string->form
+  "(string->form s)
+   Read the air source text s into a form.")
+
+(docdef :string string-format
+  "(string-format fmt key=value …)
+   Format the text fmt, replacing each ~name by the printed value given under
+   that map entry; ~~ is a literal tilde.")
+
+# ---- math ---------------------------------------------------------------------
+
+(docdef :math (abs abs2 sign sqrt cbrt exp exp2 exp10 expm1 log log2 log10 log1p
+               sin cos tan asin acos atan sinh cosh tanh asinh acosh atanh
+               sinc sinpi cospi deg2rad rad2deg real imag conj angle cis
+               factorial)
+  "(abs x), (sqrt x), (exp x), (log x), (sin x), (cos x), (tan x), … along with
+   abs2, sign, cbrt, exp2, exp10, expm1, log2, log10, log1p, asin, acos, atan,
+   sinh, cosh, tanh, asinh, acosh, atanh, sinc, sinpi, cospi, deg2rad, rad2deg,
+   real, imag, conj, angle, cis, and factorial
+   The elementary Julia math functions, Julia semantics and promotion included.
+   Each takes one argument, broadcasts over a tensor, and stays symbolic on a
+   non-number, so (sqrt x) is a fixed point.")
+
+(docdef :math (isnan isinf isfinite isinteger iseven isodd)
+  "(isnan x), (isinf x), (isfinite x), (isinteger x), (iseven x), (isodd x)
+   Elementwise tests: each yields a Boolean per value, and a Boolean tensor over
+   a tensor, unlike the value predicates nan? and even?. Each stays symbolic on
+   a non-number.")
+
+(docdef :math (atan2 gcd lcm binomial hypot rem copysign)
+  "(atan2 y x), (gcd a b), (lcm a b), (binomial n k), (hypot a b), (rem a b),
+   (copysign a b)
+   Two-argument Julia math functions. They broadcast over tensors and stay
+   symbolic on a non-number.")
+
+(docdef :math (round floor ceil truncate)
+  "(round x; digits=…, sigdigits=…), (floor x; digits=…),
+   (ceil x; digits=…),
+   (truncate x; digits=…)
+   Rounding. digits= rounds to that many decimal places and sigdigits= to that
+   many significant digits; both are symbolic-preserving options that survive an
+   unreduced argument.")
+
+(docdef :math clamp
+  "(clamp x lo hi)
+   x bounded to the range lo … hi, broadcast over tensors.")
+
+(docdef :math div
+  "(div x y)
+   Integer division, truncating toward zero.")
+
+(docdef :math rational
+  "(rational n d)
+   The exact rational n/d.")
+
+(docdef :math complex
+  "(complex re im)
+   The complex value with the given real and imaginary parts; ComplexF64 when
+   both are exactly Float64 and Complex{BigFloat} otherwise.")
+
+(docdef :math bigfloat
+  "(bigfloat \"text\" precision=n)
+   The BigFloat the text denotes, parsed at precision (default: the ambient
+   one). The printer uses this spelling for a value whose precision is not the
+   ambient default.")
+
+(docdef :math (min max)
+  "(min x …; dims=…, drop=…), (max x …; dims=…, drop=…)
+   The least (or greatest) of the arguments; a single collection argument is
+   searched elementwise, and on a tensor dims= and drop= select the reduction
+   axes. Non-numeric input stays symbolic.")
+
+(docdef :math (bit-and bit-or bit-xor)
+  "(bit-and a b …), (bit-or a b …), (bit-xor a b …)
+   Bitwise and, or, and exclusive or; a Boolean counts as an integer, so
+   (bit-and true 1) is 1.")
+
+(docdef :math bit-not
+  "(bit-not x)
+   The bitwise complement.")
+
+(docdef :math (bit-shift-left bit-shift-right)
+  "(bit-shift-left x n), (bit-shift-right x n)
+   x shifted left or right by n bits.")
+
+# ---- operators ----------------------------------------------------------------
+
+(docdef :operator (+ - * /)
+  "(+ a b …), (- a b …), (* a b …), (/ a b …)
+   Arithmetic. The canonical form is infix -- (a + b) -- and the prefix spelling
+   (OP a b c) folds left, so (+ a b c) is ((a + b) + c). +, -, and * are Julia's
+   arithmetic with promotion; / is always floating point. A tensor operand
+   broadcasts. The rules match numbers, so a non-numeric operand stays symbolic:
+   (x + 1) is a fixed point.")
+
+(docdef :operator (^ // mod)
+  "(^ a b), (a // b), (a mod b)
+   Exponentiation, the exact rational constructor, and the modulus. Like the
+   other operators they stay symbolic on a non-number.")
+
+(docdef :operator (== != === !== < > <= >=)
+  "(== a b), (!= a b), (=== a b), (!== a b), (< a b), (> a b), (<= a b),
+   (>= a b)
+   Comparison. == is content equality (numeric-friendly: (== 1 1.0) is true);
+   === is eq?, equivalence that distinguishes 1 from 1.0; != and !== are their
+   negations; the ordering operators compare numbers, strings, symbols, and
+   times, and stay symbolic otherwise. On a tensor the ordering operators are
+   symbolic too -- use tensor-lt and friends for elementwise comparison.")
+
+(docdef :operator (and or)
+  "(a and b), (a or b), (and e …), (or e …)
+   Short-circuiting conjunction and disjunction. Infix is binary; the prefix
+   spelling folds a whole run, and and yields the first falsy value or the
+   last, or the first truthy value or naught. (and) is true and (or) is
+   naught. Only true is truthy.")
+
+# ---- time ---------------------------------------------------------------------
+
+(docdef :time now
+  "(now)
+   The current instant, as the ordinary form (time SECONDS) of UTC epoch
+   seconds at millisecond precision.")
+
+(docdef :time time
+  "(time x)
+   The value of x as a time: a number is UTC epoch seconds, an ISO-8601 string
+   is parsed, and a time is already one. Anything else stays symbolic.")
+
+(docdef :time time?
+  "(time? x)
+   Whether x is a time form.")
+
+(docdef :time time-str
+  "(time-str t; format=\"…\", offset=\"+02:00\")
+   The text of a time. The default is ISO-8601 UTC with milliseconds; format is
+   a Julia Dates.DateFormat string; offset shifts the instant and replaces the
+   Z suffix.")
+
+(docdef :time (before? after? between?)
+  "(before? a b), (after? a b), (between? x lo hi)
+   Time comparisons; a number contributes its epoch seconds, and each stays
+   symbolic on a non-value.")
+
+# ---- input and output ---------------------------------------------------------
+
+(docdef :io print
+  "(print x …)
+   Write the arguments to the task's output sink -- air's actor-backed stdout,
+   or the SSH session's channel when the task runs in one -- and return naught. A
+   string prints as its content and anything else as air source. The write is a
+   side effect: inside a transaction it happens at commit.")
+
+(docdef :io println
+  "(println x …)
+   print followed by a newline.")
+
+(docdef :io str
+  "(str x …)
+   The arguments concatenated into a string, as print renders them.")
+
+(docdef :io read-file
+  "(read-file path)
+   The file's contents as a string. Requires the filesystem permission on
+   .air.sys; a relative path resolves against the directory of the file being
+   loaded.")
+
+(docdef :io write-file
+  "(write-file path text)
+   Write text to the file, replacing it. Requires the filesystem permission; a
+   write inside a transaction is deferred to its commit and dropped on abort.")
+
+# ---- data formats -------------------------------------------------------------
+
+(docdef :format decode
+  "(decode text format=:json)
+   Parse a string or a bytes value into a form, as plain data: an object is a
+   map form, an array a sequence form, and null or an empty container is naught.
+   A format is :json, :yaml, :toml, :csv, :tsv, or :env. Nothing is constructed
+   or executed -- the YAML reader is a safe subset and unknown tags are a
+   :toml-date/:toml-time/:toml-datetime marker form or an error.")
+
+(docdef :format encode
+  "(encode value format=:json)
+   Render a form as text in the given data format. Only plain data has a
+   representation: an extern, a mutable, a rational, a complex, or a container
+   with both sequence elements and map entries raises.")
+
+(docdef :format read-data
+  "(read-data path format=…)
+   Read and decode a data file, inferring the format from its extension (.json,
+   .yaml, .yml, .toml, .csv, .tsv, or the file name .env). Requires the
+   filesystem permission.")
+
+(docdef :format write-data
+  "(write-data path value format=…)
+   Encode a form and write it to a file, inferring the format from the
+   extension; the write is deferred to the transaction commit.")
+
+# ---- errors -------------------------------------------------------------------
+
+(docdef :error error
+  "(error tag data … key=value …)
+   An inert error object: the error head never reduces, so its elements stay
+   raw at any depth and an except clause can match them structurally. tag is a
+   keyword by convention only -- air never inspects it.")
+
+(docdef :error raise
+  "(raise tag data …; from=…, cause=…)
+   Evaluate the arguments and throw (error tag data …). A single argument that
+   already is an error object is thrown exactly. from= overrides (or, with
+   naught, suppresses) the automatic chain to the error being handled, and
+   cause= is explicit context.")
+
+(docdef :error signal
+  "(signal tag data …)
+   An inert signal object, dispatched by notify to the innermost matching handle
+   clause rather than thrown.")
+
+(docdef :error trace
+  "(trace body …)
+   Evaluate the body and yield its value; if an error escapes, yield the data
+   form (:trace (error …) frames=(…)) instead of throwing -- the first element
+   is the object an except would match and frames lists the source frames,
+   innermost first.")
+
+# ---- testing ------------------------------------------------------------------
+
+(docdef :test check
+  "(check expr)
+   Evaluate expr; inside a (test …) body a truthy value records a pass and a
+   falsy one a failure. Outside one it is simply a truth test. Returns a
+   Boolean.")
+
+(docdef :test test
+  "(test name body …)
+   Evaluate the body with a fresh counter; each check is recorded, and an
+   uncaught error is recorded as one failure without aborting the caller. Yields
+   (name=… pass=… fail=… failures=(…)) with each failure held.")
+
+# ---- namespaces ---------------------------------------------------------------
+
+(docdef :namespace namespace
+  "(namespace path body …; using=(…) …)
+   Evaluate body in a transaction with path as the current namespace; every def
+   and val in it is appended there, and subnamespaces are created as needed. The
+   body does not inherit the caller's definitions -- it runs with the namespace's
+   rules -- while lexical bindings remain visible.")
+
+(docdef :namespace using
+  "(using spec … body …)
+   Activate one namespace, or a list of them, for body: its rules match and its
+   as= bindings are in scope. Nothing is copied. A spec may carry only=(…),
+   except=(…), or as=sym.")
+
+(docdef :namespace use
+  "(use spec …)
+   Inside a namespace block, materialize the named entries as private imports: a
+   readable def is copied, a readable val shares the source value, and an
+   execute-only entry becomes a lazy proxy. Each entry records source=.")
+
+(docdef :namespace import
+  "(import spec …)
+   As use, but the imported names are exported from the enclosing namespace too.")
+
+(docdef :namespace unuse
+  "(unuse ns), (unuse ns name …)
+   Remove the current block's imports from ns -- all of them, or just the listed
+   names.")
+
+(docdef :namespace (clear del)
+  "(clear name), (clear :all)
+   Remove the current block's definitions that use name, or every definition and
+   import for :all. Outside a namespace block it targets the global rule store.
+   del is an alias.")
+
+(docdef :namespace bind
+  "(bind (x=value …) body …)
+   Rebind the vals named by the keys of the mapping for the dynamic extent of
+   body. Each name resolves to the val its namespace context matches; a name
+   that is not a val raises. The bindings are task-local and are undone when the
+   body finishes.")
+
+(docdef :namespace bindings
+  "(bindings)
+   The current task's val overrides as a mapping that bind can reinstall.")
+
+(docdef :namespace ns-entries
+  "(ns-entries [target] src=false)
+   The readable entries of a namespace, in append order, each as
+   (entry name= kind= owner= doc= src=) with kind one of :def, :val, :sub,
+   :proxy, or :alias. Unreadable and hidden entries are omitted.")
+
+(docdef :namespace ns-entry
+  "(ns-entry [target] name src=false)
+   One namespace entry, or naught when it is absent or unreadable.")
+
+(docdef :namespace ns-proxy-apply
+  "(ns-proxy-apply path name args-container)
+   The generated body of a proxied call rule: apply the source namespace's rules
+   for name. Not normally written by hand.")
+
+(docdef :namespace ns-vals
+  "(ns-vals [target])
+   The readable val names of a namespace (default: the current one), newest
+   definition last, as a list of keywords: (:val1 :val2). A name redefined in
+   the namespace appears once, at its last position.")
+
+(docdef :namespace ns-defs
+  "(ns-defs [target])
+   The readable def rules of a namespace (default: the current one), each as
+   the rule's definition form held and with def replaced by ':
+   ((' def (twice ?x) (* x 2))). Any stored source position (src=) is
+   stripped; a docstring survives as a doc= entry.")
+
+(docdef :namespace ns-facts
+  "(ns-facts [target])
+   The base facts of a namespace's implicit logic set (default: the current
+   one), in the same held list (facts target) returns: (' (p 1) (q 2)), or
+   (') when the set is empty. Needs the readfact permission.")
+
+(docdef :namespace ns-rules
+  "(ns-rules [target])
+   The rules of a namespace's implicit logic set (default: the current one), in
+   the same held list (rules target) returns: (' (rule …) …), or (') when the
+   set is empty. Needs the readrule permission.")
+
+# ---- users and permissions ----------------------------------------------------
+
+(docdef :user current-user
+  "(current-user)
+   The user the current task is running as.")
+
+(docdef :user owner
+  "(owner)
+   The owner of the def currently being evaluated, else the current user.")
+
+(docdef :user (users agents)
+  "(users), (agents)
+   The user records the caller may see, and the agent accounts among them.")
+
+(docdef :user user-kind
+  "(user-kind id)
+   The account kind of a visible user: :human (the default) or :agent.")
+
+(docdef :user as-user
+  "(as-user id body …)
+   Evaluate body as id, with that user's home as the current namespace. air may
+   assume anyone, an admin itself and its constituents, and any user itself. The
+   switch is dynamic and is inherited by a task created inside it.")
+
+(docdef :user create-user
+  "(create-user name)
+   Create a core user with a home. Only air may do this.")
+
+(docdef :user create-constituent
+  "(create-constituent name)
+   An admin creates its constituent admin:name. air creates air:name; to make
+   game:bob, run this as :game.")
+
+(docdef :user set-admin
+  "(set-admin id flag)
+   Make a core user an admin, or revoke it. Only air may do this, and a
+   constituent can never have constituents of its own.")
+
+(docdef :user env
+  "(env)
+   The current task's environment mapping -- the .env value it sees.")
+
+(docdef :user with-env
+  "(with-env mapping body …)
+   Merge mapping into .env for the dynamic extent of body and for any task
+   created there.")
+
+(docdef :permission permissions
+  "(permissions target)
+   The target's owner and ACL as a mapping.")
+
+(docdef :permission chmod!
+  "(chmod! target read=(…) write=(…) exec=(…) assume=(…) hide=(…)
+           anchor=…)
+   Replace the listed permission mappings. Needs write on the target. A metadata
+   edit waits for its database write to land before returning.")
+
+(docdef :permission chown!
+  "(chown! target user)
+   Give the target a new owner. Needs write on the target; air may always do it.")
+
+(docdef :permission assume
+  "(assume body …)
+   Evaluate body with current-user set to the owner of the def being evaluated.
+   Legal only inside a definition whose entry grants assume to the caller, so an
+   owner can expose a controlled operation on its data.")
+
+# ---- the database -------------------------------------------------------------
+
+(docdef :database open-airdb
+  "(open-airdb name option …)
+   Open or create a database -- memory, url=, or dbname=/user=/… -- root name in
+   it, and attach @ to that root for the current task. Namespaces at or under the
+   root live in that database.")
+
+(docdef :database close-airdb
+  "(close-airdb name)
+   Flush and close the database, remove the namespace, and detach @ when it
+   pointed at that root.")
+
+(docdef :database named-form
+  "(named-form name create=… value=… history=…)
+   Open or create the named volatile registered under name in the current
+   database. A name is a keyword, symbol, or string normalized to its text;
+   air/ is reserved.")
+
+(docdef :database name-form!
+  "(name-form! name volatile)
+   Point name at an existing volatile. A free name is created like named-form;
+   overwriting an existing alias needs write on the form currently named.")
+
+(docdef :database named-forms
+  "(named-forms)
+   The readable, non-internal names in the current database, as a mapping from
+   keyword name to volatile.")
+
+(docdef :database sync
+  "(sync)
+   A FIFO flush barrier: wait until every write committed before the call has
+   been flushed. Call it outside an open transaction to cover that transaction's
+   writes.")
+
+(docdef :database status
+  "(status)
+   (pending=N error=naught): the write queue's state.")
+
+(docdef :database form-id
+  "(form-id volatile)
+   The volatile's UUID as a string.")
+
+(docdef :database form-at
+  "(form-at id)
+   The volatile with that UUID in the current database; an unknown id yields a
+   handle that fails when it is read.")
+
+(docdef :database loaded?
+  "(loaded? volatile)
+   Whether the volatile's body has been read into memory.")
+
+(docdef :database history
+  "(history volatile)
+   Whether the volatile records its history.")
+
+(docdef :database to-json
+  "(to-json value)
+   The value as JSON text. A volatile becomes a bare \"@uuid\" link, so cycles
+   encode; a non-finite float is the marked string \"#inf\", \"#-inf\", or
+   \"#nan\".")
+
+(docdef :database from-json
+  "(from-json text)
+   Read a form, resolving \"@uuid\" links through the current database.")
+
+# ---- logic sets ---------------------------------------------------------------
+
+(docdef :logic assert
+  "(assert [target] fact; reason=…)
+   Assert a fact into the target -- a namespace or a logic-set handle (default:
+   the enclosing logic block, else the current namespace). A reason= label is
+   recorded with the fact. Needs the target's writefact permission.")
+
+(docdef :logic retract
+  "(retract [target] fact; reason=…)
+   Retract a base fact from the target. Needs writefact.")
+
+(docdef :logic revise
+  "(revise [target] condition changes; reason=…)
+   Rewrite the base facts selected by condition: its wildcards name the
+   positions and the mapping gives their new values. Only base facts can be
+   revised.")
+
+(docdef :logic revise-fact
+  "(revise-fact [target] old new; reason=…)
+   Replace one base fact by another, both written out.")
+
+(docdef :logic query
+  "(query [target] pattern …)
+   Every distinct satisfier of a rule-condition block over the target's facts
+   and rules, as a plain list of (x=…) mappings; rule-headed patterns search
+   rules, everything else searches facts. naught when nothing satisfies.")
+
+(docdef :logic facts
+  "(facts target)
+   The target's facts as one held list, (' ) when empty.")
+
+(docdef :logic rules
+  "(rules target)
+   The target's rules as one held list, (' ) when empty.")
+
+(docdef :logic why
+  "(why target fact)
+   Every reason recorded for a fact: explicit base labels and the
+   (because rule premises…) provenance of each derivation, deduplicated. A
+   namespace target needs both the fact and the rule read permission.")
+
+(docdef :logic logic
+  "(logic target body …)
+   Evaluate body with target as the target of any bare or same-targeted logic
+   operation, collecting them into one event. Reads inside the body see the set
+   as it was on entry; the edits apply together at the end.")
+
+(docdef :logic logic-set
+  "(logic-set name)
+   Create or open a standalone named logic set and return its handle. Opening
+   needs read; mutating needs write; querying needs read.")
+
+(docdef :logic defrule
+  "(defrule conditions … instructions …; reason=…)
+   Assert a raw (rule …) into the active target without reducing the rule's
+   arguments.")
+
+(docdef :logic ingest
+  "(ingest source)
+   Copy a namespace's or logic set's base facts and rules into the active target
+   in one transaction, then saturate. The permissions it will need are checked
+   before anything mutates, so an ingest is all-or-nothing.")
+
+(docdef :logic because
+  "(because rule premises …)
+   The reason form of a derivation: the rule, a keyword label, or naught, then
+   the premise facts.")
+
+(docdef :logic rule?
+  "(rule? x)
+   Whether x is a logic-engine rule form.")
+
+(docdef :logic depend
+  "(depend …)
+   Reserved for live propagation between logic sets; a tombstone.")
+
+# ---- mutables, transactions, and hooks ----------------------------------------
+
+(docdef :mut mut
+  "(mut), (mut value filter=… finalize=…)
+   A new mutable holding the (reduced, filtered) value, owned by the creating
+   user. A filter runs on every write and its result is stored; a finalizer runs
+   after the body of the writing transaction, before the commit attempt. Both are
+   kept as written in the mutable's metadata: a replacement rule is applied as a
+   function, any other form is evaluated with _ bound to the value.")
+
+(docdef :mut set!
+  "(set! mutable value), (set! form path … value)
+   Write a mutable. The path form edits the deepest mutable found at the path.
+   A write inside a transaction joins it and is dropped on abort.")
+
+(docdef :mut swap!
+  "(swap! mutable fn arg …)
+   Atomically replace the mutable's value with (fn value arg …) and return the
+   new value: the read, the call, and the write are one transaction, so a
+   concurrent writer causes a retry rather than a lost update. alter! is an
+   alias.")
+
+(docdef :mut alter!
+  "(alter! mutable fn arg …)
+   A synonym for swap!.")
+
+(docdef :mut tx
+  "(tx body …)
+   Evaluate the block inside one STM transaction and yield its last value. It
+   accepts the whole do grammar. Air's transactions join rather than nest, so the
+   effective boundary is the outermost tx; an escaping error aborts its writes,
+   and an error caught by the block's own except commits.")
+
+(docdef :mut sandbox
+  "(sandbox body …)
+   Evaluate the block in a transaction that is discarded instead of committed:
+   the body's value is returned and every write is dropped, so a def, val, mut,
+   fact, rule, or namespace created inside is gone afterwards. It runs on a
+   private task, so it reads committed state rather than an enclosing
+   transaction's staged writes; non-database side effects still happen.")
+
+(docdef :mut watch
+  "(watch mutable key fn)
+   Register or replace the watch key. fn is kept as written and called as
+   (fn key mutable old new) as its registrar, at the end of the outermost
+   transaction body. Needs both watch and read on the mutable.")
+
+(docdef :mut unwatch
+  "(unwatch mutable key …)
+   Remove the named watches, or all of them.")
+
+(docdef :mut watches
+  "(watches mutable)
+   The watch table, held so that evaluating the result does not run it.")
+
+(docdef :mut set-filter!
+  "(set-filter! mutable form)
+   Replace the mutable's filter; the next write applies the new one.")
+
+(docdef :mut set-finalize!
+  "(set-finalize! mutable form)
+   Replace the mutable's finalizer.")
+
+# ---- reference values ----------------------------------------------------------
+
+(docdef :reference promise
+  "(promise)
+   A new, undelivered promise in the current namespace's database. A form that
+   holds one serializes as a link, whether pending or delivered.")
+
+(docdef :reference deliver
+  "(deliver p value)
+   Fill a promise -- a database promise (the kind task returns) or an ephemeral
+   promise extern. Single assignment: a second delivery raises.")
+
+(docdef :reference await
+  "(await x)
+   Block until the promise is ready and return its value; a failed task's promise
+   rethrows the task's error. Reading an undelivered promise inside a transaction
+   raises instead of waiting.")
+
+(docdef :reference ready?
+  "(ready? x)
+   Whether a promise has been delivered or a delay already forced.")
+
+(docdef :reference task
+  "(task form …; clean=false, bindings=…, durable=…, name=…)
+   Hold the forms, evaluate them on another task, and return a database-backed
+   promise immediately. The forms capture the enclosing lexical scope by
+   substitution, and the task starts with the caller's val bindings, identity,
+   namespace, @, and .env. durable=true name=x registers a durable job instead,
+   which reruns from the start after a restart (see checkpoint).")
+
+(docdef :reference delay
+  "(delay body …)
+   A lazy value: the body is captured like a task's and stored, and the first get
+   evaluates it and replaces the thunk with the result, durably. Immutable, and
+   never forced by printing or serialization.")
+
+(docdef :reference actor
+  "(actor value history=true)
+   A sequential worker whose every value is persisted in the current namespace's
+   database. send a function to update it; reset! overwrites it.")
+
+(docdef :reference send
+  "(send actor fn)
+   Send fn to the actor; it receives the current value and returns the new one.
+   Inside a transaction the send is deferred to the commit.")
+
+(docdef :reference reset!
+  "(reset! actor value)
+   Replace an actor's value without a function.")
+
+(docdef :reference (actor? promise? delay?)
+  "(actor? x), (promise? x), (delay? x)
+   Whether x is an actor, a promise, or a delay.")
+
+(docdef :reference extern
+  "(extern :type payload)
+   Rebuild the extern registered under :type from payload, so a printed extern
+   reads back as itself -- a regex, for example.")
+
+(docdef :reference extern?
+  "(extern? x)
+   Whether x is an extern value.")
+
+(docdef :reference extern-type
+  "(extern-type x)
+   The registered type name of an extern, as a keyword.")
+
+(docdef :reference future
+  "(future …)
+   A tombstone: future was renamed to task. A future value still reads with
+   await.")
+
+# ---- streams -------------------------------------------------------------------
+
+(docdef :stream stream
+  "(stream maxsize=n)
+   A new stream in the current namespace's database: a reusable FIFO of
+   deliveries. maxsize bounds the queue; without it the stream is unbounded.")
+
+(docdef :stream post
+  "(post s value; timeout=n)
+   Append value, stamped with the posting user and instant, and return the
+   envelope (obj sender=… time=…). Needs write; naught when a timeout= expired
+   on a full stream.")
+
+(docdef :stream fetch
+  "(fetch s meta=false; timeout=n)
+   Remove and return the oldest object, or the whole envelope with meta=true.
+   Needs read; blocks until an item arrives unless timeout= bounds the wait, in
+   which case an expiry is naught.")
+
+(docdef :stream (stream? open?)
+  "(stream? x), (open? s)
+   Whether x is a stream, and whether the stream is still open.")
+
+(docdef :stream close!
+  "(close! s)
+   Stop the stream. A later post raises (error :stream-closed); a fetch drains
+   what remains and then raises it too. Needs write.")
+
+# ---- tables --------------------------------------------------------------------
+
+(docdef :table table
+  "(table (name=\"a\" age=1) …; columns=…, types=…, na=…, index=…),
+   (table name=(\"a\" \"b\") age=(1 2))
+   Build an immutable table: column-major, ordered names, per-column type
+   (:int :float :number :string :bool :symbol :keyword :naught :any) and in-band
+   NA marker, and an optional unique index column. Missing is in band: a cell
+   equal to its column's NA is missing, and the default marker is NaN for
+   :float/:number and NA for every other type.")
+
+(docdef :table table?
+  "(table? x)
+   Whether x is a table.")
+
+(docdef :table columns
+  "(columns t)
+   The table's column names, as keywords, in table order.")
+
+(docdef :table schema
+  "(schema t)
+   The table's column metadata: per-column type, NA marker, and so on.")
+
+(docdef :table nrows
+  "(nrows t)
+   The number of rows.")
+
+(docdef :table table-index
+  "(table-index t)
+   The name of the unique index column, or naught.")
+
+# ---- bytes ---------------------------------------------------------------------
+
+(docdef :bytes bytes
+  "(bytes x), (bytes)
+   An immutable byte string: from a string, from a sequence of integers, or
+   empty. Content-comparing and printable as #<bytes N>; it persists in a
+   database but does not survive to-json/from-json text.")
+
+(docdef :bytes bytes?
+  "(bytes? x)
+   Whether x is a bytes value.")
+
+(docdef :bytes bytes-length
+  "(bytes-length b)
+   The number of octets.")
+
+(docdef :bytes bytes-string
+  "(bytes-string b)
+   The octets as a string. This is not a UTF-8 decode: the string carries the
+   bytes exactly as they are.")
+
+(docdef :bytes bytes-index
+  "(bytes-index b i)
+   One octet, 1-based.")
+
+(docdef :bytes bytes-slice
+  "(bytes-slice b start stop)
+   The octets from start to stop inclusive, as a new bytes value; a slice past
+   the end raises.")
+
+# ---- tensors -------------------------------------------------------------------
+
+(docdef :tensor tensor
+  "(tensor coll), (tensor coll eltype=…), or the literal [1 2; 3 4]
+   Build an N-dimensional tensor from a nested sequence, or copy a tensor. Cells
+   are the numeric-tower leaves, with Julia promotion; [] is an empty Float64
+   vector and eltype= names a tower type.")
+
+(docdef :tensor tensor-literal
+  "(tensor-literal cells …)
+   The reader's [1 2 3] / [1 2; 3 4] spelling: a bracketed literal builds a
+   tensor directly from its nested cells. Not normally called by hand.")
+
+(docdef :tensor tensor?
+  "(tensor? x)
+   Whether x is a tensor.")
+
+(docdef :tensor (tensor-shape tensor-rank tensor-eltype)
+  "(tensor-shape t), (tensor-rank t), (tensor-eltype t)
+   A tensor's dimensions as a sequence, its number of axes, and the numeric-tower
+   type of its cells.")
+
+(docdef :tensor tensor-copy
+  "(tensor-copy t)
+   A fresh, independent copy of the tensor.")
+
+(docdef :tensor tensor->form
+  "(tensor->form t)
+   The tensor as an ordinary nested form -- the persistence spelling, since a
+   tensor itself is unstorable.")
+
+(docdef :tensor (tensor-zeros tensor-ones tensor-fill tensor-eye)
+  "(tensor-zeros dims …), (tensor-ones dims …), (tensor-fill dims value),
+   (tensor-eye n)
+   Constructors: an all-zero tensor of the given shape, all ones, filled with a
+   value, and the n×n identity matrix.")
+
+(docdef :tensor (tensor-rand tensor-randn)
+  "(tensor-rand dims …), (tensor-randn dims …)
+   A tensor of uniform, or standard-normal, random values of the given shape.")
+
+(docdef :tensor (tensor-arange tensor-linspace tensor-randint)
+  "(tensor-arange start stop step), (tensor-linspace start stop n),
+   (tensor-randint low high dims …)
+   Sequence constructors: evenly spaced values from start to stop, and a tensor
+   of uniform random integers in low … high.")
+
+(docdef :tensor (reserve-read reserve reservation?)
+  "(reserve-read (r …) body …), (reserve (r …) read=(…) body …),
+   (reservation? x)
+   The reader's {r … : body …} is reserve-read and {r … :! body …} is
+   reserve.
+   reserve-read takes read locks, runs the body inline, and returns its value;
+   reserve takes write locks, runs the body on a spawned task, and returns a
+   reservation whose get/await waits for the value. Every access to an existing
+   tensor needs an enclosing reservation; reservations never nest and never run
+   in a sandbox.")
+
+(docdef :tensor (get set!)
+  "(get t key …), (set! t key … value)
+   A tensor path: an integer per axis drops the axis, : keeps it, a sequence of
+   integers keeps it and selects several, 0 alone is the tensor itself and :
+   alone a copy, and default= covers out-of-range. set! writes a cell, a region,
+   or the whole tensor.")
+
+(docdef :tensor (tensor-map tensor-map! tensor-clamp!)
+  "(tensor-map f t), (tensor-map! f t), (tensor-clamp! t lo hi)
+   Map a function over every cell, linearly in column-major order. tensor-map
+   returns a new tensor; tensor-map! and tensor-clamp! mutate in place, promoting
+   the element type as needed.")
+
+(docdef :tensor (tensor-mul tensor-add! tensor-sub! tensor-mul! tensor-div!)
+  "(tensor-mul a b), (tensor-add! a b), (tensor-sub! a b), (tensor-mul! a b),
+   (tensor-div! a b)
+   tensor-mul is the elementwise product with scalar/tensor broadcasting; the
+   -! verbs mutate their first argument in place.")
+
+(docdef :tensor (tensor-scale! tensor-copyto!)
+  "(tensor-scale! t factor), (tensor-copyto! dest src)
+   Scale every cell in place, and copy one tensor's cells into another.")
+
+(docdef :tensor (tensor-equal? tensor-close?)
+  "(tensor-equal? a b), (tensor-close? a b rtol=… atol=…)
+   Content equality: exact, and within a tolerance.")
+
+(docdef :tensor (tensor-lt tensor-le tensor-gt tensor-ge tensor-eq tensor-ne)
+  "(tensor-lt a b), (tensor-le a b), (tensor-gt a b), (tensor-ge a b),
+   (tensor-eq a b), (tensor-ne a b)
+   Elementwise comparison yielding a Boolean tensor. The ordering operators stay
+   symbolic and == is identity on a tensor, so these are the comparison verbs.")
+
+(docdef :tensor tensor-where
+  "(tensor-where cond a b)
+   Elementwise selection: a cell from a where cond is true and from b
+   elsewhere.")
+
+(docdef :tensor (tensor-concat tensor-stack)
+  "(tensor-concat a b …), (tensor-stack a b …)
+   Join tensors along an existing axis, and stack them along a new one.")
+
+(docdef :tensor (tensor-flip tensor-roll tensor-tile)
+  "(tensor-flip t), (tensor-flip t dims), (tensor-roll t shift dims),
+   (tensor-tile t reps)
+   Reverse, roll, and tile along the named axes.")
+
+(docdef :tensor (tensor-squeeze tensor-expand-dims)
+  "(tensor-squeeze t), (tensor-expand-dims t dims …)
+   Drop length-1 axes, and insert length-1 axes at the named positions.")
+
+(docdef :tensor (tensor-diag tensor-diagm tensor-tril tensor-triu)
+  "(tensor-diag t), (tensor-diagm t), (tensor-tril t k=-1), (tensor-triu t k=0)
+   Diagonal access and extraction, and the lower and upper triangular parts.")
+
+(docdef :tensor (tensor-argsort tensor-argmax tensor-argmin)
+  "(tensor-argsort t), (tensor-argmax t), (tensor-argmin t)
+   Linear (column-major) indices: the sorting permutation, and the position of
+   the largest or smallest cell.")
+
+(docdef :tensor (tensor-cumsum tensor-cumprod tensor-diff)
+  "(tensor-cumsum t), (tensor-cumprod t), (tensor-diff t)
+   Cumulative sums and products, and successive differences, along the last
+   axis.")
+
+(docdef :tensor (tensor-any tensor-all tensor-count)
+  "(tensor-any t), (tensor-all t), (tensor-count t; dims=…, drop=…)
+   Reductions over Boolean tensors: whether any cell is true, every cell is
+   true, and how many are, with dims= and drop= selecting and removing axes.")
+
+(docdef :tensor (dot norm tr det inv)
+  "(dot a b), (norm t), (tr t), (det t), (inv t)
+   The LinearAlgebra wrappers: the dot/inner product (conjugating the first
+   argument), the norm, the trace, the determinant, and the inverse.")
+
+(docdef :tensor (matrix-rank matrix-cond)
+  "(matrix-rank t), (matrix-cond t)
+   The rank, and the condition number. cond is air's conditional form, so the
+   condition number is matrix-cond.")
+
+(docdef :tensor (linsolve)
+  "(linsolve A b)
+   The solution of A x = b.")
+
+(docdef :tensor (adjoint reshape)
+  "(adjoint t), (reshape t dims …)
+   The conjugate transpose (a vector becomes a 1×n row), and a reshaped copy.")
+
+(docdef :tensor (eigen svd qr cholesky lu)
+  "(eigen t), (svd t), (qr t), (cholesky t), (lu t)
+   The LinearAlgebra factorizations, as forms of their parts.")
+
+(docdef :tensor (eigvals svdvals)
+  "(eigvals t), (svdvals t)
+   The eigenvalues, and the singular values.")
+
+(docdef :tensor (pinv nullspace)
+  "(pinv t), (nullspace t)
+   The Moore-Penrose pseudoinverse, and a basis of the null space.")
+
+(docdef :tensor (cross kron)
+  "(cross a b), (kron a b)
+   The vector cross product, and the Kronecker product.")
+
+(docdef :tensor (isposdef issymmetric ishermitian)
+  "(isposdef t), (issymmetric t), (ishermitian t)
+   Matrix-shape predicates.")
+
+# ---- the user interface --------------------------------------------------------
+
+(docdef :ui ui
+  "(ui kind parameter … child …)
+   An inert widget tree: ui is a reserved head, so a (ui …) form never reduces
+   at any depth and is ordinary data. Kinds cover Boolean, text, numeric,
+   selection, action, display, and layout widgets; the common parameters are id,
+   label, description, and disabled, and a stateful kind takes initval,
+   on-change, and assert.")
+
+(docdef :ui ui-open
+  "(ui-open [key] tree)
+   Instantiate a widget tree as a named, owner-scoped instance and register it;
+   returns the key (generated when absent).")
+
+(docdef :ui ui-show
+  "(ui-show key)
+   Attach this SSH session's full-screen renderer to the instance and block
+   until it is dismissed (Esc yields naught, Ctrl-C raises (error :ctrl-c)).")
+
+(docdef :ui ui-run
+  "(ui-run tree)
+   Open, show, and close in one call, returning the final values.")
+
+(docdef :ui (ui-values ui-value)
+  "(ui-values key), (ui-value key id)
+   Every element's current value, and one element's value.")
+
+(docdef :ui ui-set!
+  "(ui-set! key id value)
+   A programmatic update. An invalid value changes nothing; the raise is
+   (error :ui-invalid id reason).")
+
+(docdef :ui ui-update!
+  "(ui-update! key tree)
+   Replace an instance's tree; elements whose id survives keep a value that is
+   still valid, removed elements' facts are retracted, and new ones asserted.")
+
+(docdef :ui (ui-dismiss! ui-close!)
+  "(ui-dismiss! key), (ui-close! key)
+   Leave the renderer (ui-show returns), and retract the instance and forget it.
+   ui-close! is idempotent.")
+
+(docdef :ui ui-instances
+  "(ui-instances)
+   The keys of the caller's open instances.")
+
+(docdef :ui current-ui
+  "(current-ui)
+   The root widget form the current evaluation is reached through -- a
+   connection's default UI, or the shown widget inside one. Storing it keeps the
+   element and its state alive.")
+
+(docdef :ui ui-render
+  "(ui-render key width=80)
+   The headless renderer: the instance's current frame as deterministic text.")
+
+(docdef :ui (ui-attach! ui-detach!)
+  "(ui-attach! [conn] widget), (ui-detach! [conn])
+   Attach a widget to a connection, and detach it. Attaching a raw (ui …) form
+   makes an ephemeral projection; attaching an open instance keys it.")
+
+(docdef :ui ui-attached
+  "(ui-attached [conn])
+   The widget attached to a connection: the form of a projection, or the key of
+   an instance.")
+
+(docdef :ui (ui-connection ui-connections)
+  "(ui-connection [conn]), (ui-connections [user])
+   One connection record, and the live connections the caller may see.")
+
+(docdef :ui (ui-theme ui-theme! ui-style)
+  "(ui-theme), (ui-theme! role=entry … [theme] reset=true), (ui-style role)
+   The widget theme. ui-theme returns the palette as (theme role=entry …);
+   ui-theme! sets roles process-wide, or installs a saved palette; ui-style
+   returns one role's style. An entry is a bare fg color or a map of fg=, bg=,
+   bold=, dim=, italic=, underline=, and reverse= changes.")
+
+(docdef :ui (ui-code ui-editor ui-notebook)
+  "(ui-code [ns] text= state=), (ui-editor [ns] target=name text= state=),
+   (ui-notebook [ns] text= state= collapse-lines=20)
+   The code widgets: an editable source buffer, the definition editor (Ctrl-J
+   appends the buffer's definitions to ns), and a column of input cells with
+   their outputs (Ctrl-J runs a cell, Ctrl-R runs them all).")
+
+(docdef :ui ui-browser
+  "(ui-browser [root] root= state=)
+   The namespace tree, over the current namespace by default.")
+
+(docdef :ui ui-shell
+  "(ui-shell state=)
+   A tab bar whose tabs are widget forms; a fresh shell starts with a browser and
+   a scratch notebook in the current namespace.")
+
+(docdef :ui ui-chat
+  "(ui-chat in=s out=s peer=:alice state=)
+   A conversation over a pair of streams the caller wires. A draft beginning with
+   ( is code mode: it is evaluated in the chat's namespace and only the result is
+   posted.")
+
+# ---- agents --------------------------------------------------------------------
+
+(docdef :agent create-agent
+  "(create-agent :bot provider=… model=… api-key=… …)
+   Create an :agent constituent of the caller and store its inference settings in
+   $.config.agent: provider, dialect, base-url, model, API key, system prompt,
+   max-tokens, params, context, compact-at, compact-keep, timeout, and retries.")
+
+(docdef :agent agent?
+  "(agent? x)
+   Whether x names an agent account.")
+
+(docdef :agent (agent-config agent-config!)
+  "(agent-config agent secrets=false), (agent-config! agent key=value …)
+   The stored inference settings (agent-config redacts api-key unless
+   secrets=true), and an update of the listed settings. Rotating the key affects
+   open sessions because it is read live.")
+
+(docdef :agent open-session
+  "(open-session agent option …)
+   Create an agent session, or reopen one by id=. The session is a durable
+   mutable behind the named form agent/<agent>/sessions/<sid>.")
+
+(docdef :agent sessions
+  "(sessions agent)
+   Every session of the agent, by id.")
+
+(docdef :agent (session-info session-history)
+  "(session-info s), (session-history s limit=n)
+   A session's status, configuration, and counters, and its transcript (or its
+   last n entries).")
+
+(docdef :agent (session-post session-fetch)
+  "(session-post s value), (session-fetch s meta=false timeout=n)
+   Send a message to the agent, and receive the oldest reply. Use timeout= on
+   every blocking fetch.")
+
+(docdef :agent (session-hook! session-channel)
+  "(session-hook! s form), (session-channel s)
+   Install the on-receive hook -- called as (form msg) with a copy of the
+   message, in the namespace where it was installed -- and the session's channel
+   handle.")
+
+(docdef :agent (session-resume session-close!)
+  "(session-resume s), (session-close! s)
+   Reopen a paused session and start its worker, and close a session and its
+   streams (idempotent).")
+
+(docdef :agent (channel? channel-post channel-fetch channel-ready? channel-count)
+  "(channel? x), (channel-post ch value), (channel-fetch ch meta=false timeout=n),
+   (channel-ready? ch), (channel-count ch)
+   The bare-channel operations: test, send, receive, and inspect the reply
+   queue. A channel's directions are from the owner's point of view -- out
+   carries a message to the agent, in its replies.")
+
+(docdef :agent (channel-hook! channel-unhook! channel-close!)
+  "(channel-hook! ch form), (channel-unhook! ch form), (channel-close! ch)
+   Install and remove an on-receive hook, and stop the channel.")
+
+# ---- ssh -----------------------------------------------------------------------
+
+(docdef :ssh ssh-server
+  "(ssh-server [name] option …)
+   Start an SSH server, a process resource named by a key, and return the key
+   (generated when absent). Only air or an admin may start one, and it admits
+   exactly the users its owner may assume; public-key auth is the only method. An
+   interactive pty login opens a default (ui-shell …).")
+
+(docdef :ssh ssh-servers
+  "(ssh-servers)
+   The running servers the caller may see, keyed by name.")
+
+(docdef :ssh ssh-host-key
+  "(ssh-host-key name private=false)
+   The host's public key line (for known_hosts), or the private key when the
+   caller is the owner or air.")
+
+(docdef :ssh ssh-close!
+  "(ssh-close! name)
+   Stop listening and let the sessions drain.")
+
+# ---- events and durable tasks ---------------------------------------------------
+
+(docdef :event (do-at do-in tx-at tx-in)
+  "(do-at time body …), (do-in interval body …), (tx-at …), (tx-in …)
+   Schedule a durable event in the creator's $.config.events, run it in its own
+   task, and return the promise it delivers. do-at fires at a time; do-in after
+   an interval and is one-shot unless repeat=true. The tx- forms run the body as
+   one transaction, so an escaping error aborts its writes. Options are name=,
+   bindings=, and (for -in forms) repeat=.")
+
+(docdef :event checkpoint
+  "(checkpoint form)
+   In a durable task run, return the value a previous attempt recorded, or
+   evaluate form, record it, and return it; outside a durable run it just
+   evaluates form. A checkpoint inside an open transaction raises.")
+
+(docdef :event (events tasks)
+  "(events [user]), (tasks [user])
+   The caller's events or durable tasks as a mapping from name to summary.")
+
+(docdef :event (event task-info)
+  "(event x [user]), (task-info x [user])
+   One summary, or (error :event-not-found …). x is a name or a promise.")
+
+(docdef :event (cancel-event cancel-task)
+  "(cancel-event x [user]), (cancel-task x [user])
+   Cancel a job: an undelivered promise is settled with
+   (error :event-cancelled …) and the status becomes :cancelled. Cancelling a
+   terminal job is an idempotent no-op. A running body notices at its next
+   cancellation point.")
+
+(docdef :event (events-resume tasks-resume)
+  "(events-resume [user]), (tasks-resume [user])
+   Flip an interrupted :running record to :pending and start a worker for every
+   non-terminal record; returns (resumed=n). air does this on startup.")
+
+# ---- layouts and libraries -------------------------------------------------------
+
+(docdef :layout layout
+  "(layout pattern head=n indent=m map=inline|block)
+   Declare how forms matching pattern break when printed. The declaration is
+   structural (literals, wildcards, a final rest marker; no guards, no map
+   entries), user declarations are tried newest-first ahead of the built-in
+   defaults, head= pins the first n sequence elements to the opening line,
+   indent= is a column offset or the symbol align, and map=block gives each
+   key=value its own line. A process-global registration, not a definition.")
+
+(docdef :layout layouts
+  "(layouts)
+   The registered user declarations, newest last, as a held list.")
+
+(docdef :layout clear-layout
+  "(clear-layout :head), (clear-layout :all)
+   Drop user layout declarations; the built-in defaults cannot be removed.")
+
+(docdef :layout reset-layouts
+  "(reset-layouts)
+   Drop every user layout declaration (the defaults stay).")
+
+(docdef :library load-air
+  "(load-air path …)
+   Parse every file before evaluating any form, then evaluate all of them in one
+   transaction; relative paths resolve against the loading file's directory. A
+   library is a <name>/init.air directory found on AIR_LIBPATH, loaded lazily on
+   first reference as .lib.<name>.")
+
+# ---- iteration helpers, late additions to :control ----------------------------
+
+(docdef :control nest
+  "(nest f n x)
+   Apply f exactly n times to x: (nest (?x -> (2 * x)) 5 1) is 32.")
+
+(docdef :control nest-list
+  "(nest-list f n x)
+   Every value along the way, from x to the final one -- n + 1 elements.")
+
+(docdef :control nest-while
+  "(nest-while f pred x; list=false)
+   Apply f while (pred value) holds, testing before each application, so a value
+   that already fails pred is returned unchanged. list=true returns every value
+   along the way instead of the last. A predicate that never fails is stopped by
+   the reduction budget.")
+
+# ---- control flow that sits with the error family -----------------------------
+
+(docdef :error throw
+  "(throw), (throw value), (throw tag value)
+   Return early out of the innermost enclosing block whose catch= names the tag
+   (a held literal, or ~tag for a computed one); the value is delivered as the
+   block's value. With no tag the tag is true; with no value it is naught. An
+   unmatched throw is the error (error :uncaught-throw tag value).")
+
+(docdef :error notify
+  "(notify data…), (notify a signal object)
+   Dispatch a signal to the innermost matching (handle pattern …) clause, which
+   is content-matched, innermost first, and return the handler's value. With one
+   positional argument and no map entries an existing signal object is
+   dispatched as itself; otherwise the evaluated arguments and map build the
+   signal. Nothing matching raises (error :unhandled-signal signal).")
+
+(docdef :error notify-or
+  "(notify-or default data…)
+   Like notify, but when no handler matches it holds default and evaluates it
+   only then.")
+
+(docdef :error try
+  "(try …)
+   A tombstone: try is no longer supported and raises. Use
+   (do … (except …)).")

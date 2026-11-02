@@ -71,6 +71,7 @@ constructor per kind.
   and a body that forces its own delay raises a catchable
   `(error :internal "a delay cannot force itself")`.
 
+(bytes)=
 ## 5. `bytes`: an immutable extern
 
 Most externs wrap a live resource and must die with the process. `bytes` is the

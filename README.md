@@ -103,31 +103,45 @@ restart, replaying its `(checkpoint form)` steps. See
 ## Documentation
 
 The [Air book](book/index.md) is the reference. It is built with Jupyter Book 2
-(MyST) and published at
-<https://noahbenson.github.io/AirLang.jl/>. Suggested reading order:
+(MyST) and published at <https://noahbenson.github.io/AirLang.jl/>. The table of
+contents is the reading order; the chapters are grouped as follows.
 
 | chapter | contents |
 | --- | --- |
 | [Getting started](book/getting-started.md) | installing, the REPL and CLI, Docker, libraries |
-| [Syntax](book/syntax.md) | atoms, strings, regular expressions, forms, `let` |
-| [The data model](book/data-model.md) | forms, holds, mutables, equality |
+| *Foundations* | |
+| [Syntax](book/syntax.md) | atoms, strings, comments, forms, evaluation |
+| [The data model](book/data-model.md) | forms, scalars, holds, equality |
+| [Control flow and bindings](book/control.md) | truthiness, `if`/`cond`, `let`, loops, sequencing, `exit` |
+| [Errors](book/errors.md) | error objects, `raise`, the `do` block grammar, tracing |
+| [Patterns and function definitions](book/patterns.md) | matching, `def`, lambdas, `case`, memoization, docstrings |
+| *Data types and collections* | |
 | [Numbers](book/numbers.md) | the numeric tower, literals, exactness, `//` vs `div` |
-| [Patterns and function definitions](book/patterns.md) | matching, `def`, lambdas, `case`, `depth=` |
-| [Namespaces](book/namespaces.md) | the namespace tree, `using`/`import`, `val`, tasks |
+| [Strings and regexes](book/strings.md) | string verbs, regex values, replacement, formatting |
+| [Collections](book/collections.md) | `get`/`with`, the wildcard key, higher-order verbs, threading, `depth=` |
+| [Tables](book/tables.md) | typed, indexed, immutable tabular data |
+| *Namespaces and rules* | |
+| [Namespaces](book/namespaces.md) | the namespace tree, `using`/`import`, `val`, listings |
 | [Users, homes, and permissions](book/permissions.md) | users, ACLs, `assume` |
+| [The two rule systems](book/rules.md) | reduction rules and the deductive engine |
+| [Production-rule reference](book/production-rules.md) | the deductive engine in detail |
+| *Mutation and concurrency* | |
+| [Mutability and transactions](book/mutability.md) | `mut`, filters, watches, `tx`, `sandbox` |
+| [Tensors](book/tensors.md) | mutable numeric arrays, literals, reservations, array operations, linear algebra |
+| [Tasks, delays, actors, and promises](book/concurrency.md) | work that is not a reduction |
 | [Streams](book/streams.md) | reusable queues: `post`, `fetch`, envelopes, permissions |
+| [Events and durable tasks](book/events.md) | `do-at`/`do-in`/`tx-at`/`tx-in`, `bindings=`, checkpoints, resume |
+| *Storage and data exchange* | |
 | [Loading files and libraries](book/libraries.md) | `load-air`, `AIR_LIBPATH`, `init.air` |
 | [Databases](book/databases.md) | AirDB, named forms, logic sets, JSON |
-| [Tables](book/tables.md) | typed, indexed, immutable tabular data |
-| [Tensors](book/tensors.md) | mutable numeric arrays, literals, reservations, numpy-style array operations, linear algebra |
 | [Data formats](book/formats.md) | JSON, YAML, TOML, CSV, TSV, and `.env` |
+| *Interfaces* | |
 | [SSH access](book/ssh.md) | `ssh-server`, key login, the remote REPL, SFTP |
-| [User interfaces](book/ui.md) | `(ui …)` trees, widgets, assertions, composite widgets, connections, the terminal renderer |
+| [User interfaces](book/ui.md) | `(ui …)` trees, widgets, assertions, composite widgets, the terminal renderer |
 | [Agents](book/agents.md) | `create-agent`, sessions, channels, the `on-receive` hook, providers |
-| [Events and durable tasks](book/events.md) | `do-at`/`do-in`/`tx-at`/`tx-in`, `bindings=`, checkpoints, resume |
-| [The two rule systems](book/rules.md) | reduction rules and the deductive engine |
-| [Times](book/time.md) · [Printing and layouts](book/printing.md) | time values, layouts, pretty printing |
-| [Errors](book/errors.md) · [Externs](book/externs.md) · [Testing](book/testing.md) | reference chapters |
+| *Reference and practice* | |
+| [Externs](book/externs.md) · [Times](book/time.md) · [Printing and layouts](book/printing.md) · [Testing](book/testing.md) | the remaining reference chapters |
+| [Documentation and the builtin catalogue](book/documentation.md) | `doc`, `help`, `docdef`, namespace listings |
 | [Implementation status](book/status.md) | what is implemented and what is deferred |
 | [Examples](book/examples.md) · [Problem set](book/problem-set.md) | worked programs |
 

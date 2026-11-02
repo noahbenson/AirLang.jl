@@ -70,6 +70,11 @@ air_string(air_eval(env, read_air("(let (x=2) (* x 3))")))   # => "6"
 `open_airdb!`, and `close_airdb!` are exported. `Env` carries the process
 database; see [Databases](databases.md).
 
+At the REPL, `(help)` prints an introduction to the language, `(doc NAME)`
+documents any builtin or definition, and `(doc .air)` lists every name the
+language ships with. See [Documentation and the builtin
+catalogue](documentation.md).
+
 ## Libraries
 
 `lib/` in this repository is the first entry of **`AIR_LIBPATH`**, the

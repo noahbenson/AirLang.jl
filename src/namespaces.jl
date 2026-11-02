@@ -2022,3 +2022,68 @@ function _bi_ns_entry(env::Env, scope::Scope, call::FormContainer)
     return f === nothing ? naught : f
 end
 special!(Symbol("ns-entry"), _bi_ns_entry)
+
+# ---- the names in a namespace ------------------------------------------------
+#
+# `ns-vals` and `ns-defs` are the `ns-entries` listing narrowed to one kind: the
+# `val` names, and the definitions themselves as held data. Both apply exactly
+# the visibility rules of the listing — a hidden entry, and an entry whose
+# volatile the caller may not read, are absent.
+
+# The readable entries of `ns` with the public kind `:def` or `:val`, in append
+# order (a later definition of a name therefore appears later).
+function _ns_kind_entries(env::Env, ns::Namespace, kind::Symbol)
+    out = Form[]
+    for e in _ns_entries_of(ns.vf)
+        _ns_public_kind(e) === kind || continue
+        e isa VolatileForm && (_meta_hidden(e) || !_can(env, e, :read)) && continue
+        _entry_export_name(e) === nothing && continue
+        push!(out, e)
+    end
+    return out
+end
+
+# `(ns-vals [target])` — the namespace's `val` names, as keywords. A
+# redefinition appends a new entry, so each name is reported once, in the order
+# its last definition appeared.
+function _bi_ns_vals(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "ns-vals", ())
+    length(call.seq) <= 2 ||
+        throw(AirEvalError("ns-vals takes at most one namespace"))
+    ns = _ns_listing_ns(env, scope, call, "ns-vals")
+    _check_ns!(env, ns, :read)
+    lastpos = Dict{Symbol,Int}()
+    for (i, e) in enumerate(_ns_kind_entries(env, ns, :val))
+        lastpos[_entry_export_name(e)] = i
+    end
+    names = sort!(collect(keys(lastpos)); by = n -> lastpos[n])
+    out = FormValue[_store_form(_keyword_form(n)) for n in names]
+    return canonicalize(FormContainer(FormSeq(out), FormMap()))
+end
+special!(Symbol("ns-vals"), _bi_ns_vals)
+
+# A stored `def` entry as held data. The source frame a loaded definition
+# carries is dropped, so the listing shows the definition rather than where it
+# was read from.
+function _ns_def_form(e::Form)
+    b = _entry_body(e)
+    b isa FormContainer || return _holdify(b)
+    haskey(b.map, _SRC_KEY) || return _holdify(b)
+    map = Pair{Symbol,FormValue}[k => v for (k, v) in b.map if k !== _SRC_KEY]
+    return _holdify(FormContainer(b.seq, FormMap(map)))
+end
+
+# `(ns-defs [target])` — every definition in the namespace as a held `def`
+# form, `(' def PATTERN BODY …)`, in definition order. Unlike `ns-vals` a name
+# is not collapsed: several rules may share one name, and each is a definition.
+function _bi_ns_defs(env::Env, scope::Scope, call::FormContainer)
+    _check_options(call, "ns-defs", ())
+    length(call.seq) <= 2 ||
+        throw(AirEvalError("ns-defs takes at most one namespace"))
+    ns = _ns_listing_ns(env, scope, call, "ns-defs")
+    _check_ns!(env, ns, :read)
+    out = FormValue[_store_form(_ns_def_form(e))
+                    for e in _ns_kind_entries(env, ns, :def)]
+    return canonicalize(FormContainer(FormSeq(out), FormMap()))
+end
+special!(Symbol("ns-defs"), _bi_ns_defs)

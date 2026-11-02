@@ -86,7 +86,7 @@ the system namespace `.air.sys` rather than on an entry, and it admits the
 holder to the host-path tools (see [the filesystem](#the-filesystem)).
 
 The four fact/rule permissions govern a namespace's implicit logic set (see
-[logic sets](databases.md#logic-sets-namespaces-and-facts)): `readfact`/`readrule` for
+[production rules](rules.md#production-rules)): `readfact`/`readrule` for
 `facts`, `rules`, `why`, and `query`, and `writefact`/`writerule` for
 `assert`, `retract`, `revise`, and `revise-fact`. A standalone logic-set handle
 keeps the older mapping, where those operations need the set's `read` or
@@ -143,6 +143,7 @@ extends it for the dynamic extent of `body`. Both `.env` and `val` bindings
 travel into a `task`; `(task clean=true …)` starts with empty bindings and
 an empty `.env` but keeps identity and namespace context.
 
+(the-filesystem)=
 ## The filesystem
 
 Ordinary users have no filesystem. The tools that touch a host path directly —

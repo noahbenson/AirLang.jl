@@ -1547,6 +1547,28 @@ function _bi_rules(env::Env, scope::Scope, call::FormContainer)
 end
 special!(:rules, _bi_rules)
 
+# `(ns-facts [target])` / `(ns-rules [target])` — the same value `facts` and
+# `rules` return, with the current namespace as the default target. The result
+# is one held list of the facts or rules themselves, so evaluating it again does
+# not reduce them: `(' (p 1) (q 2))`, and `(')` when there are none.
+function _ns_set_listing(env::Env, scope::Scope, call::FormContainer,
+                         name::AbstractString, key::Symbol, perm::Symbol)
+    _check_options(call, name, ())
+    length(call.seq) <= 2 ||
+        throw(AirEvalError("$name takes at most one target"))
+    t = length(call.seq) == 2 ? _logic_target(env, scope, to_form(call.seq[2])) :
+        _current_ns_target(env)
+    return _set_part(env, t, key, name, perm)
+end
+
+_bi_ns_facts(env::Env, scope::Scope, call::FormContainer) =
+    _ns_set_listing(env, scope, call, "ns-facts", _SET_FACTS, :readfact)
+special!(Symbol("ns-facts"), _bi_ns_facts)
+
+_bi_ns_rules(env::Env, scope::Scope, call::FormContainer) =
+    _ns_set_listing(env, scope, call, "ns-rules", _SET_RULES, :readrule)
+special!(Symbol("ns-rules"), _bi_ns_rules)
+
 # `(why target fact)` — every reason recorded for a fact: explicit base labels
 # and the `(because rule premises…)` provenance of each derivation,
 # deduplicated. A namespace target needs both fact and rule read permission.

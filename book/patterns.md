@@ -98,7 +98,8 @@ caught by its own `catch=`) commits. `tx=false` is the default, an ordinary
 block. `let=`, `catch=`, and `tx=true` need a non-empty body.
 
 `val` accepts the same options and body grammar; its value is evaluated once at
-definition time.
+definition time. [Error handling](errors.md#definition-bodies) covers the
+clause semantics and what a transaction boundary means for a body.
 
 ## Memoization (`memoize=`)
 A `def` may take `memoize=m` to cache results by the evaluated arguments:
@@ -132,8 +133,8 @@ memoized rule do not occupy tail position.
 *Example — Fibonacci Sequence (Reduction Rule):*
 ```air
 (def (f ?n)
-  (if (= n 0) 1
-      (= n 1) 1  # automatic else-if
+  (if (== n 0) 1
+      (== n 1) 1  # automatic else-if
       (+ (f (- n 1)) (f (- n 2)))))
 ```
 
@@ -208,35 +209,16 @@ replacement rule is the default, returned as-is when nothing matches; without on
 the result is `naught`. A non-rule element anywhere but last is an error.
 `select` is an alias.
 
-## Level-Aware Traversal (`depth=`) and Pattern Selection
+(pattern-selection)=
+## Pattern Selection (`cases`, `drop-cases`, `matches-any?`)
 
-`replace`, `rreplace`, `map`, `cases`, and `drop-cases` accept `depth=n`, which
-selects the level of the form they operate on. `depth=0` is the subject itself;
-`depth=n` is every node `n` element steps down, where both sequence elements and
-map values are children, with the structure above the selected level rebuilt.
-A scalar is its own sole element (the same "a scalar is a singleton" convention
-the collection verbs use), so descending past a scalar stays on it; an extern is
-opaque. `replace` and `rreplace` default to `depth=0`; `map`, `cases`, and
-`drop-cases` default to `depth=1`.
-
-```air
-(replace ((a 1) (a 2)) ((a ?x) -> x))          # => ((a 1) (a 2))  (depth 0)
-(replace ((a 1) (a 2)) ((a ?x) -> x) depth=1)  # => (1 2)
-(map (?x -> (wrap x)) (a=(1 2) b=3) depth=2)
-# => (a=((wrap 1) (wrap 2)) b=(wrap 3))
-```
-
-`replace-all` and `rreplace-all` keep their whole-tree walk when `depth` is
-absent; given `depth=n`, they operate only on level `n` (so `depth=0` is then
-exactly `replace`).
-
-`(cases coll clause… depth=n)` collects the elements at that level that match a
+`(cases coll clause…)` collects the elements of a collection that match a
 clause, in encounter order. A clause is a bare pattern (the element itself is
 kept) or a replacement rule `(pattern -> replacement)` (the element is
 replaced); a rule-level guard `(p \ g)` on a bare pattern tests the whole
 element, so `(?x \ even?)` selects even elements. Non-matching elements are
-omitted. `(drop-cases coll clause… depth=n)` returns the collection with the
-matching elements removed and the rest of the structure rebuilt:
+omitted. `(drop-cases coll clause…)` returns the collection with the matching
+elements removed and the rest of the structure rebuilt:
 
 ```air
 (cases (1 2 3 4) (?x \ even?))                 # => (2 4)
@@ -246,7 +228,9 @@ matching elements removed and the rest of the structure rebuilt:
 ```
 
 Unlike `case`, `cases` and `drop-cases` have no default clause: a bare pattern
-is indistinguishable from one.
+is indistinguishable from one. Like `replace` and `map`, both accept `depth=`
+to choose the level they scan; [Traversal by
+depth](collections.md#traversal-by-depth) describes the levels.
 
 `(matches-any? subject clause…)` asks the same question over the **whole tree**:
 it is true when the subject itself or any subpart matches a clause. Clauses are
@@ -277,6 +261,7 @@ The count `n` must be a non-negative integer. `f` and `pred` take a symbol
 naming a rule or a lambda, as the other higher-order verbs do; a predicate that
 never fails is stopped by the reduction budget.
 
+(docstrings)=
 ## Docstrings (`doc`)
 A literal string at the head of a `def` body is that rule's **docstring**; it is
 removed from the executable body. A multiline docstring is deindented: leading

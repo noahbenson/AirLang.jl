@@ -232,7 +232,9 @@ this same block. It takes `let=` and `catch=`, level-1 `:let` markers, and
 trailing `except`/`handle`/`finally` clauses; several body forms are evaluated
 in sequence as by `do`. Everything above applies unchanged: an error from the
 body can be handled by its own `except`, a `throw` by its own `catch=`, and a
-`finally` always runs.
+`finally` always runs. [Patterns](patterns.md#definition-bodies-are-blocks)
+describes the options themselves; this section covers their consequences for
+errors and transactions.
 
 `tx=true` (the only `def`-specific option besides `memoize=`) runs the whole
 body as a `tx` instead of a `do`:
@@ -257,7 +259,8 @@ stores nothing.
 A `do` with no `catch=`, `except`, `handle`, or `finally` keeps its last body
 form in tail position (including when it uses `:let`/`let=`), so a tail call
 through it does not grow the stack. Any condition-handling feature makes the
-block run eagerly, and `tx` is never a tail form.
+block run eagerly, and `tx` is never a tail form. See [Tail position and
+`exit`](control.md#tail-position-and-exit) for the full list of tail forms.
 
 ### Migration from `try`
 
@@ -315,7 +318,10 @@ conventionally `(error :internal message)`. Air conditions use their own heads
 ## 6. Transactional integration (STM)
 
 Error handling interacts directly with Air's Software Transactional Memory
-(`Air.jl`) and persistence layer (`AirDB.jl`):
+(`Air.jl`) and persistence layer (`AirDB.jl`). The transaction model itself —
+joining rather than nesting, `watch`, finalizers, and `sandbox` — is described
+in [Mutability and transactions](mutability.md#transactions); this section is
+the error-handling view of it.
 
 * **Uncaught errors abort.** An error that escapes its enclosing transaction
   boundary triggers an automatic **STM transaction abort and rollback**,

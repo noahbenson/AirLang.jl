@@ -54,6 +54,7 @@ learns who posted an object and when:
 An item that is not an envelope — a stream written through the AirDB API
 directly — reads back unchanged in both modes.
 
+(timeouts)=
 ## Timeouts
 
 `timeout=` is in seconds and bounds the wait in both directions:

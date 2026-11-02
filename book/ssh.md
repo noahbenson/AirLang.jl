@@ -3,7 +3,7 @@
 An air process can serve SSH. A user logs in with a key listed in their own
 configuration and lands as themselves, in their home namespace, at a REPL; the
 same account serves SFTP, so `scp` and `sftp` move files in and out. A
-transferred file is an immutable [`bytes`](externs.md#5-bytes-an-immutable-extern)
+transferred file is an immutable [`bytes`](externs.md#bytes)
 value and a directory is a namespace — there are no files in air, only paths.
 
 The server is a process resource named by a key, like a task, not a value you
@@ -154,6 +154,7 @@ channel, including from a `task` the session spawns. There is no
 non-interactive exec: `ssh host command` is refused (it opens a channel request
 air does not serve).
 
+(interactive-uis-over-ssh)=
 ### Interactive UIs over SSH
 
 Every SSH session is a **connection**: air records it under `.io.conn` as

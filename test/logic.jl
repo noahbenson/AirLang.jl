@@ -407,3 +407,25 @@
     @test ev("(rule? (p 1))") == "false"
     @test_throws AirEvalError air_eval(env, read_air("(because 5)"))
 end
+
+@testset "namespace logic listings" begin
+    db = MemoryDatabase()
+    env = AirLang.Env(db = db)
+    ev(s) = air_string(air_eval(env, read_air(s)))
+
+    # Without a target, ns-facts/ns-rules use the enclosing namespace.
+    @test ev("(namespace .lfacts (assert (p 1)) (assert (p 2)) (ns-facts))") ==
+        "(' (p 1) (p 2))"
+    @test ev("(ns-facts .lfacts)") == "(' (p 1) (p 2))"
+    @test ev("(namespace .lfacts (assert (rule (p ?x) :> (q ?x))) " *
+             "(ns-rules))") == "(' (rule (p ?x) :> (q ?x)))"
+    @test ev("(ns-rules .lfacts)") == "(' (rule (p ?x) :> (q ?x)))"
+
+    # An absent set reads as empty; `(')` is the empty held list.
+    @test ev("(namespace .lfacts2 (ns-facts))") == "(')"
+    @test ev("(ns-rules .lfacts2)") == "(')"
+
+    # The argument is the same target argument `facts`/`rules` accept.
+    @test_throws AirEvalError air_eval(env, read_air("(ns-facts .nope)"))
+    @test_throws AirEvalError air_eval(env, read_air("(ns-facts x y)"))
+end

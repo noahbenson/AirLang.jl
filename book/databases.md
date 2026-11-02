@@ -112,62 +112,24 @@ database administrator).
 (logic-sets-namespaces-and-facts)=
 ## Logic sets, namespaces, and facts
 
-A **logic set** is a named volatile holding facts, rules, and their provenance.
-There are two ways to reach one.
-
-A **standalone set** is named explicitly: `(logic-set :s)` is `(named-form :s)`
-whose value has the logic-set shape, and every operation takes it as its target.
-Its ACL is the old mapping — mutating the set (`assert`, `retract`, `revise`,
-`revise-fact`, and `logic`) needs `write`, and every query (`facts`, `rules`,
-`why`, and `query`) needs `read`, as does opening the set by name.
-
-Every **namespace is implicitly a logic set**. `(assert .foo (p 1))` writes into
-the set of `.foo`; with no target, `(assert (p 1))` writes into the current
-namespace, so a bare `assert` inside `(namespace .foo …)` or while `.foo` is
-current edits `.foo`. `facts`, `rules`, `why`, `query`, `revise`, `retract`,
-`revise-fact`, `defrule`, and `ingest` accept a namespace the same way. The set
-is stored as the hidden named form `air/logic/<path>` (`air/logic` at the root)
-in the namespace's own database, so it persists, shares the namespace's access
-control, and never appears in `named-forms`; `air/` is reserved, so it cannot be
-opened by name. The set is created lazily by the first fact or rule write; a
-namespace with no set reads as an empty set, and a read never creates one.
+Every namespace is implicitly a **logic set**, so the facts and rules asserted
+into it are stored as the hidden named form `air/logic/<path>` (`air/logic` at
+the root) in the namespace's own database. They therefore persist with that
+database, share the namespace's access control, and never appear in
+`named-forms`; `air/` is reserved, so the set cannot be opened by name. The set
+is created lazily by the first fact or rule write, a namespace with no set
+reads as an empty set, and a read never creates one.
 
 ```air
 (namespace .app)
 (assert .app (depends :app :lib1))       ; creates air/logic/app
-(assert .app (rule (depends ?x ?y) :> (needs ?x ?y)))
-(facts .app)                             ; => (' (depends :app :lib1) (needs :app :lib1))
-(query .app (needs ?x ?y))               ; => ((x=:app y=:lib1))
+(facts .app)                             ; => (' (depends :app :lib1))
 ```
 
-`(facts target)` and `(rules target)` return one **held list** of the facts or
-rules — `(' (depends :app :lib1) (needs :app :lib1))`, and `(')` for an empty
-set — whose elements are the facts themselves, unheld, so the list is ordinary
-data that a `def` cannot rewrite while the hold keeps evaluating it inert.
-
-The four fact/rule permissions gate these operations on a namespace
-(`readfact`/`writefact`/`readrule`/`writerule`; see
-[permissions](permissions.md#permissions)); a `rule` form asserted or retracted needs the
-`…rule` permission, and `why` needs both read permissions.
-
-`(query [target] pattern…)` returns every distinct satisfier of a rule-like
-condition block as a plain list of maps, in first-seen order: `(query .app
-(depends ?x ?y))`. The patterns are the rule engine's conditions — an implicit
-conjunction, `(not p)` for negation, and infix `and` — but there are no
-instructions and no accumulators. A pattern whose head is `rule` searches the
-rule universe; every other pattern searches the facts. A satisfier with no
-bindings is `(naught)`, and no satisfier is `naught`. `(defrule conditions…
-instructions…)` builds a `(rule …)` form from its raw arguments and asserts it
-into the current target, returning the rule. `(ingest source)` copies a source's
-base facts and rules into the current target in one transaction and saturates it,
-so derived facts are rederived rather than copied; it checks exactly the
-permissions it uses, all before mutating anything. Live propagation from a source
-to its dependants is not implemented (`depend` is a tombstone) and is tracked in
-`TODO.md`.
-
-Every operation outside a `logic` block is its own transaction, so separate
-`assert`s commit independently; `(logic target body…)` collects the body's edits
-and applies them as one event, and any enclosing `(tx …)` also joins them.
+`(logic-set :s)` makes a **standalone** set instead, an ordinary named form
+whose value has the logic-set shape; the two differ only in how their
+permissions are mapped. [Production rules](rules.md#production-rules)
+describes both targets, the operations, their results, and their permissions.
 
 ## Sync and status
 

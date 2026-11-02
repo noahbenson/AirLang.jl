@@ -129,7 +129,7 @@ Julia accepts for their type.
 
 ## Equality
 
-The three relations in [the data model](data-model.md#5-equality-equivalence-and-hashing)
+The three relations in [the data model](data-model.md#equality)
 treat numbers as follows:
 
 * `eq?` is AirDB's `isequiv`: the same type and the same value. `(eq? 1 1.0)`,

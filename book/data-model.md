@@ -3,7 +3,10 @@
 Every value in air is a **form**: an immutable, JSON-like tree of scalars and
 containers. Code is a form too, which is why a rule can rewrite a program and a
 program can build a rule. This chapter describes the form itself, quoted forms
-(holds), mutables, and the three equality relations.
+(holds), and the three equality relations. Mutable state is the one exception to
+immutability and is described in [Mutability and
+transactions](mutability.md); the accessor and update verbs are in
+[Collections](collections.md).
 
 ## 1. Forms and Collections
 A **form** is an immutable object that contains actual data. Strings, symbols,
@@ -21,56 +24,14 @@ booleans, and the null value `naught` are all considered subtypes of the
   `(f a=3 1 b=4 2)` are all equal forms).
 * **Empty Form:** There is exactly one empty form `()`, which is considered
   logically false and identical to `naught` (acting as a `nil` value).
-* **Querying:** Collection contents can be queried by treating them as
-  functions; for a form `f` equal to `(1 (2 3) a=(g h i))`, `(f 1)` returns
-  `1`, `(f 2)` returns `(2 3)`, and `(f :a)` returns `(g h i)`. Extended
-  argument lists forward through the return value (e.g., `(f 2 1)` returns
-  `2`).
-* **Updating:** `(with form k1 v1 …)` replaces the subform at each key (a
-  sequence key is a nested path, and an integer key `n + 1` appends);
-  `(update coll key f)` replaces it with `(f old)`; `(update-in coll k1 … kn
-  f)` does the same at a deep path, with a missing key yielding `naught` to
-  `f`; and `(wout form k…)` removes the subform. Extra arguments to `f` are
-  written with `part`, as in `(update-in m :a (part + 10))`.
-* **The wildcard key:** the lone `:` names **every entry of a level** — each
-  sequence element in order, then each map value in canonical key order (the
-  printer's order; air does not preserve the order in which keys were written).
-  In `get` it selects the whole level and maps the rest of the path over each
-  entry, so the result is an ordinary sequence and map values lose their keys
-  (`(get ((a=1) (a=2)) : :a)` is `(1 2)`, `(get (a=1 b=2) :)` is `(1 2)`, and
-  `(get (1 2 a=3) :)` is `(1 2 3)`); in `with` a scalar is **broadcast** to
-  every entry (`(with (a=1 b=2) : 9)` is `(a=9 b=9)`) and a container supplies
-  one value per entry in that same canonical order (`(with (b=2 a=1) : (7 8))`
-  is `(a=7 b=8)`), with each sequence position and map key kept in place; in
-  `wout` and `drop` it removes every entry, and as an intermediate step it
-  applies the rest of the path to each one (`(wout ((a=1 x=0) (a=2 x=0)) : :x)`
-  is `((a=1) (a=2))`). A scalar is its own sole entry and `naught` is empty; a
-  table has its own path rules (`:` keeps its meaning of all rows or all
-  columns, and a lone `:` raises). When any `wout` key is `:`, its key
-  arguments form one path.
-
-  **Map entries can be unintuitive.** Map values are paired in *canonical key
-  order*, not source order, so `(with (b=2 a=1) : (7 8))` is `(a=7 b=8)` —
-  write the values in the order the printer would show the keys. On a mixed
-  level the sequence elements always come first, so
-  `(with (1 2 a=3) : (7 8 9))` is `(7 8 a=9)`. A **scalar** sets every entry
-  (`(with (a=1 b=2) : 9)` is `(a=9 b=9)`), but a one-element form is one value,
-  not a broadcast, so `(with (a=1 b=2) : (9))` raises — air never collapses
-  `(9)` into `9`. And `get` returns the values alone, so `(get (a=1 b=2) :)` is
-  `(1 2)`, with no record of which key held which value.
-* **Locating:** `(where coll obj depth=d)` finds every element at depth `d`
-  equal to `obj`. With no `depth`, it searches depth `1` and returns the **bare
-  keys** of the matches in encounter order: `(where (:a :b :b :c) :b)` is
-  `(2 3)` and a single match `(where (:a :b :c) :b)` is `(2)`. With an explicit
-  non-negative integer `depth`, it returns **one path per occurrence**, each
-  path a list of `d` keys: `(where ((1 2) (3 2)) 2 depth=2)` is
-  `((1 2) (2 2))` and `(where (:a :b :c) :b depth=1)` is `((2))`. At `depth=0`
-  the subject is the only candidate and its sole key is the whole-form key `0`,
-  so the result is `((0))` when the subject equals `obj` and `()` otherwise.
-  `depth=:all` searches every depth and returns one path per occurrence, each of
-  its own length: `(where (:a :b (:a :b) :c) :b depth=:all)` is `((2) (3 2))`.
-  No match is `()` in every mode. Results are plain (not held); splice a path
-  into `get`, `with`, or `update-in`: `(get coll (first (where …))...)`.
+* **Querying and updating:** a form can be indexed by treating it as a
+  function — for a form `f` equal to `(1 (2 3) a=(g h i))`, `(f 1)` returns
+  `1`, `(f 2)` returns `(2 3)`, and `(f :a)` returns `(g h i)` — and `get`,
+  `with`, `wout`, `update`, `update-in`, `push`, and `pop` are the verbs behind
+  that idea. A path is a sequence of keys, an integer key counts from 1, and a
+  missing key is `naught` to `update-in`'s function. [Collections](collections.md)
+  covers the accessor, the lone-`:` wildcard, the scalar-as-singleton
+  convention, locating with `where`, and the whole collection surface.
 
 ## 2. Scalars and Single-Element Forms
 A scalar is its own sole sequence for the accessors: `(get 10 1)` is `10`,
@@ -83,6 +44,7 @@ forms and `(eq? 10 (10))` is false. A one-element form reduces only when a
 `()` and `naught` are the same singleton at every depth, so `(same? () naught)`
 is true and no container ever embeds an empty container.
 
+(holds)=
 ## 3. Literal Forms and Meta-Programming (`(' ...)` and `~`)
 Holding is **structural**, not a flag: the canonical hold is a container whose
 first element is the ordinary symbol `'`, `(' a b c)`. `'` is an ordinary
@@ -116,7 +78,8 @@ a parse error — write `(' …)`.
   transparent — the path then indexes the *content*, intermediate values are not
   reduced, and the result is held: `(get (' f (1 + 2)) 2 hold=true)` is
   `(' 1 + 2)`. This works for any form that keeps its arguments as data
-  (`(get (part add 10) 2 hold=true)` is `'add`).
+  (`(get (part add 10) 2 hold=true)` is `'add`, where `part` is the partial
+  application of [Patterns](patterns.md#lambdas-a-replacement-rule-in-head-position)).
   `(with form k1 v1 … hold=true)` is the inverse: it replaces the subform at
   each path with its value, inserted without its own hold and not evaluated —
   `(with (' a b c) 2 (' 1 + 1) hold=true)` is `(' a (1 + 1) c)`. `(held? x)`
@@ -135,78 +98,8 @@ a parse error — write `(' …)`.
   accepts `hold=true` for the same treatment (`(get (1 2 3) 2 hold=true)` is
   `(' 2)`).
 
-## 4. Mutables
-In addition to immutable atom types, there is a `mutable` type that `form`
-objects are able to contain. All `mutable` objects are simple
-pointers/references automatically synchronized across threads in a fashion
-similar to Clojure's `ref` objects (implemented via `AirDB.jl`).
-
-Mutables can be created using `(mut)`. Mutables automatically vanish during
-queries, but can be updated using `(set! ...)` which traverses forms and updates
-the deepest mutable object on the path. For example, if `f` equals 
-`(1 (2 (mut (3 (4 5)))))`, then `(set! f 2 2 2 2 6)` updates the mutable at
-`(f 2 2)` such that its value has been updated to set its position `2 2` to the
-value `6`. `(value m)`, `(get m)`, and `(get m 0)` all read the mutable's value;
-`(swap! m f args…)` (alias `alter!`) replaces it with `(f value args…)` in one
-transaction and returns the new value, so a lost update is impossible.
-
-Every operation that *edits* a mutable in a transaction ends in `!`: `set!`,
-`swap!`, `alter!`, `chmod!`, and `chown!`. `mut` does not, because it creates
-rather than edits a volatile. `(reset! actor value)` replaces an actor's value
-directly (see [Delays, actors, and promises](namespaces.md#delays-actors-and-promises)); a
-mutable is written with `set!`.
-
-`(mut value filter=… finalize=…)` attaches Air's filter and finalizer. Both are
-kept as written and stored in the mutable's metadata, so they survive a reload.
-A replacement rule `(?x -> …)` is applied as a function; any other form is
-evaluated with `_` bound to the value, so `filter=(if (_ < 0) 0 _)` clamps at
-zero. A filter runs on every write (including the value passed to `mut`) and its
-result is stored; a finalizer runs after the body of the writing transaction and
-before it commits, and its result replaces the value. Because the finalizer runs
-in the transaction's finalizing state, volatiles cannot be written from it.
-`(set-filter! m fn)` and `(set-finalize! m fn)` replace them later (`naught`
-removes one).
-
-`(watch m key fn)` registers `fn` to run as `(fn key m old new)` at the end of
-the body of the outermost transaction that writes `m`, before it commits. The
-watch runs as the user who registered it, in the namespace where it was
-registered, and once per mutable per transaction (with the transaction's final
-value). Its writes are part of the same transaction, so a retry reruns it; a
-`raise` from it aborts the transaction, while a `throw` is deferred like any
-throw caught outside (see `tx` below). Watches are stored in the mutable's
-metadata and survive a reload; a watch function must be self-contained (a
-replacement rule, not a code fragment using `_`). Installing a watch needs
-`watch` and `read` on the mutable; `watch` is owner-only by default.
-`(unwatch m key…)` removes one watch or all of them, and `(watches m)` returns
-the held watch tables.
-
-`(tx body…)` evaluates the body inside one STM transaction and yields its last
-value. It accepts the full `do` block grammar — `:let`/`let=`, `catch=`/`throw`,
-`except`, `handle`/`notify`, and `finally` — all prepared and run inside the
-transaction. Air's transactions join rather than nest: `tx` joins an open
-transaction, so the outermost `tx` is the commit/rollback boundary (`namespace`,
-`load-air`, a logic-set edit, and `set!` are transactional too). An error that
-escapes it aborts every write made since it began and propagates, even if an
-outer block catches it; an error caught by the tx's own `except` commits. A
-throw caught by the tx's own `catch=` commits. A throw that escapes the tx to an
-outer `catch=` is deferred until after the commit: watches run as usual, the
-transaction commits, and the signal is rethrown (a retried attempt discards it).
-Watches run at the end of that outermost transaction body, so their writes commit
-or roll back with it.
-
-`(sandbox body…)` evaluates the same block grammar in a transaction that is
-**never committed**: it yields the body's value and discards every write, so a
-`def`, `val`, `mut`, fact, rule, or namespace created inside it is gone
-afterwards. It is the way to try something out — a rule you are not sure about,
-a namespace edit you want to test — without touching the namespace. Because Air's
-transactions join rather than nest, the body runs in a transaction of its own on
-a private task (the caller waits for it), which means it cannot abort a
-transaction around it and it reads committed state rather than an enclosing
-transaction's staged writes. A `throw` still reaches an enclosing `catch=` and a
-`notify` an enclosing `handle`; side effects outside the database (a file write,
-`open-airdb`) are not undone.
-
-## 5. Equality, Equivalence, and Hashing
+(equality)=
+## 4. Equality, Equivalence, and Hashing
 Three relations are distinct:
 
 * `(same? a b)` is object **identity** (`===`).
@@ -216,8 +109,9 @@ Three relations are distinct:
   (`(eq? -0.0 0.0)` is true) and `NaN` is equivalent to itself. Two containers
   are equivalent when their sequences are
   elementwise equivalent and their maps hold equivalent values under the same
-  keys (map order is irrelevant). A mutable (a volatile), an actor, and a
-  promise are equivalent only to themselves; an extern follows its own
+  keys (map order is irrelevant). A **mutable** — a shared, writable cell,
+  described in [Mutability](mutability.md) — and the database-backed handles
+  (an actor, a promise) are equivalent only to themselves; an extern follows its own
   `isequal`, so two separately compiled equal regex values are equivalent while
   two tasks' promises are not. A delay is equivalent when its type and its
   serialization agree — equivalence never forces one. Everything immutable

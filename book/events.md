@@ -168,6 +168,7 @@ checkpoint that records it repeats that step, and the sequence of `checkpoint`
 call sites must be deterministic across attempts. The record is cleared when a
 run completes, so a later resume starts clean.
 
+(durability-and-resume)=
 ## Durability and resume
 
 A job's record is a database value: a mapping holding its identity, kind,

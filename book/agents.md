@@ -12,7 +12,7 @@ replies.
 
 The layer is deliberately narrow. It connects air to a provider, manages the
 context window, and turns text into a reply; the agent does not evaluate air
-code, call tools, or stream tokens (see [Limits](#limits)).
+code, call tools, or stream tokens (see [Limits](#agent-limits)).
 
 ## Creating an agent
 
@@ -290,6 +290,7 @@ One worker runs per session per process; a second process over the same
 database is not coordinated with the first, so it is best to treat a session as
 belonging to one running process at a time.
 
+(agent-limits)=
 ## Limits
 
 * No streaming: a reply arrives whole.

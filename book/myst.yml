@@ -8,43 +8,51 @@ project:
   toc:
     - file: index.md
     - file: getting-started.md
-    - title: The language
+    - title: Foundations
       children:
         - file: syntax.md
         - file: data-model.md
-        - file: numbers.md
-        - file: tensors.md
+        - file: control.md
+        - file: errors.md
         - file: patterns.md
+    - title: Data types and collections
+      children:
+        - file: numbers.md
+        - file: strings.md
+        - file: collections.md
+        - file: tables.md
+    - title: Namespaces and rules
+      children:
         - file: namespaces.md
         - file: permissions.md
-    - title: Concurrency
+        - file: rules.md
+        - file: production-rules.md
+    - title: Mutation and concurrency
       children:
+        - file: mutability.md
+        - file: tensors.md
+        - file: concurrency.md
         - file: streams.md
-    - title: Files and databases
+        - file: events.md
+    - title: Storage and data exchange
       children:
         - file: libraries.md
         - file: databases.md
-        - file: tables.md
         - file: formats.md
     - title: Interfaces
       children:
         - file: ssh.md
         - file: ui.md
         - file: agents.md
-        - file: events.md
-    - title: Rules
-      children:
-        - file: rules.md
-        - file: production-rules.md
     - title: Reference
       children:
-        - file: errors.md
         - file: externs.md
         - file: time.md
         - file: printing.md
         - file: testing.md
+        - file: documentation.md
         - file: status.md
-    - title: Examples
+    - title: Practice
       children:
         - file: examples.md
         - file: problem-set.md

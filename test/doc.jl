@@ -13,13 +13,14 @@
     @test ev("(log 1.0)") == "101.0"
     @test ev("(log 2 8)") == "208"
 
-    # `(doc symbol)` lists every documented pattern that uses the symbol, in
-    # definition order.
-    @test doc("(doc log)") ==
+    # `(doc symbol)` lists the builtin's catalogue entry first, then every
+    # documented pattern that uses the symbol, in definition order.
+    @test startswith(doc("(doc log)"), "log  (builtin :math)\n")
+    @test endswith(doc("(doc log)"),
         "(log ?x \\ number?)\n" *
         "  Returns the natural log of x.\n\n" *
         "(log ?base \\ number? ?x \\ number?)\n" *
-        "  Returns the log-base-b of x."
+        "  Returns the log-base-b of x.")
 
     # `(doc (form…))` holds its argument (the builtin `log` is not called) and
     # lists only the patterns that match.
@@ -79,5 +80,51 @@
     # Redefining a pattern replaces its docstring in place.
     air_eval(env, read_air(
         "(def (log ?x \\ number?) \"Returns ln(x).\" x)"))
-    @test doc("(doc (log 1))") == "(log ?x \\ number?)\n  Returns ln(x)."
+    @test endswith(doc("(doc (log 1))"), "(log ?x \\ number?)\n  Returns ln(x).")
+
+    # ---- the builtin catalogue ------------------------------------------------
+    # Every builtin and operator name has an entry in the catalogue, so `(doc)`
+    # is a complete inventory of the language. `docdef` entries that name a
+    # reserved head rather than a registered builtin (`error`, `signal`, `ui`)
+    # are allowed.
+    for n in keys(AirLang.BUILTINS)
+        @test haskey(AirLang.BUILTIN_DOCS, n)
+    end
+    for n in keys(AirLang.OPERATORS)
+        @test haskey(AirLang.BUILTIN_DOCS, n)
+    end
+    @test all(!isempty(t[2]) for t in values(AirLang.BUILTIN_DOCS))
+
+    # `(doc)` and `(doc .air)` return the index; a category name is a path form
+    # to the same table.
+    @test startswith(doc("(doc)"), "Air documents ")
+    @test doc("(doc .air)") == doc("(doc)")
+    @test occursin(":math (", doc("(doc)"))
+    @test occursin("  sqrt", doc("(doc)"))
+
+    # `.air.NAME` documents that builtin, including a reserved head (`hold`),
+    # and a name with no catalogue entry reports the miss.
+    @test startswith(doc("(doc .air.sqrt)"), "sqrt  (builtin :math)\n")
+    @test startswith(doc("(doc hold)"), "hold  (builtin :hold)\n")
+    @test doc("(doc (get . :air :sqrt))") == doc("(doc .air.sqrt)")
+
+    # `(help)` prints an introduction; `(help :category)` and `(help :all)`
+    # print an index; `(help NAME)` prints that entry.
+    helpout(s) = begin
+        buf = IOBuffer()
+        ctx = AirLang.TaskContext(Symbol("air"), nothing, nothing, naught, buf)
+        AirLang._with_context(env, ctx, () -> air_eval(env, read_air(s)))
+        String(take!(buf))
+    end
+    @test startswith(helpout("(help)"), "Air is a ")
+    @test occursin("term rewriting", helpout("(help)"))
+    @test occursin("(doc .air)", helpout("(help)"))
+    @test helpout("(help :table)") ==
+        ":table (6)\n  table  table?  columns  schema  nrows  table-index\n"
+    @test occursin("Air documents ", helpout("(help :all)"))
+    @test helpout("(help :frobnicate)") ==
+        "no documentation category :frobnicate\n"
+    @test startswith(helpout("(help sqrt)"), "sqrt  (builtin :math)\n")
+    @test helpout("(help)") == AirLang._HELP_INTRO
+    @test_throws AirEvalError air_eval(env, read_air("(help a b)"))
 end

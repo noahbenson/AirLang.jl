@@ -9,6 +9,7 @@ The inner system handles bottom-up algebraic evaluation, function definition
 like `(f 2)` is submitted to the evaluation engine, reduction rules evaluate it
 recursively until a fixed point is reached.
 
+(production-rules)=
 ## 2. Production Rules (Outer System / Deductive Engine)
 The outer system operates like a DROOLS rules engine backed by `logic-set`
 objects.
@@ -21,6 +22,36 @@ objects.
   optional `reason=` — `naught` (the default) or a keyword. `revise` changes
   only base facts: the condition binds wildcards and the `(k=v …)` map gives
   their new values.
+* **Where a set lives.** A namespace's set is the hidden named form
+  `air/logic/<path>` (`air/logic` at the root) in the namespace's own database,
+  created lazily by the first write; an absent set reads as empty and a read
+  never creates it. `(assert .foo (p 1))` targets `.foo`, and with no target an
+  operation edits the enclosing `(logic s …)` block or the current namespace.
+  `(logic-set :s)` makes a standalone set — an ordinary named form — and the
+  two differ only in their permission mapping: a standalone set maps the four
+  fact/rule permissions onto its `read`/`write` (mutation needs `write`, every
+  query `read`), while a namespace target uses `readfact`/`writefact`/
+  `readrule`/`writerule` — a `rule` form uses the `…rule` pair, and `why` needs
+  both read permissions. See [Permissions](permissions.md#permissions) and
+  [Databases](databases.md#logic-sets-namespaces-and-facts).
+* **Reading a set.** `(facts s)` and `(rules s)` return one **held list** of the
+  facts or rules — `(' (p 1) (q 2))`, and `(')` when the set is empty — whose
+  elements are the facts themselves, so the list is ordinary data that a `def`
+  cannot rewrite while the hold keeps evaluating it inert. `ns-facts` and
+  `ns-rules` return the same lists for a namespace (see
+  [Namespaces](namespaces.md#listing-entries)). `(query [s] pattern…)` returns
+  every distinct satisfier of a condition block as a plain list of maps in
+  first-seen order, so `(query .app (needs ?x ?y))` is `((x=:app y=:lib1))`;
+  the patterns are the conditions above (an implicit conjunction, `(not p)`,
+  infix `and`) but with no instructions and no accumulators, a `rule`-headed
+  pattern searches the rules while every other pattern searches the facts, a
+  satisfier with no bindings is `(naught)`, and no satisfier is `naught`.
+* **Transactions.** Every operation outside a `logic` block is its own
+  transaction, so separate `assert`s commit independently; `(logic s body…)`
+  collects the block's edits into one event, and an enclosing `(tx …)` joins
+  them. `ingest` checks exactly the permissions it uses before mutating
+  anything. Live propagation from a source to its dependants is not implemented
+  (`depend` is a tombstone) and is tracked in `TODO.md`.
 * **`->` is replacement-only.** `(pattern -> replacement)` is inert data for the
   `replace` family (see below); it is not a rule in the outer system. A form
   containing `->` asserted into a logic-set is an ordinary fact.

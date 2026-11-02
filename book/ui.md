@@ -463,6 +463,7 @@ status line also reports the closure verdict from the reader itself — `code ·
 closed`, `code · unclosed`, `code · error` — so a buffer that would not parse
 cannot run.
 
+(code-block)=
 ### `code-block`
 
 One buffer with an output area. `Ctrl-J` checks the closure verdict and refuses
@@ -502,6 +503,7 @@ The text that produced the current definitions is remembered as "saved".
 
 The editor edits *source text*, not live forms.
 
+(notebook)=
 ### `notebook`
 
 A column of paired cells: each has an input buffer and its output, and output is

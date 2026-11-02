@@ -236,17 +236,16 @@ function _collect_doc_rules!(out::Vector{Rule}, env::Env, scope::Scope,
     return out
 end
 
-# `(doc symbol)` lists every documented rule whose pattern uses `symbol`;
-# `(doc (form…))` holds its argument and lists every documented rule whose
-# pattern matches that form.
+# `(doc)` returns the index of documented builtin names; `(doc symbol)` lists
+# the builtin's catalogue entry and every documented rule whose pattern uses
+# `symbol`; `(doc (form…))` holds its argument and lists every documented rule
+# whose pattern matches that form. `.air` is the index and `.air.name` names a
+# builtin, so `(doc .air.sqrt)` documents `sqrt`.
 function _bi_doc(env::Env, scope::Scope, call::FormContainer)
+    length(call.seq) == 1 && return Form(_doc_index_text())
     length(call.seq) == 2 ||
         throw(AirEvalError("doc expects a symbol or a single form"))
-    arg = to_form(call.seq[2])
-    entries = [(r.pattern, r.doc) for r in _doc_rules(env, scope, arg)
-               if r.doc !== nothing]
-    isempty(entries) && return Form("no documentation found for " * air_string(arg))
-    return Form(_doc_text(entries))
+    return Form(_doc_return_text(env, scope, to_form(call.seq[2])))
 end
 special!(:doc, _bi_doc)
 

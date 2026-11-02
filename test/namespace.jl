@@ -108,6 +108,38 @@
     @test ev("(using . rootval)") == "1"
 end
 
+@testset "namespace listings" begin
+    env = default_env()
+    ev(s) = air_string(air_eval(env, read_air(s)))
+
+    @test ev("(namespace .ls (val a 1) (val b 2) (def (twice ?x) (* x 2)))") ==
+        "naught"
+    @test ev("(ns-vals .ls)") == "(:a :b)"
+    @test ev("(ns-defs .ls)") == "((' def (twice ?x) (* x 2)))"
+
+    # The default target is the current namespace.
+    @test ev("(namespace .ls2 (val z 1) (ns-vals))") == "(:z)"
+    @test ev("(namespace .ls2 (val z 1) (ns-defs))") == "naught"
+
+    # A redefined val appears once, at its later position; defs do not collapse.
+    @test ev("(namespace .ls (val a 3))") == "naught"
+    @test ev("(ns-vals .ls)") == "(:b :a)"
+    @test ev("(namespace .ls (def (twice ?x) (* x 3)))") == "naught"
+    @test ev("(ns-defs .ls)") ==
+        "((' def (twice ?x) (* x 2)) (' def (twice ?x) (* x 3)))"
+
+    # A docstring survives as a doc= entry; the stored source position (src=)
+    # does not, so the listing is the definition form as it would be written.
+    @test ev("(namespace .ls (def (d ?x) \"docs\" x))") == "naught"
+    @test ev("(ns-defs .ls)") ==
+        "((' def (twice ?x) (* x 2)) (' def (twice ?x) (* x 3)) " *
+        "(' def (d ?x) x doc=\"docs\"))"
+
+    # Each element is held, so the rule forms are data rather than calls.
+    @test ev("(held? (get (ns-defs .ls) 1))") == "true"
+    @test ev("(get (ns-defs .ls) 1)") == "(' def (twice ?x) (* x 2))"
+end
+
 @testset "thread-local vals" begin
     env = default_env()
     ev(s) = air_string(air_eval(env, read_air(s)))

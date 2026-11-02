@@ -87,7 +87,6 @@ The task's identity, current namespace, database root, and `.env` mapping
 travel with spawned tasks, so a `task` sees the same roots (see
 [Tasks](#tasks)).
 
-(using-use-and-import)=
 ## Listing entries
 
 `ns-entries` lists a namespace's entries as data, filtered by permission:
@@ -114,8 +113,28 @@ listings — never blanked or greyed, so an unreadable entry and a `hide`d one l
 identical to a name that does not exist. A subnamespace is listed only when its
 own namespace is readable.
 
+Three more listings name the definitions rather than describe them. `ns-vals`
+returns the readable `val` names as keywords, newest definition last, with a
+name redefined in the namespace appearing once at its last position. `ns-defs`
+returns the readable `def` rules, each as its definition form held and with
+`def` replaced by `'`:
+
+```air
+(namespace .util (val answer 42) (def (twice ?x) (* x 2)))
+(ns-vals .util)   # => (:answer)
+(ns-defs .util)   # => ((' def (twice ?x) (* x 2)))
+```
+
+Both default to the current namespace and accept the same target argument as
+`ns-entries`. Any stored source position (`src=`) is stripped from a `ns-defs`
+element; a docstring survives as a `doc=` entry. The facts and rules of a
+namespace's implicit logic set are listed by `ns-facts` and `ns-rules`, which
+return the same held lists as `(facts target)` and `(rules target)`; see
+[The two rule systems](rules.md#production-rules).
+
 The namespace browser in [User interfaces](ui.md) is a view over `ns-entries`.
 
+(using-use-and-import)=
 ## `using`, `use`, and `import`
 
 `(using spec… body…)` activates one namespace, or a list of them, for `body`:
@@ -206,77 +225,13 @@ reinstalled with `bind`:
 ```
 
 (tasks)=
-## Tasks
+## Tasks and other threads of work
 
-`(task form…)` holds its arguments and evaluates them on a separate task,
-returning a database-backed **promise** immediately. `(await p)` blocks until
-the task finishes and returns the value of the final form, or rethrows the
-task's error; `(get p)` and `(ready? p)` read the same promise. A task captures
-its enclosing lexical scope (like a closure), keeps the namespace context active
-at the point it was created, and **inherits the current task's `val` bindings**:
-
-```air
-(val x 10)
-(bind (x=100) (await (task (+ x 1))))   # => 101
-```
-
-The spawned task receives a copy of the bindings, so a later `bind` in the parent
-does not change what the task sees. `bindings=false` installs no overrides and
-`bindings=(x=1 …)` installs exactly those values. A task is a process item: its
-promise lives in the current namespace's database, but the running task itself
-is not serialized, so a promise whose task never delivered (because the process
-stopped) is simply never delivered.
-
-`(task form… durable=true name=:x)` instead registers a **durable task** — a
-record in `$.config.tasks` that reruns from the start after a restart, replaying
-its `(checkpoint form)` steps — and `(do-at …)`, `(do-in …)`, `(tx-at …)`, and
-`(tx-in …)` schedule events the same way. See
-[Events and Durable Tasks](events.md).
-
-(delays-actors-and-promises)=
-## Delays, actors, and promises
-
-Three reference forms are backed by live objects *and* by the database, so they
-survive a serialization round trip.
-
-`(delay body…)` computes its body lazily and at most once. `(get d)`, `(get d 0)`,
-and any `get` path that walks *through* `d` force it; a delay vanishes on the
-path exactly as a mutable does. Free lexical names are substituted into the body
-like a task's, and the namespace context active at creation — the current
-namespace, its active `using` layers, the thread-local `val` bindings, `@`, and
-`.env` — is saved with it, so the body runs correctly later, even after the
-database is reopened. The first force stores the value in the delay's database
-cell and every later force returns it without running the body again:
-
-```air
-(val counter (mut 0))
-(val d (delay (set! counter (+ (get counter) 1))))
-(get d)        # => 1
-(get d)        # => 1 (the body does not run again)
-(get counter)  # => 1
-```
-
-A delay is immutable and never forces on printing or serialization. The body
-runs as the user who forces it (like a stored `def`), and a body that forces its
-own delay raises a catchable error rather than recursing.
-
-`(actor value history=true)` is a sequential worker whose value is persisted on
-every update. `(send a fn)` sends the function `fn` (which receives the current
-value and returns the new one) and `(reset! a value)` replaces the value
-directly; both are deferred to commit inside a transaction, and `(sync)` flushes
-a pending send. The send closes over the caller's lexical scope the way a task
-does: a `loop`/`for` binding or rule parameter used inside `fn` is substituted
-with its value, and the namespace context active at the call (its `using`
-layers and `val` bindings) is kept, so a rule name or a `val` still resolves.
-A name bound by the function's own pattern shadows the captured one, so
-`(for (x …) (send a (?x -> …)))` uses the parameter, not the loop's `x`.
-`(actor? x)` tests one.
-
-`(promise)` is a single-assignment value in the current namespace's database.
-`(deliver p v)` fills it (once), `(get p)`/`(await p)` read it — blocking until
-it is delivered, except inside a transaction, which raises instead — and
-`(ready? p)` tests it. A promise serializes as a link (`"~uuid"`) whether it is
-pending or delivered, and stores a row either way, so a reader of the stored
-form waits on the same promise rather than on a copy of its value. `task`
-returns such a promise; `deliver` and `await` also accept an ephemeral promise
-extern.
+A namespace is where a task is *created*, not what a task is. `(task form…)`
+evaluates its arguments on a separate Julia task and returns a promise; a delay,
+an actor, and a promise are database-backed values that outlive the task that
+made them. All four capture the namespace context and the thread-local `val`
+bindings in the same way, and all four are described in
+[Tasks, delays, actors, and promises](concurrency.md). Scheduling work for later
+(`do-at`, `do-in`, and durable tasks) is in [Events and Durable
+Tasks](events.md).

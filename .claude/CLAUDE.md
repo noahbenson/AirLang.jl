@@ -332,10 +332,12 @@ form does not), while `(def (g ?x) hold=x)` makes it stay `(g (1 + 1))`. `lower`
 pushes holds toward the leaves and `lift` lifts them back
 to the root, building a quoted form explicitly (`(lift (' 'a x 'b))` →
 `(' a <value-of-x> b)`). A literal string at the head of a `def` body is its docstring (deindented,
-and not executed); `(doc sym)` lists the documented patterns that use `sym`, and
-`(doc (form…))` holds its argument and lists the documented patterns that match
-that form. `(definitions arg)` takes the same argument but returns the matching
-`def` forms as quoted data, with each docstring moved into a `doc=` map entry.
+and not executed); `(doc sym)` lists the builtin's catalogue entry (see
+**Documentation** at the end) and then the documented patterns that use `sym`,
+and `(doc (form…))` holds its argument and lists the documented patterns that
+match that form. `(definitions arg)` takes the same argument but returns the
+matching `def` forms as quoted data, with each docstring moved into a `doc=`
+map entry.
 A `def` body is a **block**: it takes `let=`/`catch=`, level-1 `:let` markers,
 and trailing `except`/`handle`/`finally` clauses exactly as `do` does (several
 body forms are sequenced as a `do`), and `tx=true` runs the body as a `tx`
@@ -809,7 +811,12 @@ login open a fresh one; `ui=false` (or `ui=naught`) in `$.config.ssh`, or in the
 `ssh` val of `$.config`, opts out, and a non-pty session never gets one. `ns-entries` and
 `ns-entry` list namespace entries as
 `(entry name=:sym kind=:def|:val|:sub|:proxy|:alias owner= doc= src=)`, omitting
-unreadable and hidden entries.
+unreadable and hidden entries; `ns-vals` lists the readable `val` names as
+keywords (newest definition last, a redefinition appearing once at its last
+position), `ns-defs` the readable `def` rules as held forms with `def` replaced
+by `'` (`src=` stripped, a docstring kept as `doc=`), and `ns-facts`/`ns-rules`
+the implicit logic set's held `(facts …)`/`(rules …)` lists. All default to the
+current namespace and filter by permission.
 
 **Agents and channels.** A user record carries `kind=:human|:agent` (the default
 is `:human`; `create-user` and `create-constituent` are always human).
@@ -955,3 +962,22 @@ failure and ends the body. `test` yields the inert data form
 `(name=… pass=… fail=… failures=(…))`, where each failure is held so that
 evaluating the summary again does not run it; counters are task-local, so
 nested and concurrent tests are independent.
+
+**Documentation.** Every builtin and operator name — all 576 builtins and 17
+operators, plus the reserved heads `error`, `signal`, and `ui` — has an entry in
+the builtin catalogue, so `(doc .air)` is a complete inventory of the language
+and `.air.NAME` names any of them. The entries are air source: one
+`(docdef CATEGORY name… "text"…)` form per name or per family of names that
+share a description, in `src/core.air`, which is read into the process-global
+`BUILTIN_DOCS` when the package loads (`Base.include_dependency` invalidates the
+image when it changes). The first entry for a name fixes its category and its
+place in the index; a later entry **amends** it, appending a paragraph, which is
+how a specialised entry (`get` on a tensor path) extends the general one. A
+`docdef` is a registration like `layout`, not a definition: it is neither
+scoped, transactional, nor undone by `sandbox`, and it accepts the reserved
+heads precisely because it documents a name rather than defining one (a `def`
+could not: `_check_not_reserved`). `(doc)` and `(doc .air)` return the index;
+`(doc NAME)`, `(doc .air.NAME)`, and `(doc (form…))` return one entry followed
+by the documented rules; `(help)` prints the language introduction held in
+`_HELP_INTRO`, `(help :category)`/`(help :all)` print the index, and
+`(help NAME)` prints one entry. Both write through `_air_out(env)`.

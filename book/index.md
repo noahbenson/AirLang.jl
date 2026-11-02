@@ -52,44 +52,54 @@ Facts and rules live in a namespace, which is implicitly a logic set:
 
 ## How to read this book
 
-- **[Getting started](getting-started.md)** — installing air, running the REPL
-  and the command line, the Docker image, and the library path.
-- **[Syntax](syntax.md)** — atoms, comments, strings, regular expressions,
-  forms, and `let`.
-- **[The data model](data-model.md)** — forms and collections, scalars and
-  single-element forms, quoted forms, mutables, and equality.
-- **[Tensors](tensors.md)** — mutable N-dimensional numeric arrays: `[…]`
-  literals, `get`/`set!`/`with`, arithmetic and broadcasting, linear algebra,
-  and the `{…}` reservations that guard every access.
-- **[Patterns and function definitions](patterns.md)** — pattern matching,
-  `def`, lambdas, `case`, level-aware traversal, repetition, and docstrings.
-- **[Namespaces](namespaces.md)** — the namespace tree, `using`/`use`/`import`,
-  thread-local values, tasks, delays, actors, and promises.
-- **[Users, homes, and permissions](permissions.md)** — users, homes, ACLs, and
-  `assume`.
-- **[Streams](streams.md)** — reusable queues: `post`, `fetch`, envelopes,
-  timeouts, and the read/write ACL of a stream.
-- **[Loading files and libraries](libraries.md)** — `load-air`, the library
-  path, and `init.air`.
-- **[Databases](databases.md)** — opening an AirDB database, named forms, logic
-  sets, synchronization, and JSON.
-- **[Tables](tables.md)** — typed, indexed tabular values: the `table`
-  constructor, `with`/`push` updates, row iteration, and CSV/TSV interchange.
-- **[Data formats](formats.md)** — reading and writing JSON, YAML, TOML, CSV,
-  TSV, and `.env` as plain air data, safely.
-- **[SSH access](ssh.md)** — `ssh-server`, authorized-key login, the remote
-  REPL, and SFTP with `bytes` files.
-- **[User interfaces](ui.md)** — inert `(ui …)` trees, the widget catalog,
-  assertions, and the terminal and text renderers.
-- **[The two rule systems](rules.md)** — reduction rules and the deductive
-  engine, with the [production-rule reference](production-rules.md) in detail.
-- **[Errors](errors.md)**, **[externs](externs.md)**, **[times](time.md)**,
-  **[printing and layouts](printing.md)**, and **[testing](testing.md)** — the
-  reference chapters.
-- **[Implementation status](status.md)** — what is implemented and what is
-  deferred.
-- **[Examples](examples.md)** and the **[problem set](problem-set.md)** —
-  worked, checked programs.
+The chapters are ordered so that each one builds only on ideas introduced
+before it, and the table of contents is a reasonable reading order end to end.
+
+**Foundations.** [Getting started](getting-started.md) installs air and opens a
+REPL. [Syntax](syntax.md) covers atoms, comments, strings, forms, and the
+evaluator. [The data model](data-model.md) describes the form itself, the
+scalar shapes, quoted forms (holds), and the three equality relations.
+[Control flow and bindings](control.md) adds truthiness, `if`/`cond`, `let`,
+loops, and sequencing. [Errors](errors.md) introduces the block grammar —
+`do`, `except`, `catch=`, `handle`, `finally` — that later chapters use.
+[Patterns and function definitions](patterns.md) is the heart of the language:
+wildcards, `def`, lambdas, `case`, memoization, and docstrings.
+
+**Data types and collections.** [Numbers](numbers.md) is the numeric tower and
+the math verbs. [Strings and regexes](strings.md) is text and patterns: string
+operations, regex values, and formatting. [Collections](collections.md) is the
+accessor and update surface, the wildcard key, higher-order verbs, threading,
+and traversal. [Tables](tables.md) adds typed, indexed tables.
+
+**Namespaces and rules.** [Namespaces](namespaces.md) is the dotted namespace
+tree, `using`/`use`/`import`, thread-local values, and the listings;
+[users and permissions](permissions.md) is homes, ACLs, and `assume`;
+[the two rule systems](rules.md) contrasts rewriting with the deductive engine,
+and the [production-rule reference](production-rules.md) is the engine's own
+chapter.
+
+**Mutation and concurrency.** [Mutability and transactions](mutability.md) is
+`mut`, filters, watches, `tx`, and `sandbox`. [Tensors](tensors.md) uses that
+machinery for mutable N-dimensional arrays and the `{…}` reservations that guard
+them. [Tasks, delays, actors, and promises](concurrency.md) is work that is not
+a reduction; [Streams](streams.md) is durable queues; [Events and durable
+tasks](events.md) is scheduling work for later.
+
+**Storage and data exchange.** [Loading files and libraries](libraries.md)
+covers `load-air`, the library path, and `init.air`. [Databases](databases.md)
+covers opened AirDB roots, named forms, sync, and JSON. [Data formats](formats.md)
+covers JSON, YAML, TOML, CSV, TSV, and `.env` as plain air data.
+
+**Interfaces.** [SSH access](ssh.md), [user interfaces](ui.md), and
+[agents and channels](agents.md) put a running air process behind a terminal, a
+widget tree, or a model.
+
+**Reference.** [Externs](externs.md), [times](time.md), [printing and
+layouts](printing.md), [testing](testing.md), [documentation and the builtin
+catalogue](documentation.md), and [implementation status](status.md).
+
+**Practice.** [Examples](examples.md) and the [problem set](problem-set.md) are
+worked, checked programs.
 
 ## Requirements
 

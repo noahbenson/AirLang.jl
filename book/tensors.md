@@ -13,9 +13,10 @@ Arithmetic, promotion, broadcasting, and the linear-algebra surface are Julia's.
 (det [1.0 2.0; 3.0 4.0])         # => -2.0
 ```
 
-Unlike a form, a tensor **mutates**: `set!` and the `tensor-…!` verbs write into
-the existing array. That is the one thing air's STM cannot roll back, so a
-mutation is legal only inside a **reservation**, and never inside a transaction.
+Unlike a form, a tensor **mutates**: `set!` (the mutable-writing form from
+[Mutability](mutability.md)) and the `tensor-…!` verbs write into the existing
+array. That is the one thing air's STM cannot roll back, so a mutation is legal
+only inside a **reservation**, and never inside a [transaction](mutability.md#transactions).
 The same rule covers every read of an existing tensor: *all accesses to a tensor
 require an enclosing reservation*. Constructing a tensor is free.
 

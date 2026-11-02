@@ -315,6 +315,10 @@
 * `ns-entries` and `ns-entry` list a namespace's entries as data
   (`name=` as a keyword, `kind=`, `owner=`, `doc=`, and `src=` on request),
   omitting unreadable and hidden entries exactly as `using` and `doc` do.
+  `ns-vals` lists the readable `val` names as keywords (a redefinition appears
+  once, at its last position), `ns-defs` the readable `def` rules as held forms
+  with `def` replaced by `'` and any stored `src=` stripped, and `ns-facts` /
+  `ns-rules` the implicit logic set's held fact and rule lists.
 * Printing and layouts: `air_string` is the flat spelling and
   `air_pretty_string(x; width=80)` the greedy line-broken one, with
   `(form->string x pretty=true width=n)` in air; the REPL reads its width from
